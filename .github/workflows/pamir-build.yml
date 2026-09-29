@@ -1,0 +1,96 @@
+name: Pamir VPN APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'versionName (digits and dots, e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+        fetch-depth: '0'
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v4
+      with:
+        log-accepted-android-sdk-licenses: false
+        cmdline-tools-version: '14742923'
+        packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
+
+    - name: Install NDK
+      run: |
+        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --channel=0 --install "ndk;29.0.14206865"
+        echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
+        sed -i '10i\
+        \
+            ndkVersion = "29.0.14206865"' ${{ github.workspace }}/V2rayNG/app/build.gradle.kts
+
+    - name: Build libhevtun
+      run: |
+        bash compile-hevtun.sh
+        cp -r ${{ github.workspace }}/libs ${{ github.workspace }}/V2rayNG/app
+
+    - name: Fetch AndroidLibXrayLite tag
+      run: |
+        pushd AndroidLibXrayLite
+        CURRENT_TAG=$(git describe --tags --abbrev=0)
+        echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
+        popd
+
+    - name: Download libv2ray
+      uses: robinraju/release-downloader@v1.13
+      with:
+        repository: '2dust/AndroidLibXrayLite'
+        tag: ${{ env.CURRENT_TAG }}
+        fileName: 'libv2ray.aar'
+        out-file-path: V2rayNG/app/libs/
+
+    - name: Pamir branding
+      env:
+        PAMIR_OWNER: ${{ github.repository_owner }}
+        PAMIR_VERSION: ${{ inputs.version }}
+        PAMIR_CODE: ${{ github.run_number }}
+      run: |
+        pip install --quiet --break-system-packages pillow || pip install --quiet pillow
+        export PAMIR_CODE=$((1000 + PAMIR_CODE))
+        python3 pamir/brand.py
+
+    - name: Setup Java
+      uses: actions/setup-java@v6.0.1
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+
+    - name: Decode Keystore
+      run: echo "${{ secrets.APP_KEYSTORE_BASE64 }}" | base64 -d > ${{ runner.temp }}/pamir.p12
+
+    - name: Build APK
+      run: |
+        cd ${{ github.workspace }}/V2rayNG
+        echo "sdk.dir=${ANDROID_HOME}" > local.properties
+        chmod 755 gradlew
+        ./gradlew assemblePlaystoreRelease \
+          -Pandroid.injected.signing.store.file=${{ runner.temp }}/pamir.p12 \
+          -Pandroid.injected.signing.store.password=${{ secrets.APP_KEYSTORE_PASSWORD }} \
+          -Pandroid.injected.signing.key.alias=${{ secrets.APP_KEYSTORE_ALIAS }} \
+          -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
+        ls -la app/build/outputs/apk/*/release/
+
+    - name: Publish release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ inputs.version }}
+        name: Pamir VPN ${{ inputs.version }}
+        body: 'Pamir VPN для Android. Для большинства телефонов подходит файл *_universal.apk.'
+        files: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*.apk

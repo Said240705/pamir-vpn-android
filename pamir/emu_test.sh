@@ -16,7 +16,7 @@ tap_text(){ dumpui; XY=$(python3 - "$1" <<'PY'
 import re,sys
 s=open('/tmp/ui.xml',encoding='utf-8',errors='ignore').read()
 for node in re.findall(r'<node [^>]*>',s):
-    lab=' '.join(re.findall(r'(?:text|content-desc)="([^"]*)"',node))
+    lab=' '.join(x for x in re.findall(r'(?:text|content-desc)="([^"]*)"',node) if x.strip()).strip()
     b=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
     if b and re.search(sys.argv[1],lab,re.I):
         x1,y1,x2,y2=map(int,b.groups()); print((x1+x2)//2,(y1+y2)//2); break
@@ -40,27 +40,23 @@ ENC=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ.get
 [ -z "$ENC" ] && log "!!! нет секрета TEST_SUB_URL"
 adb logcat -c
 adb shell "am start -W -a android.intent.action.VIEW -d 'pamirvpn://install-sub?url=$ENC'" 2>&1 | grep -E 'Status|Activity|Error' | tee -a $R
-sleep 4; shot import_toast
-sleep 16; relaunch; shot imported
-if ! grep -q 'Испания' /tmp/ui.xml 2>/dev/null; then
-  log "серверов нет — жму «Обновить подписку»"
-  tap_text 'Дополнительные параметры'; sleep 2; shot menu
-  tap_text 'Обновить подписк|Update subscription'; sleep 20; relaunch; shot after_update
-fi
+sleep 12; shot home_after_import
 
-log "== Испания"
-tap_text 'Испания'; sleep 2
-toggle; sleep 10; vpn_state; shot connected_spain
-check_ip ip_spain
-toggle; sleep 4
+log "== подключение (выбранный сервер)"
+tap_text 'Нажмите, чтобы защитить|Не подключено'; sleep 12; vpn_state; shot connected
 
-log "== LTE Обход"
-tap_text 'LTE Обход$|LTE Обход[^ 2]'; sleep 2
-toggle; sleep 12; vpn_state; shot connected_lte
-check_ip ip_lte
-toggle; sleep 3
+log "== выбор сервера"
+tap_text 'Сменить'; sleep 5; shot server_sheet
+tap_text '^LTE Обход$'; sleep 12; vpn_state; shot connected_lte
 
-adb logcat -d | grep -iE 'pamirlink|v2ray|AngConfig|subscri|HttpUtil|SSL|certif|x-hwid' | grep -v 'I/chatty' | tail -150 > shots/logcat.txt
+log "== настройки"
+tap_text '^Настройки$'; sleep 3; shot settings
+
+log "== отключение"
+tap_text '^VPN$'; sleep 2
+tap_text 'Защищено|Подключение'; sleep 6; shot disconnected
+
+adb logcat -d | grep -iE 'pamirlink|AndroidRuntime|FATAL|Exception' | grep -v 'I/chatty' | tail -150 > shots/logcat.txt
 python3 - <<'PY'
 import os,urllib.parse
 u=os.environ.get('SUB_URL','')

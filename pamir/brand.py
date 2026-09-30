@@ -173,4 +173,36 @@ edit(os.path.join(PKG, 'ui', 'main', 'MainRepository.kt'), [
      '        return result'),
 ])
 
+# 9. Pamir UI: own launcher activity on top of the v2rayNG core
+import shutil
+dst = os.path.join(PKG, 'pamir')
+os.makedirs(dst, exist_ok=True)
+shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src', 'PamirActivity.kt'), os.path.join(dst, 'PamirActivity.kt'))
+logo = mark.copy(); logo.thumbnail((256, 256), Image.LANCZOS)
+os.makedirs(os.path.join(MAIN, 'res', 'drawable-nodpi'), exist_ok=True)
+logo.save(os.path.join(MAIN, 'res', 'drawable-nodpi', 'pamir_logo.png'))
+edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
+    ('''                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+''', ''),
+    ('''        <activity
+            android:name=".ui.UrlSchemeActivity"''', '''        <activity
+            android:name=".pamir.PamirActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ui.UrlSchemeActivity"'''),
+])
+edit(os.path.join(PKG, 'ui', 'UrlSchemeActivity.kt'), [
+    ('startActivity(Intent(this, MainActivity::class.java))', 'startActivity(Intent(this, com.v2ray.ang.pamir.PamirActivity::class.java))'),
+])
+edit(os.path.join(PKG, 'handler', 'NotificationManager.kt'), [
+    ('Intent(service, MainActivity::class.java)', 'Intent(service, com.v2ray.ang.pamir.PamirActivity::class.java)'),
+])
+
 print(f'brand: ok -> ru.pamirlink.vpn {VERSION} ({CODE}), owner {OWNER}')

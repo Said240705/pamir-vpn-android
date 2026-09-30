@@ -136,4 +136,28 @@ for dens, px in sizes.items():
     canvas.paste(m, ((fg - m.width) // 2, (fg - m.height) // 2 + int(fg * 0.02)), m)
     canvas.save(os.path.join(d, 'ic_launcher_foreground.png'))
 
+# 7. device headers for subscription requests (panel HWID limit + device list in the cabinet)
+HEADERS_FN = r'''    private fun pamirDeviceHeaders(b: Request.Builder) {
+        try {
+            var id = com.v2ray.ang.handler.MmkvManager.decodeSettingsString("pamir_hwid", "") ?: ""
+            if (id.isBlank()) {
+                id = java.util.UUID.randomUUID().toString().replace("-", "")
+                com.v2ray.ang.handler.MmkvManager.encodeSettings("pamir_hwid", id)
+            }
+            val model = listOfNotNull(android.os.Build.MANUFACTURER, android.os.Build.MODEL).joinToString(" ").trim()
+            b.header("x-hwid", id)
+            b.header("x-device-os", "Android")
+            b.header("x-ver-os", android.os.Build.VERSION.RELEASE ?: "")
+            b.header("x-device-model", model.replace(Regex("[^\\x20-\\x7E]"), ""))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun applyEmbeddedBasicAuthHeader('''
+edit(os.path.join(PKG, 'util', 'HttpUtil.kt'), [
+    ('            applyEmbeddedBasicAuthHeader(currentUrl, requestBuilder)\n',
+     '            applyEmbeddedBasicAuthHeader(currentUrl, requestBuilder)\n            pamirDeviceHeaders(requestBuilder)\n'),
+    ('    private fun applyEmbeddedBasicAuthHeader(', HEADERS_FN),
+])
+
 print(f'brand: ok -> ru.pamirlink.vpn {VERSION} ({CODE}), owner {OWNER}')

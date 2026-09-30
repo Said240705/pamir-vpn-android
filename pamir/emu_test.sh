@@ -35,8 +35,15 @@ adb shell monkey -p $P -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; sl
 log "== импорт подписки"
 ENC=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ.get('SUB_URL',''),safe=''))")
 [ -z "$ENC" ] && log "!!! нет секрета TEST_SUB_URL"
-adb shell "am start -a android.intent.action.VIEW -d 'pamirvpn://install-sub?url=$ENC'" >/dev/null
-sleep 20; shot imported
+adb logcat -c
+adb shell "am start -W -a android.intent.action.VIEW -d 'pamirvpn://install-sub?url=$ENC'" 2>&1 | grep -E 'Status|Activity|Error' | tee -a $R
+sleep 4; shot import_toast
+sleep 16; shot imported
+if ! grep -q 'Испания' /tmp/ui.xml 2>/dev/null; then
+  log "серверов нет — жму «Обновить подписку»"
+  tap_text 'Дополнительные параметры'; sleep 2; shot menu
+  tap_text 'Обновить подписк|Update subscription'; sleep 20; shot after_update
+fi
 
 log "== Испания"
 tap_text 'Испания'; sleep 2
@@ -50,7 +57,7 @@ toggle; sleep 12; vpn_state; shot connected_lte
 check_ip ip_lte
 toggle; sleep 3
 
-adb logcat -d | grep -iE 'xray|v2ray|ang|failed|error' | grep -v 'I/chatty' | tail -120 > shots/logcat.txt
+adb logcat -d | grep -iE 'pamirlink|v2ray|AngConfig|subscri|HttpUtil|SSL|certif|x-hwid' | grep -v 'I/chatty' | tail -150 > shots/logcat.txt
 python3 - <<'PY'
 import os,urllib.parse
 u=os.environ.get('SUB_URL','')

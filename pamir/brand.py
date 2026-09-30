@@ -160,4 +160,17 @@ edit(os.path.join(PKG, 'util', 'HttpUtil.kt'), [
     ('    private fun applyEmbeddedBasicAuthHeader(', HEADERS_FN),
 ])
 
+# 8. imported subscription is called "Pamir VPN"; empty groups (e.g. "Default") are hidden,
+#    so right after import the user lands on the list with servers
+edit(os.path.join(PKG, 'handler', 'AngConfigManager.kt'), [
+    ('subItem.remarks = uri.fragment ?: "import sub"', 'subItem.remarks = uri.fragment ?: "Pamir VPN"'),
+])
+edit(os.path.join(PKG, 'ui', 'main', 'MainRepository.kt'), [
+    ('        result += MmkvManager.decodeSubscriptions()\n        return result',
+     '        val subs = MmkvManager.decodeSubscriptions()\n'
+     '        val nonEmpty = subs.filter { MmkvManager.decodeServerList(it.guid).isNotEmpty() }\n'
+     '        result += if (nonEmpty.isEmpty()) subs else nonEmpty\n'
+     '        return result'),
+])
+
 print(f'brand: ok -> ru.pamirlink.vpn {VERSION} ({CODE}), owner {OWNER}')

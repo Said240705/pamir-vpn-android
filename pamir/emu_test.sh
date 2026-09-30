@@ -15,11 +15,14 @@ PY
 tap_text(){ dumpui; XY=$(python3 - "$1" <<'PY'
 import re,sys
 s=open('/tmp/ui.xml',encoding='utf-8',errors='ignore').read()
-for m in re.finditer(r'<node [^>]*?(?:text|content-desc)="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',s):
-    if re.search(sys.argv[1],m.group(1),re.I):
-        x1,y1,x2,y2=map(int,m.groups()[1:]); print((x1+x2)//2,(y1+y2)//2); break
+for node in re.findall(r'<node [^>]*>',s):
+    lab=' '.join(re.findall(r'(?:text|content-desc)="([^"]*)"',node))
+    b=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',node)
+    if b and re.search(sys.argv[1],lab,re.I):
+        x1,y1,x2,y2=map(int,b.groups()); print((x1+x2)//2,(y1+y2)//2); break
 PY
 ); if [ -n "$XY" ]; then log "тап [$1] -> $XY"; adb shell input tap $XY; else log "не нашёл на экране: [$1]"; fi; }
+relaunch(){ adb shell am force-stop $P; sleep 1; adb shell monkey -p $P -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; sleep 6; }
 toggle(){ adb shell am broadcast -a $P.action.widget.click -n $P/com.v2ray.ang.receiver.WidgetProvider >/dev/null; }
 vpn_state(){ log "VPN в системе: $(adb shell dumpsys connectivity | grep -c 'VPN CONNECTED\|type: VPN\[' ) (0 = нет)"; }
 check_ip(){ tap_text '(провер|check|tap)'; sleep 12; shot "$1"; }
@@ -38,11 +41,11 @@ ENC=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ.get
 adb logcat -c
 adb shell "am start -W -a android.intent.action.VIEW -d 'pamirvpn://install-sub?url=$ENC'" 2>&1 | grep -E 'Status|Activity|Error' | tee -a $R
 sleep 4; shot import_toast
-sleep 16; shot imported
+sleep 16; relaunch; shot imported
 if ! grep -q 'Испания' /tmp/ui.xml 2>/dev/null; then
   log "серверов нет — жму «Обновить подписку»"
   tap_text 'Дополнительные параметры'; sleep 2; shot menu
-  tap_text 'Обновить подписк|Update subscription'; sleep 20; shot after_update
+  tap_text 'Обновить подписк|Update subscription'; sleep 20; relaunch; shot after_update
 fi
 
 log "== Испания"

@@ -159,6 +159,7 @@ class PamirActivity : AppCompatActivity() {
     private var newVersion by mutableStateOf<String?>(null)
     private var newVersionUrl = ""
     private var updProgress by mutableStateOf(-1)
+    private var assetsJob: kotlinx.coroutines.Job? = null
 
     private val vpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -185,6 +186,9 @@ class PamirActivity : AppCompatActivity() {
         ContextCompat.registerReceiver(
             this, stateReceiver, IntentFilter(AppConfig.BROADCAST_ACTION_ACTIVITY), Utils.receiverFlags()
         )
+        assetsJob = lifecycleScope.launch(Dispatchers.IO) {
+            runCatching { SettingsManager.initAssets(applicationContext, assets) }
+        }
         initRouting()
         reloadServers()
         setContent { PamirTheme { Root() } }
@@ -300,7 +304,10 @@ class PamirActivity : AppCompatActivity() {
     private fun startVpn() {
         val sel = selected ?: return
         Log.w("Pamir", "startService $sel")
-        LauncherManager.startService(this, sel)
+        lifecycleScope.launch {
+            assetsJob?.join()
+            LauncherManager.startService(this@PamirActivity, sel)
+        }
         lifecycleScope.launch {
             delay(12000)
             if (connecting) connecting = false

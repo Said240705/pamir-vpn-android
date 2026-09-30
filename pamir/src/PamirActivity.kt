@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -64,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -118,6 +120,7 @@ private const val PREF_RU_DIRECT = "pamir_ru_direct"
 private const val PREF_ROUTING_INIT = "pamir_routing_init"
 private const val PREF_AUTO_BEST = "pamir_auto_best"
 private const val PREF_LAST_SUB_UPDATE = "pamir_last_sub_update"
+private const val PREF_USER_CHOSE = "pamir_user_chose"
 
 data class PServer(
     val guid: String,
@@ -153,6 +156,7 @@ class PamirActivity : AppCompatActivity() {
 
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            Log.w("Pamir", "state msg ${intent?.getIntExtra("key", 0)} ${intent?.getStringExtra("content") ?: ""}")
             when (intent?.getIntExtra("key", 0)) {
                 AppConfig.MSG_STATE_RUNNING, AppConfig.MSG_STATE_START_SUCCESS -> onRunning(true)
                 AppConfig.MSG_STATE_NOT_RUNNING, AppConfig.MSG_STATE_STOP_SUCCESS -> onRunning(false)
@@ -233,6 +237,9 @@ class PamirActivity : AppCompatActivity() {
         daysLeft = list.firstNotNullOfOrNull { Regex("⏳\\s*(\\d+)\\s*D").find(it.rawRemarks)?.groupValues?.get(1)?.toIntOrNull() }
         lastUpdate = MmkvManager.decodeSettingsLong(PREF_LAST_SUB_UPDATE, 0L)
         var sel = MmkvManager.getSelectServer()
+        if (!MmkvManager.decodeSettingsBool(PREF_USER_CHOSE, false)) {
+            list.firstOrNull { !it.isStub && !it.isLte }?.let { sel = it.guid; MmkvManager.setSelectServer(it.guid) }
+        }
         if (sel == null || list.none { it.guid == sel }) {
             sel = list.firstOrNull { !it.isStub && !it.isLte }?.guid ?: list.firstOrNull()?.guid
             sel?.let { MmkvManager.setSelectServer(it) }
@@ -252,6 +259,7 @@ class PamirActivity : AppCompatActivity() {
     }
 
     private fun toggle() {
+        Log.w("Pamir", "toggle running=$running connecting=$connecting selected=$selected")
         if (connecting) return
         if (running) {
             LauncherManager.stopService(this)
@@ -264,11 +272,13 @@ class PamirActivity : AppCompatActivity() {
         }
         connecting = true
         val intent = VpnService.prepare(this)
+        Log.w("Pamir", "vpn prepare needed=${intent != null}")
         if (intent == null) startVpn() else vpnPermission.launch(intent)
     }
 
     private fun startVpn() {
         val sel = selected ?: return
+        Log.w("Pamir", "startService $sel")
         LauncherManager.startService(this, sel)
         lifecycleScope.launch {
             delay(12000)
@@ -280,6 +290,7 @@ class PamirActivity : AppCompatActivity() {
         selected = guid
         MmkvManager.setSelectServer(guid)
         MmkvManager.encodeSettings(PREF_AUTO_BEST, false)
+        MmkvManager.encodeSettings(PREF_USER_CHOSE, true)
         if (running) {
             connecting = true
             LauncherManager.restartService(this)
@@ -443,11 +454,11 @@ class PamirActivity : AppCompatActivity() {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.weight(0.8f))
-            Image(painterResource(R.drawable.pamir_logo), null, Modifier.size(104.dp))
+            Image(painterResource(R.drawable.pamir_logo), null, Modifier.size(84.dp))
             Spacer(Modifier.height(22.dp))
-            Text("Добро пожаловать\nв Pamir VPN", color = TextMain, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center, lineHeight = 33.sp)
+            Text("Добро пожаловать\nв Pamir VPN", color = TextMain, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center, lineHeight = 28.sp)
             Spacer(Modifier.height(10.dp))
-            Text("Подключите подписку — это займёт секунду", color = TextDim, fontSize = 14.sp, textAlign = TextAlign.Center)
+            Text("Подключите подписку — это займёт секунду", color = TextDim, fontSize = 13.sp, textAlign = TextAlign.Center)
             Spacer(Modifier.height(24.dp))
             Feature("⚡", "Подключение в одно касание")
             Feature("🌍", "Быстрые европейские серверы")
@@ -477,12 +488,12 @@ class PamirActivity : AppCompatActivity() {
                 .clip(RoundedCornerShape(14.dp))
                 .background(Surface1)
                 .border(1.dp, Line, RoundedCornerShape(14.dp))
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(icon, fontSize = 16.sp)
+            Text(icon, fontSize = 14.sp)
             Spacer(Modifier.width(10.dp))
-            Text(text, color = TextMain, fontSize = 14.sp)
+            Text(text, color = TextMain, fontSize = 13.sp)
         }
     }
 
@@ -491,15 +502,15 @@ class PamirActivity : AppCompatActivity() {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .padding(horizontal = 18.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (title == null) {
-                Image(painterResource(R.drawable.pamir_logo), null, Modifier.size(30.dp))
+                Image(painterResource(R.drawable.pamir_logo), null, Modifier.size(24.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Pamir VPN", color = TextMain, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+                Text("Pamir VPN", color = TextMain, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
             } else {
-                Text(title, color = TextMain, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+                Text(title, color = TextMain, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
             }
         }
     }
@@ -520,18 +531,18 @@ class PamirActivity : AppCompatActivity() {
                 StubCard()
                 return@Column
             }
-            Spacer(Modifier.height(30.dp))
+            Spacer(Modifier.height(26.dp))
             PowerButton()
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(14.dp))
             val stateText = when {
                 connecting -> "Подключение…"
                 running -> "Защищено"
                 else -> "Не подключено"
             }
-            Text(stateText, color = if (running) Mint else TextMain, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.clickable { toggle() })
+            Text(stateText, color = if (running) Mint else TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.clickable { toggle() })
             Spacer(Modifier.height(4.dp))
-            if (running) Timer() else Text("Нажмите, чтобы защитить соединение", color = TextDim, fontSize = 13.sp)
-            Spacer(Modifier.height(22.dp))
+            if (running) Timer() else Text("Нажмите, чтобы защитить соединение", color = TextDim, fontSize = 12.sp)
+            Spacer(Modifier.height(20.dp))
             if (current != null) ServerCard(current, onPick)
             if (running) {
                 InfoRow()
@@ -553,18 +564,18 @@ class PamirActivity : AppCompatActivity() {
                 .background(Surface1)
                 .border(1.dp, Line, RoundedCornerShape(16.dp))
                 .clickable { openUrl(CABINET_URL) }
-                .padding(horizontal = 14.dp, vertical = 11.dp),
+                .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.size(8.dp).clip(CircleShape).background(if (d == null || d > 0) Mint else Danger))
+            Box(Modifier.size(7.dp).clip(CircleShape).background(if (d == null || d > 0) Mint else Danger))
             Spacer(Modifier.width(10.dp))
             val txt = when {
                 d == null -> "Подписка активна"
                 d <= 0 -> "Подписка истекает сегодня"
-                else -> "Подписка активна · ещё ${d} ${plural(d, "день", "дня", "дней")}"
+                else -> "Активна · ещё ${d} ${plural(d, "день", "дня", "дней")}"
             }
-            Text(txt, color = TextDim, fontSize = 13.sp, modifier = Modifier.weight(1f))
-            Text("Продлить ›", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(txt, color = TextDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text("Продлить ›", color = Mint, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
         }
     }
 
@@ -602,7 +613,7 @@ class PamirActivity : AppCompatActivity() {
         }
         Box(
             Modifier
-                .size(196.dp)
+                .size(148.dp)
                 .clip(CircleShape)
                 .clickable { toggle() },
             contentAlignment = Alignment.Center
@@ -622,7 +633,7 @@ class PamirActivity : AppCompatActivity() {
                 )
                 drawCircle(
                     if (running || connecting) Mint.copy(alpha = ringAlpha) else Color.White.copy(alpha = 0.08f),
-                    inner, style = Stroke(width = 3.dp.toPx())
+                    inner, style = Stroke(width = 2.dp.toPx())
                 )
                 val ic = if (running) Mint else Color(0xFF9FB0C3)
                 val ir = inner * 0.30f
@@ -630,9 +641,9 @@ class PamirActivity : AppCompatActivity() {
                     ic, startAngle = -60f, sweepAngle = 300f, useCenter = false,
                     topLeft = Offset(center.x - ir, center.y - ir + ir * 0.12f),
                     size = androidx.compose.ui.geometry.Size(ir * 2, ir * 2),
-                    style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round)
+                    style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
                 )
-                drawLine(ic, Offset(center.x, center.y - ir * 1.15f), Offset(center.x, center.y - ir * 0.05f), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+                drawLine(ic, Offset(center.x, center.y - ir * 1.15f), Offset(center.x, center.y - ir * 0.05f), strokeWidth = 5.dp.toPx(), cap = StrokeCap.Round)
             }
         }
     }
@@ -645,7 +656,7 @@ class PamirActivity : AppCompatActivity() {
         }
         val sec = if (connectedAt > 0) ((now - connectedAt) / 1000).coerceAtLeast(0) else 0
         val t = String.format("%02d:%02d:%02d", sec / 3600, (sec % 3600) / 60, sec % 60)
-        Text(if (ipInfo.isNotEmpty()) "$t · IP $ipInfo" else t, color = TextDim, fontSize = 13.sp)
+        Text(if (ipInfo.isNotEmpty()) "$t · IP $ipInfo" else t, color = TextDim, fontSize = 12.sp)
     }
 
     @Composable
@@ -658,13 +669,13 @@ class PamirActivity : AppCompatActivity() {
                 .background(Surface1)
                 .border(1.dp, Line, RoundedCornerShape(18.dp))
                 .clickable { onPick() }
-                .padding(horizontal = 14.dp, vertical = 13.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(s.flag, fontSize = 26.sp)
+            Text(s.flag, fontSize = 20.sp)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(s.name, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(s.name, color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val p = pings[s.guid]
                 val sub = when {
                     MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false) -> "Выбран автоматически"
@@ -672,9 +683,9 @@ class PamirActivity : AppCompatActivity() {
                     p != null && p > 0 -> "$p мс"
                     else -> "Нажмите, чтобы сменить"
                 }
-                Text(sub, color = TextDim, fontSize = 12.sp)
+                Text(sub, color = TextDim, fontSize = 11.sp, maxLines = 1)
             }
-            Text("Сменить ›", color = Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("Сменить ›", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 
@@ -688,11 +699,11 @@ class PamirActivity : AppCompatActivity() {
                 .background(Mint.copy(alpha = 0.05f))
                 .border(1.dp, Mint.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
                 .clickable { onPick() }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("📶  Не работает мобильный интернет?", color = Color(0xFFBFEEE0), fontSize = 13.sp, modifier = Modifier.weight(1f))
-            Text("LTE Обход ›", color = Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("📶  Не работает мобильный интернет?", color = Color(0xFFBFEEE0), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text("LTE Обход ›", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 
@@ -718,8 +729,8 @@ class PamirActivity : AppCompatActivity() {
                 .border(1.dp, Line, RoundedCornerShape(16.dp))
                 .padding(12.dp)
         ) {
-            Text(value, color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            Text(label, color = TextDim, fontSize = 11.sp)
+            Text(value, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = TextDim, fontSize = 10.5.sp)
         }
     }
 
@@ -736,7 +747,7 @@ class PamirActivity : AppCompatActivity() {
                     .navigationBarsPadding()
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Выбор сервера", color = TextMain, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+                    Text("Выбор сервера", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
                     Text(
                         if (pingBusy) "Проверяем…" else "↻ Проверить",
                         color = Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold,
@@ -781,29 +792,29 @@ class PamirActivity : AppCompatActivity() {
     private fun SheetItem(flag: String, name: String, right: String, sel: Boolean, pingColored: Boolean, onClick: () -> Unit) {
         Row(
             Modifier
-                .padding(vertical = 4.dp)
+                .padding(vertical = 3.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(15.dp))
+                .clip(RoundedCornerShape(13.dp))
                 .background(if (sel) Color(0xFF0F2A29) else Surface1)
-                .border(1.dp, if (sel) Mint.copy(alpha = 0.6f) else Line, RoundedCornerShape(15.dp))
+                .border(1.dp, if (sel) Mint.copy(alpha = 0.6f) else Line, RoundedCornerShape(13.dp))
                 .clickable { onClick() }
-                .padding(horizontal = 13.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(flag, fontSize = 22.sp)
+            Text(flag, fontSize = 18.sp)
             Spacer(Modifier.width(12.dp))
-            Text(name, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             val rc = when {
                 !pingColored -> TextDim
                 right == "нет связи" -> Danger
                 right.endsWith("мс") -> Mint
                 else -> TextDim
             }
-            Text(right, color = rc, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text(right, color = rc, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(10.dp))
             Box(
                 Modifier
-                    .size(18.dp)
+                    .size(16.dp)
                     .clip(CircleShape)
                     .border(2.dp, if (sel) Mint else Color(0xFF3A4A5E), CircleShape)
                     .padding(4.dp)
@@ -882,7 +893,7 @@ class PamirActivity : AppCompatActivity() {
     private fun Section(text: String) {
         Text(
             text.uppercase(), color = TextDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp,
-            modifier = Modifier.padding(start = 22.dp, top = 16.dp, bottom = 7.dp)
+            modifier = Modifier.padding(start = 22.dp, top = 14.dp, bottom = 6.dp)
         )
     }
 
@@ -902,11 +913,11 @@ class PamirActivity : AppCompatActivity() {
     private fun RowIcon(icon: String) {
         Box(
             Modifier
-                .size(32.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .size(28.dp)
+                .clip(RoundedCornerShape(9.dp))
                 .background(Mint.copy(alpha = 0.10f)),
             contentAlignment = Alignment.Center
-        ) { Text(icon, color = Mint, fontSize = 15.sp) }
+        ) { Text(icon, color = Mint, fontSize = 13.sp) }
     }
 
     @Composable
@@ -915,16 +926,16 @@ class PamirActivity : AppCompatActivity() {
             Modifier
                 .fillMaxWidth()
                 .clickable { onChange(!value) }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             RowIcon(icon)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(sub, color = TextDim, fontSize = 11.5.sp)
+                Text(title, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(sub, color = TextDim, fontSize = 11.sp)
             }
-            Switch(
+            Switch(modifier = Modifier.scale(0.8f),
                 checked = value, onCheckedChange = onChange,
                 colors = SwitchDefaults.colors(
                     checkedTrackColor = MintDeep, checkedThumbColor = Color.White,
@@ -941,14 +952,14 @@ class PamirActivity : AppCompatActivity() {
             Modifier
                 .fillMaxWidth()
                 .clickable { onClick() }
-                .padding(horizontal = 14.dp, vertical = 13.dp),
+                .padding(horizontal = 12.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             RowIcon(icon)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(sub, color = TextDim, fontSize = 11.5.sp)
+                Text(title, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(sub, color = TextDim, fontSize = 11.sp)
             }
             Text("›", color = TextDim, fontSize = 18.sp)
         }
@@ -958,12 +969,12 @@ class PamirActivity : AppCompatActivity() {
     private fun BottomNav(tab: Tab, onTab: (Tab) -> Unit) {
         Row(
             Modifier
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = 14.dp, vertical = 8.dp)
                 .fillMaxWidth()
-                .height(62.dp)
-                .clip(RoundedCornerShape(22.dp))
+                .height(54.dp)
+                .clip(RoundedCornerShape(18.dp))
                 .background(Surface2.copy(alpha = 0.95f))
-                .border(1.dp, Line, RoundedCornerShape(22.dp)),
+                .border(1.dp, Line, RoundedCornerShape(18.dp)),
             verticalAlignment = Alignment.CenterVertically
         ) {
             NavItem(R.drawable.ic_lock_24dp, "VPN", tab == Tab.HOME, Modifier.weight(1f)) { onTab(Tab.HOME) }
@@ -982,9 +993,9 @@ class PamirActivity : AppCompatActivity() {
             verticalArrangement = Arrangement.Center
         ) {
             val c = if (active) Mint else TextDim
-            Image(painterResource(icon), null, Modifier.size(21.dp), colorFilter = ColorFilter.tint(c))
-            Spacer(Modifier.height(3.dp))
-            Text(label, color = c, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Image(painterResource(icon), null, Modifier.size(19.dp), colorFilter = ColorFilter.tint(c))
+            Spacer(Modifier.height(2.dp))
+            Text(label, color = c, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 
@@ -993,12 +1004,12 @@ class PamirActivity : AppCompatActivity() {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(54.dp)
-                .clip(RoundedCornerShape(17.dp))
+                .height(48.dp)
+                .clip(RoundedCornerShape(15.dp))
                 .background(Brush.linearGradient(listOf(Mint, MintDeep)))
                 .clickable { onClick() },
             contentAlignment = Alignment.Center
-        ) { Text(text, color = Color(0xFF05241D), fontSize = 16.sp, fontWeight = FontWeight.ExtraBold) }
+        ) { Text(text, color = Color(0xFF05241D), fontSize = 15.sp, fontWeight = FontWeight.ExtraBold) }
     }
 
     @Composable
@@ -1006,13 +1017,13 @@ class PamirActivity : AppCompatActivity() {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(50.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .height(46.dp)
+                .clip(RoundedCornerShape(14.dp))
                 .background(Surface1)
                 .border(1.dp, Line, RoundedCornerShape(16.dp))
                 .clickable { onClick() },
             contentAlignment = Alignment.Center
-        ) { Text(text, color = Color(0xFFD8E2EA), fontSize = 14.sp, fontWeight = FontWeight.Bold) }
+        ) { Text(text, color = Color(0xFFD8E2EA), fontSize = 13.5.sp, fontWeight = FontWeight.Bold) }
     }
 }
 

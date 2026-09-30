@@ -43,20 +43,21 @@ adb shell "am start -W -a android.intent.action.VIEW -d 'pamirvpn://install-sub?
 sleep 12; shot home_after_import
 
 log "== подключение (выбранный сервер)"
-tap_text 'Нажмите, чтобы защитить|Не подключено'; sleep 12; vpn_state; shot connected
+tap_text '^Не подключено$'; sleep 3; shot connecting
+sleep 10; vpn_state; shot connected
 
-log "== выбор сервера"
+log "== смена на LTE Обход во время подключения"
 tap_text 'Сменить'; sleep 5; shot server_sheet
-tap_text '^LTE Обход$'; sleep 12; vpn_state; shot connected_lte
+tap_text '^LTE Обход$'; sleep 14; vpn_state; shot connected_lte
 
 log "== настройки"
 tap_text '^Настройки$'; sleep 3; shot settings
 
 log "== отключение"
 tap_text '^VPN$'; sleep 2
-tap_text 'Защищено|Подключение'; sleep 6; shot disconnected
+tap_text '^Защищено$|^Подключение'; sleep 6; vpn_state; shot disconnected
 
-adb logcat -d | grep -iE 'pamirlink|AndroidRuntime|FATAL|Exception' | grep -v 'I/chatty' | tail -150 > shots/logcat.txt
+adb logcat -d | grep -iE 'Pamir|LauncherManager|StartCore|FATAL|AndroidRuntime: (FATAL|java)' | grep -v 'I/chatty' | tail -150 > shots/logcat.txt
 python3 - <<'PY'
 import os,urllib.parse
 u=os.environ.get('SUB_URL','')

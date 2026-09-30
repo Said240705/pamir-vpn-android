@@ -42,6 +42,7 @@ def edit(path, pairs, required=True):
 # 1. package id, version, apk names
 edit(os.path.join(ROOT, 'build.gradle.kts'), [
     ('applicationId = "com.v2ray.ang"', 'applicationId = "ru.pamirlink.vpn"'),
+    ('    namespace = "com.v2ray.ang"\n', '    namespace = "com.v2ray.ang"\n    lint { checkReleaseBuilds = false }\n'),
     (re.compile(r'versionCode = \d+'), f'versionCode = {int(CODE)}'),
     (re.compile(r'versionName = "[^"]*"'), f'versionName = "{VERSION}"'),
     ('"v2rayNG_', '"PamirVPN_'),
@@ -206,6 +207,68 @@ edit(os.path.join(PKG, 'ui', 'UrlSchemeActivity.kt'), [
 ])
 edit(os.path.join(PKG, 'handler', 'NotificationManager.kt'), [
     ('Intent(service, MainActivity::class.java)', 'Intent(service, com.v2ray.ang.pamir.PamirActivity::class.java)'),
+])
+
+# 10. background features: drop alerts + watchdog, branded tile/widget/status icon, cleaner notification
+SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
+RES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res')
+shutil.copy(os.path.join(SRC, 'PamirWatch.kt'), os.path.join(dst, 'PamirWatch.kt'))
+shutil.copy(os.path.join(SRC, 'QSTileService.kt'), os.path.join(PKG, 'service', 'QSTileService.kt'))
+shutil.copy(os.path.join(SRC, 'WidgetProvider.kt'), os.path.join(PKG, 'receiver', 'WidgetProvider.kt'))
+for f in glob.glob(os.path.join(MAIN, 'res', 'drawable-*dpi', 'ic_stat_*.png')):
+    os.remove(f)
+for sub in ('layout', 'drawable', 'xml'):
+    for f in glob.glob(os.path.join(RES, sub, '*.xml')):
+        shutil.copy(f, os.path.join(MAIN, 'res', sub, os.path.basename(f)))
+for f in glob.glob(os.path.join(MAIN, 'res', 'values*', 'strings.xml')):
+    edit(f, [
+        (re.compile(r'<string name="app_widget_name">[^<]*</string>'), '<string name="app_widget_name">Pamir VPN</string>'),
+        (re.compile(r'<string name="app_tile_name">[^<]*</string>'), '<string name="app_tile_name">Pamir VPN</string>'),
+    ], required=False)
+
+PROBE_FN = """    /** Pamir watchdog probe: delay through the running core, -1 = no answer, -2 = not running. */
+    fun pamirProbe(): Long {
+        if (!isRunning() || isReloading) return -2L
+        for (alt in listOf(false, true)) {
+            val t = try {
+                coreController.measureDelay(SettingsManager.getDelayTestUrl(alt))
+            } catch (e: Exception) {
+                -1L
+            }
+            if (t >= 0) return t
+        }
+        return -1L
+    }
+
+    private fun measureV2rayDelay(requestId: String) {"""
+csm = os.path.join(PKG, 'core', 'CoreServiceManager.kt')
+edit(csm, [
+    ('LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stop service")\n',
+     'LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stop service")\n                    com.v2ray.ang.pamir.PamirWatch.markUserStop()\n'),
+    ('LogUtil.i(AppConfig.TAG, "StartCore-Manager: Restart service")\n',
+     'LogUtil.i(AppConfig.TAG, "StartCore-Manager: Restart service")\n                    com.v2ray.ang.pamir.PamirWatch.markUserStop()\n'),
+    ('        launchCore(service, vpnInterface)\n        startNetworkMonitor(service)\n',
+     '        launchCore(service, vpnInterface)\n        startNetworkMonitor(service)\n        com.v2ray.ang.pamir.PamirWatch.onStarted(service)\n'),
+    ('        MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_STOP_SUCCESS, "")\n',
+     '        MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_STOP_SUCCESS, "")\n        com.v2ray.ang.pamir.PamirWatch.onStopped(service)\n'),
+    ('    private fun measureV2rayDelay(requestId: String) {', PROBE_FN),
+])
+
+SPEED_FN = """    private fun appendSpeedString(text: StringBuilder, name: String?, up: Double, down: Double) {
+        val n = when (name) {
+            AppConfig.TAG_PROXY -> "Через VPN"
+            AppConfig.TAG_DIRECT -> "Напрямую"
+            else -> name ?: ""
+        }
+        text.append("$n:  ↓ ${down.toLong().toSpeedString()}  ↑ ${up.toLong().toSpeedString()}\\n")
+    }
+"""
+nm = os.path.join(PKG, 'handler', 'NotificationManager.kt')
+edit(nm, [
+    ('.setContentTitle(currentConfig?.remarks ?: service.getString(R.string.app_name))',
+     '.setContentTitle(currentConfig?.remarks?.let { com.v2ray.ang.pamir.PamirWatch.title(it) } ?: service.getString(R.string.app_name))\n            .setColor(0xFF2BEFC0.toInt())'),
+    (re.compile(r'    private fun appendSpeedString\(text: StringBuilder, name: String\?, up: Double, down: Double\) \{.*?\n    \}\n', re.S),
+     lambda m: SPEED_FN),
 ])
 
 print(f'brand: ok -> ru.pamirlink.vpn {VERSION} ({CODE}), owner {OWNER}')

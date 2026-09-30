@@ -50,6 +50,15 @@ log "== смена на LTE Обход во время подключения"
 tap_text 'Сменить'; sleep 5; shot server_sheet
 tap_text '^LTE Обход$'; sleep 14; vpn_state; shot connected_lte
 
+log "== плитка в шторке и уведомление"
+T=$P/com.v2ray.ang.service.QSTileService
+adb shell cmd statusbar add-tile $T >/dev/null 2>&1
+adb shell cmd statusbar expand-settings; sleep 3; shot qs_tile_on
+adb shell cmd statusbar click-tile $T; sleep 6; vpn_state; shot qs_tile_off
+adb shell cmd statusbar click-tile $T; sleep 12; vpn_state; shot qs_tile_on_again
+adb shell cmd statusbar expand-notifications; sleep 3; shot notifications
+adb shell cmd statusbar collapse; sleep 3; shot app_after_tile
+
 log "== настройки"
 tap_text '^Настройки$'; sleep 3; shot settings
 

@@ -5,9 +5,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.TrafficStats
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
+import android.os.Process
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -58,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +73,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.painterResource
@@ -160,6 +164,16 @@ class PamirActivity : AppCompatActivity() {
     private var newVersionUrl = ""
     private var updProgress by mutableStateOf(-1)
     private var assetsJob: kotlinx.coroutines.Job? = null
+    private var sheetOpen by mutableStateOf(false)
+    private var rxSpeed by mutableLongStateOf(0L)
+    private var txSpeed by mutableLongStateOf(0L)
+    private var rxTotal by mutableLongStateOf(0L)
+    private var txTotal by mutableLongStateOf(0L)
+    private val speedHist = mutableStateListOf<Float>()
+    private var pendingReconnect = false
+
+    private val notifPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private val vpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -196,12 +210,40 @@ class PamirActivity : AppCompatActivity() {
             updateSubscription(silent = true)
         }
         checkAppUpdate()
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** Buttons from our notifications, quick settings tile and widget. */
+    private fun handleIntent(i: Intent?) {
+        if (i == null) return
+        if (i.getBooleanExtra(PamirWatch.EXTRA_SERVERS, false)) {
+            i.removeExtra(PamirWatch.EXTRA_SERVERS)
+            PamirWatch.cancelAlert(this)
+            sheetOpen = true
+        }
+        if (i.getBooleanExtra(PamirWatch.EXTRA_RECONNECT, false)) {
+            i.removeExtra(PamirWatch.EXTRA_RECONNECT)
+            PamirWatch.cancelAlert(this)
+            pendingReconnect = true
+            lifecycleScope.launch {
+                delay(900) // wait for the service state answer
+                if (pendingReconnect && !running && !connecting && servers.isNotEmpty()) toggle()
+                pendingReconnect = false
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
         reloadServers()
         MessageHelper.sendMsg2Service(this, AppConfig.MSG_REGISTER_CLIENT, "")
+        PamirWatch.cancelAlert(this)
         lifecycleScope.launch { delay(1200); precheck() }
     }
 
@@ -216,15 +258,72 @@ class PamirActivity : AppCompatActivity() {
     private fun onRunning(value: Boolean) {
         connecting = false
         if (value && !running) {
-            connectedAt = System.currentTimeMillis()
+            val at = MmkvManager.decodeSettingsLong(PamirWatch.K_CONN_AT, 0L)
+            connectedAt = if (at > 0 && at <= System.currentTimeMillis()) at else System.currentTimeMillis()
+            pendingReconnect = false
             fetchIp()
+            askNotifications()
         }
         if (!value) {
             connectedAt = 0L
+            speedHist.clear()
+            rxSpeed = 0L; txSpeed = 0L
             ipInfo = ""
             autoSwitched = false
         }
         running = value
+    }
+
+    private fun askNotifications(fromSettings: Boolean = false) {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        if (MmkvManager.decodeSettingsBool("pamir_notif_asked", false)) {
+            if (fromSettings) {
+                toast("Разрешите уведомления для Pamir VPN", true)
+                runCatching {
+                    startActivity(
+                        Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+                    )
+                }
+            }
+            return
+        }
+        MmkvManager.encodeSettings("pamir_notif_asked", true)
+        runCatching { notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS) }
+    }
+
+    /** Traffic of the app = everything that goes through the tunnel (the core runs under our uid). */
+    private suspend fun speedLoop() {
+        val uid = Process.myUid()
+        var prevRx = TrafficStats.getUidRxBytes(uid)
+        var prevTx = TrafficStats.getUidTxBytes(uid)
+        if (prevRx < 0 || prevTx < 0) return
+        var baseRx = MmkvManager.decodeSettingsLong(PamirWatch.K_BASE_RX, -1L)
+        var baseTx = MmkvManager.decodeSettingsLong(PamirWatch.K_BASE_TX, -1L)
+        if (baseRx < 0 || baseRx > prevRx || baseTx < 0 || baseTx > prevTx) { baseRx = prevRx; baseTx = prevTx }
+        var prevT = System.nanoTime()
+        rxTotal = prevRx - baseRx; txTotal = prevTx - baseTx
+        while (running) {
+            delay(1000)
+            val rx = TrafficStats.getUidRxBytes(uid)
+            val tx = TrafficStats.getUidTxBytes(uid)
+            val t = System.nanoTime()
+            val dt = ((t - prevT) / 1e9).coerceAtLeast(0.2)
+            rxSpeed = ((rx - prevRx).coerceAtLeast(0) / dt).toLong()
+            txSpeed = ((tx - prevTx).coerceAtLeast(0) / dt).toLong()
+            rxTotal = (rx - baseRx).coerceAtLeast(0); txTotal = (tx - baseTx).coerceAtLeast(0)
+            prevRx = rx; prevTx = tx; prevT = t
+            speedHist.add(rxSpeed.toFloat())
+            while (speedHist.size > 40) speedHist.removeAt(0)
+        }
+    }
+
+    private fun fmtBytes(b: Long): String = when {
+        b < 1024 -> "$b Б"
+        b < 1024 * 1024 -> String.format("%.0f КБ", b / 1024.0)
+        b < 1024L * 1024 * 1024 -> String.format(if (b < 100L * 1024 * 1024) "%.1f МБ" else "%.0f МБ", b / 1048576.0)
+        else -> String.format("%.2f ГБ", b / 1073741824.0)
     }
 
     private fun initRouting() {
@@ -232,6 +331,10 @@ class PamirActivity : AppCompatActivity() {
             runCatching { SettingsManager.resetRoutingRulesetsFromPresets(this, RoutingType.WHITE_RUSSIA) }
             MmkvManager.encodeSettings(PREF_RU_DIRECT, true)
             MmkvManager.encodeSettings(PREF_ROUTING_INIT, true)
+        }
+        if (!MmkvManager.decodeSettingsBool("pamir_speed_init", false)) {
+            MmkvManager.encodeSettings(AppConfig.PREF_SPEED_ENABLED, true)
+            MmkvManager.encodeSettings("pamir_speed_init", true)
         }
     }
 
@@ -265,16 +368,7 @@ class PamirActivity : AppCompatActivity() {
         selected = sel
     }
 
-    private fun cleanName(remarks: String): Pair<String, String> {
-        var s = remarks.substringBefore("|").trim()
-        s = s.replace(Regex("-?\\s*user_[^\\s|]*"), "")
-        val flagMatch = Regex("^([\\x{1F1E6}-\\x{1F1FF}]{2})").find(s)
-        val flag = flagMatch?.value ?: "🌐"
-        if (flagMatch != null) s = s.removePrefix(flagMatch.value)
-        s = s.replace(Regex("\\s*-\\s*(\\d+)"), " $1").replace(Regex("\\s{2,}"), " ").trim().trim('-').trim()
-        if (s.isEmpty()) s = "Сервер"
-        return flag to s
-    }
+    private fun cleanName(remarks: String): Pair<String, String> = PamirWatch.cleanName(remarks)
 
     private fun toggle() {
         Log.w("Pamir", "toggle running=$running connecting=$connecting selected=$selected")
@@ -569,7 +663,6 @@ class PamirActivity : AppCompatActivity() {
     @Composable
     private fun Root() {
         var tab by remember { mutableStateOf(Tab.HOME) }
-        var sheet by remember { mutableStateOf(false) }
         BackHandler(enabled = tab != Tab.HOME) { tab = Tab.HOME }
         Box(
             Modifier
@@ -598,7 +691,7 @@ class PamirActivity : AppCompatActivity() {
                     Box(Modifier.weight(1f)) {
                         AnimatedContent(targetState = tab, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) }, label = "tab") { t ->
                             when (t) {
-                                Tab.HOME -> Home(onPick = { sheet = true })
+                                Tab.HOME -> Home(onPick = { sheetOpen = true })
                                 Tab.SETTINGS -> Settings()
                             }
                         }
@@ -606,7 +699,7 @@ class PamirActivity : AppCompatActivity() {
                     BottomNav(tab) { tab = it }
                 }
             }
-            if (sheet) ServerSheet(onDismiss = { sheet = false })
+            if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
         }
     }
 
@@ -716,7 +809,7 @@ class PamirActivity : AppCompatActivity() {
             Spacer(Modifier.height(20.dp))
             if (current != null) ServerCard(current, onPick)
             if (running) {
-                InfoRow()
+                SpeedCard()
             } else if (whitelist && current?.isLte != true) {
                 WhitelistCard()
             } else if (current?.isLte != true && servers.any { it.isLte && !it.isStub }) {
@@ -930,29 +1023,75 @@ class PamirActivity : AppCompatActivity() {
     }
 
     @Composable
-    private fun InfoRow() {
-        Row(
+    private fun SpeedCard() {
+        LaunchedEffect(running) { if (running) speedLoop() }
+        Column(
             Modifier
                 .padding(horizontal = 18.dp, vertical = 10.dp)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(Surface1)
+                .border(1.dp, Line, RoundedCornerShape(18.dp))
         ) {
-            InfoBox("Статус", "Трафик защищён", Modifier.weight(1f))
-            InfoBox("Сайты РФ", if (MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) "Напрямую" else "Через VPN", Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                SpeedValue("↓", "Загрузка", rxSpeed, Mint, Modifier.weight(1f))
+                Box(Modifier.width(1.dp).height(30.dp).background(Line))
+                Spacer(Modifier.width(14.dp))
+                SpeedValue("↑", "Отдача", txSpeed, Color(0xFF7FB8FF), Modifier.weight(1f))
+            }
+            Sparkline(
+                speedHist,
+                Modifier
+                    .fillMaxWidth()
+                    .height(34.dp)
+                    .padding(top = 6.dp)
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color(0x0DFFFFFF))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("За сессию  ↓ ${fmtBytes(rxTotal)}  ↑ ${fmtBytes(txTotal)}", color = TextDim, fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1)
+                Text(
+                    if (MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) "РФ напрямую" else "Всё через VPN",
+                    color = TextDim, fontSize = 11.sp, maxLines = 1
+                )
+            }
         }
     }
 
     @Composable
-    private fun InfoBox(label: String, value: String, modifier: Modifier) {
-        Column(
-            modifier
-                .clip(RoundedCornerShape(16.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(16.dp))
-                .padding(12.dp)
-        ) {
-            Text(value, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    private fun SpeedValue(arrow: String, label: String, bps: Long, color: Color, modifier: Modifier) {
+        Column(modifier) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(arrow, color = color, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.width(5.dp))
+                Text(fmtBytes(bps) + "/с", color = TextMain, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
+            }
             Text(label, color = TextDim, fontSize = 10.5.sp)
+        }
+    }
+
+    @Composable
+    private fun Sparkline(values: List<Float>, modifier: Modifier) {
+        Canvas(modifier) {
+            if (values.size < 2) return@Canvas
+            val max = (values.maxOrNull() ?: 0f).coerceAtLeast(16f * 1024f)
+            val n = 40
+            val step = size.width / (n - 1)
+            val x0 = size.width - step * (values.size - 1)
+            val pts = values.mapIndexed { i, v ->
+                Offset(x0 + step * i, size.height - 2.dp.toPx() - (v / max) * (size.height - 6.dp.toPx()))
+            }
+            val line = Path().apply { moveTo(pts[0].x, pts[0].y); pts.drop(1).forEach { lineTo(it.x, it.y) } }
+            val fill = Path().apply {
+                addPath(line)
+                lineTo(pts.last().x, size.height); lineTo(pts[0].x, size.height); close()
+            }
+            drawPath(fill, Brush.verticalGradient(listOf(Mint.copy(alpha = 0.22f), Color.Transparent)))
+            drawPath(line, Mint, style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round))
         }
     }
 
@@ -1051,6 +1190,7 @@ class PamirActivity : AppCompatActivity() {
         var ru by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) }
         var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
         var smart by remember { mutableStateOf(smartLte()) }
+        var alerts by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_ALERTS, true)) }
         Column(
             Modifier
                 .fillMaxSize()
@@ -1065,6 +1205,10 @@ class PamirActivity : AppCompatActivity() {
                     smart = it; MmkvManager.encodeSettings(PREF_SMART_LTE, it)
                 }
                 ToggleRow("⟳", "Автоподключение", "При включении телефона", boot) { boot = it; MmkvManager.encodeStartOnBoot(it) }
+                ToggleRow("🔔", "Сообщать об обрыве", "Уведомим, если VPN отключится или сервер не отвечает", alerts) {
+                    alerts = it; MmkvManager.encodeSettings(PamirWatch.K_ALERTS, it)
+                    if (it) askNotifications(fromSettings = true)
+                }
                 LinkRow("▦", "Приложения без VPN", "Выбрать исключения") {
                     startActivity(Intent(this@PamirActivity, PerAppProxyActivity::class.java))
                 }

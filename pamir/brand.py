@@ -198,6 +198,9 @@ edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
         <activity
             android:name=".ui.UrlSchemeActivity"'''),
 ])
+edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
+    ('    <application', '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n\n    <application'),
+])
 edit(os.path.join(PKG, 'ui', 'UrlSchemeActivity.kt'), [
     ('startActivity(Intent(this, MainActivity::class.java))', 'startActivity(Intent(this, com.v2ray.ang.pamir.PamirActivity::class.java))'),
 ])

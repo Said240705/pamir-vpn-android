@@ -121,6 +121,11 @@ private const val PREF_ROUTING_INIT = "pamir_routing_init"
 private const val PREF_AUTO_BEST = "pamir_auto_best"
 private const val PREF_LAST_SUB_UPDATE = "pamir_last_sub_update"
 private const val PREF_USER_CHOSE = "pamir_user_chose"
+private const val PREF_SMART_LTE = "pamir_smart_lte"
+private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
+private const val PREF_PREFERRED = "pamir_preferred"
+private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
+private const val DOWNLOAD_BASE = "https://app.pamirlink.ru/download/"
 
 data class PServer(
     val guid: String,
@@ -148,6 +153,12 @@ class PamirActivity : AppCompatActivity() {
     private var ipInfo by mutableStateOf("")
     private var daysLeft by mutableStateOf<Int?>(null)
     private var lastUpdate by mutableLongStateOf(0L)
+    private var whitelist by mutableStateOf(false)
+    private var autoSwitched = false
+    private var lastPrecheck = 0L
+    private var newVersion by mutableStateOf<String?>(null)
+    private var newVersionUrl = ""
+    private var updProgress by mutableStateOf(-1)
 
     private val vpnPermission =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -180,12 +191,14 @@ class PamirActivity : AppCompatActivity() {
         if (servers.isNotEmpty() && System.currentTimeMillis() - lastUpdate > 60 * 60 * 1000L) {
             updateSubscription(silent = true)
         }
+        checkAppUpdate()
     }
 
     override fun onResume() {
         super.onResume()
         reloadServers()
         MessageHelper.sendMsg2Service(this, AppConfig.MSG_REGISTER_CLIENT, "")
+        lifecycleScope.launch { delay(1200); precheck() }
     }
 
     override fun onDestroy() {
@@ -205,6 +218,7 @@ class PamirActivity : AppCompatActivity() {
         if (!value) {
             connectedAt = 0L
             ipInfo = ""
+            autoSwitched = false
         }
         running = value
     }
@@ -270,6 +284,13 @@ class PamirActivity : AppCompatActivity() {
             toast("Подписка не активна или исчерпан лимит устройств")
             return
         }
+        val cur = servers.firstOrNull { it.guid == sel }
+        if (cur != null && !cur.isLte && whitelist && smartLte()) {
+            lteServer()?.let {
+                useLte(it)
+                toast("Обычные серверы недоступны — подключаем LTE Обход")
+            }
+        }
         connecting = true
         val intent = VpnService.prepare(this)
         Log.w("Pamir", "vpn prepare needed=${intent != null}")
@@ -332,15 +353,157 @@ class PamirActivity : AppCompatActivity() {
 
     private fun fetchIp() {
         lifecycleScope.launch {
-            delay(1500)
-            val text = withContext(Dispatchers.IO) {
-                runCatching {
-                    val c = URL("https://api.ipify.org").openConnection() as HttpURLConnection
-                    c.connectTimeout = 6000; c.readTimeout = 6000
-                    c.inputStream.bufferedReader().use { it.readText().trim() }
-                }.getOrDefault("")
+            delay(2000)
+            var info: com.v2ray.ang.handler.SpeedtestManager.RemoteEndpointInfo? = null
+            for (i in 0 until 2) {
+                if (!running) return@launch
+                info = withContext(Dispatchers.IO) { runCatching { com.v2ray.ang.handler.SpeedtestManager.getRemoteIPInfo() }.getOrNull() }
+                if (info?.ipAddress != null) break
+                delay(2500)
             }
-            if (running) ipInfo = text
+            if (!running) return@launch
+            val ip = info?.ipAddress
+            if (ip != null) {
+                ipInfo = if (info?.country.isNullOrBlank()) ip else "$ip (${info?.country})"
+                Log.w("Pamir", "ip ok $ipInfo")
+                return@launch
+            }
+            Log.w("Pamir", "ip check failed")
+            val cur = servers.firstOrNull { it.guid == selected }
+            val lte = lteServer()
+            if (cur != null && !cur.isLte && lte != null && smartLte() && !autoSwitched) {
+                autoSwitched = true
+                useLte(lte)
+                toast("Сервер не отвечает — переключили на LTE Обход", true)
+                connecting = true
+                LauncherManager.restartService(this@PamirActivity)
+                delay(3000); connecting = false
+                fetchIp()
+            } else {
+                ipInfo = "нет ответа"
+                toast("Нет соединения через VPN. Попробуйте другой сервер", true)
+            }
+        }
+    }
+
+    private fun smartLte() = MmkvManager.decodeSettingsBool(PREF_SMART_LTE, true)
+
+    private fun lteServer(): PServer? = servers.firstOrNull { it.isLte && !it.isStub }
+
+    private fun useLte(lte: PServer) {
+        val prev = selected
+        if (prev != null && servers.firstOrNull { it.guid == prev }?.isLte == false) {
+            MmkvManager.encodeSettings(PREF_PREFERRED, prev)
+        }
+        MmkvManager.encodeSettings(PREF_AUTO_LTE_ACTIVE, true)
+        selected = lte.guid
+        MmkvManager.setSelectServer(lte.guid)
+    }
+
+    /** Checks whether regular servers are reachable (white lists) and restores the preferred server. */
+    private suspend fun precheck() {
+        if (running || connecting || servers.isEmpty()) return
+        if (System.currentTimeMillis() - lastPrecheck < 60_000) return
+        lastPrecheck = System.currentTimeMillis()
+        runPing()
+        val normal = servers.filter { !it.isStub && !it.isLte }
+        val reachable = normal.any { (pings[it.guid] ?: -1) > 0 }
+        whitelist = normal.isNotEmpty() && !reachable && lteServer() != null
+        Log.w("Pamir", "precheck reachable=$reachable whitelist=$whitelist")
+        if (reachable && MmkvManager.decodeSettingsBool(PREF_AUTO_LTE_ACTIVE, false)) {
+            val pref = MmkvManager.decodeSettingsString(PREF_PREFERRED, "") ?: ""
+            val back = normal.firstOrNull { it.guid == pref } ?: normal.firstOrNull()
+            if (back != null) {
+                selected = back.guid
+                MmkvManager.setSelectServer(back.guid)
+            }
+            MmkvManager.encodeSettings(PREF_AUTO_LTE_ACTIVE, false)
+        }
+    }
+
+    private fun checkAppUpdate() {
+        lifecycleScope.launch {
+            val json = withContext(Dispatchers.IO) {
+                runCatching {
+                    val c = URL(UPDATE_JSON).openConnection() as HttpURLConnection
+                    c.connectTimeout = 6000; c.readTimeout = 6000
+                    c.setRequestProperty("Cache-Control", "no-cache")
+                    c.inputStream.bufferedReader().use { it.readText() }
+                }.getOrNull()
+            } ?: return@launch
+            runCatching {
+                val o = org.json.JSONObject(json)
+                val v = o.optString("version")
+                if (v.isNotBlank() && isNewer(v, appVersion())) {
+                    val abi = if (android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a") && o.has("arm64-v8a")) "arm64-v8a" else "universal"
+                    val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
+                    newVersionUrl = DOWNLOAD_BASE + file
+                    newVersion = v
+                }
+            }
+        }
+    }
+
+    private fun isNewer(remote: String, local: String): Boolean {
+        val r = remote.split(".").map { it.toIntOrNull() ?: 0 }
+        val l = local.split(".").map { it.toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(r.size, l.size)) {
+            val a = r.getOrElse(i) { 0 }; val b = l.getOrElse(i) { 0 }
+            if (a != b) return a > b
+        }
+        return false
+    }
+
+    private fun installUpdate() {
+        if (updProgress >= 0) return
+        if (android.os.Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            toast("Разрешите установку обновлений и нажмите «Обновить» ещё раз", true)
+            runCatching {
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            }
+            return
+        }
+        updProgress = 0
+        lifecycleScope.launch {
+            val file = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = java.io.File(cacheDir, "update").apply { mkdirs() }
+                    val f = java.io.File(dir, "pamir-vpn.apk")
+                    val c = URL(newVersionUrl).openConnection() as HttpURLConnection
+                    c.connectTimeout = 10000; c.readTimeout = 20000
+                    val total = c.contentLengthLong
+                    c.inputStream.use { input ->
+                        f.outputStream().use { out ->
+                            val buf = ByteArray(64 * 1024)
+                            var done = 0L
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                done += n
+                                if (total > 0) {
+                                    val pr = (done * 100 / total).toInt()
+                                    withContext(Dispatchers.Main) { updProgress = pr }
+                                }
+                            }
+                        }
+                    }
+                    f
+                }.getOrNull()
+            }
+            updProgress = -1
+            if (file == null) {
+                toast("Не удалось скачать обновление")
+                return@launch
+            }
+            runCatching {
+                val uri = androidx.core.content.FileProvider.getUriForFile(this@PamirActivity, "$packageName.cache", file)
+                startActivity(
+                    Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(uri, "application/vnd.android.package-archive")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure { toast("Не удалось открыть установщик") }
         }
     }
 
@@ -527,6 +690,7 @@ class PamirActivity : AppCompatActivity() {
         ) {
             Header()
             StatusPill()
+            if (newVersion != null) UpdateCard()
             if (stubMode) {
                 StubCard()
                 return@Column
@@ -546,6 +710,8 @@ class PamirActivity : AppCompatActivity() {
             if (current != null) ServerCard(current, onPick)
             if (running) {
                 InfoRow()
+            } else if (whitelist && current?.isLte != true) {
+                WhitelistCard()
             } else if (current?.isLte != true && servers.any { it.isLte && !it.isStub }) {
                 LteHint(onPick)
             }
@@ -690,6 +856,55 @@ class PamirActivity : AppCompatActivity() {
     }
 
     @Composable
+    private fun UpdateCard() {
+        Row(
+            Modifier
+                .padding(start = 18.dp, end = 18.dp, top = 8.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(Mint.copy(alpha = 0.08f))
+                .border(1.dp, Mint.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                .clickable { installUpdate() }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("⬆", color = Mint, fontSize = 13.sp)
+            Spacer(Modifier.width(8.dp))
+            Text("Доступна версия $newVersion", color = TextMain, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(if (updProgress >= 0) "Загрузка $updProgress%" else "Обновить ›", color = Mint, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+
+    @Composable
+    private fun WhitelistCard() {
+        Column(
+            Modifier
+                .padding(horizontal = 18.dp, vertical = 10.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF2A1D14))
+                .border(1.dp, Color(0x55F0B46A), RoundedCornerShape(16.dp))
+                .padding(12.dp)
+        ) {
+            Text("📶  Похоже, включены «белые списки»", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(3.dp))
+            Text("Обычные серверы сейчас недоступны. LTE Обход работает и в этом режиме.", color = TextDim, fontSize = 11.5.sp)
+            Spacer(Modifier.height(9.dp))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.linearGradient(listOf(Mint, MintDeep)))
+                    .clickable {
+                        lteServer()?.let { useLte(it); if (!running) toggle() else LauncherManager.restartService(this@PamirActivity) }
+                    },
+                contentAlignment = Alignment.Center
+            ) { Text("Подключить LTE Обход", color = Color(0xFF05241D), fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
+        }
+    }
+
+    @Composable
     private fun LteHint(onPick: () -> Unit) {
         Row(
             Modifier
@@ -828,6 +1043,7 @@ class PamirActivity : AppCompatActivity() {
     private fun Settings() {
         var ru by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) }
         var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
+        var smart by remember { mutableStateOf(smartLte()) }
         Column(
             Modifier
                 .fillMaxSize()
@@ -838,6 +1054,9 @@ class PamirActivity : AppCompatActivity() {
             Section("Подключение")
             Group {
                 ToggleRow("🇷🇺", "Сайты РФ напрямую", "Госуслуги, банки — без VPN", ru) { ru = it; setRuDirect(it) }
+                ToggleRow("📶", "Умный LTE-режим", "Сам включит LTE Обход при «белых списках»", smart) {
+                    smart = it; MmkvManager.encodeSettings(PREF_SMART_LTE, it)
+                }
                 ToggleRow("⟳", "Автоподключение", "При включении телефона", boot) { boot = it; MmkvManager.encodeStartOnBoot(it) }
                 LinkRow("▦", "Приложения без VPN", "Выбрать исключения") {
                     startActivity(Intent(this@PamirActivity, PerAppProxyActivity::class.java))
@@ -852,7 +1071,9 @@ class PamirActivity : AppCompatActivity() {
             Section("Помощь")
             Group {
                 LinkRow("✈", "Поддержка", "Ответим в Telegram") { openUrl(BOT_URL) }
-                LinkRow("ⓘ", "О приложении", "Версия ${appVersion()}") { toast("Pamir VPN ${appVersion()}") }
+                LinkRow("ⓘ", "О приложении", if (newVersion != null) "Версия ${appVersion()} · доступна $newVersion" else "Версия ${appVersion()} · актуальная") {
+                    if (newVersion != null) installUpdate() else { toast("Проверяем обновления…"); checkAppUpdate() }
+                }
             }
             Spacer(Modifier.height(14.dp))
             Text(

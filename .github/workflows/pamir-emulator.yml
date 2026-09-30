@@ -1,0 +1,53 @@
+name: Pamir VPN emulator test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Download latest APK
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release download -R ${{ github.repository }} --pattern '*_universal.apk' -O app.apk
+        ls -la app.apk
+
+    - name: Run emulator test
+      uses: reactivecircus/android-emulator-runner@v2
+      env:
+        SUB_URL: ${{ secrets.TEST_SUB_URL }}
+      with:
+        api-level: 34
+        target: google_apis
+        arch: x86_64
+        disable-animations: true
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        script: bash pamir/emu_test.sh
+
+    - name: Send to Telegram
+      if: always()
+      env:
+        TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        TG_CHATS: ${{ secrets.TG_CHATS }}
+      run: |
+        [ -z "$TG_TOKEN" ] && exit 0
+        for c in ${TG_CHATS//,/ }; do
+          curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id=$c --data-urlencode "text=🤖 Тест Pamir VPN (Android-эмулятор) #${{ github.run_number }}"
+          for f in shots/*.png; do
+            [ -f "$f" ] && curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendPhoto" -F chat_id=$c -F photo=@"$f" -F caption="$(basename "$f" .png)"
+          done
+          for f in shots/report.txt shots/logcat.txt; do
+            [ -s "$f" ] && curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendDocument" -F chat_id=$c -F document=@"$f"
+          done
+        done

@@ -37,9 +37,14 @@ class QSTileService : TileService() {
         tile.icon = Icon.createWithResource(applicationContext, R.drawable.ic_stat_name)
         if (state == Tile.STATE_ACTIVE) {
             tile.state = Tile.STATE_ACTIVE
-            tile.label = PamirWatch.title(CoreServiceManager.getRunningServerName().ifBlank { null })
+            val server = PamirWatch.title(CoreServiceManager.getRunningServerName().ifBlank { null })
                 .takeIf { it != "Pamir VPN" } ?: PamirWatch.selectedTitle()
-            if (Build.VERSION.SDK_INT >= 29) tile.subtitle = "Защищено"
+            if (Build.VERSION.SDK_INT >= 29) {
+                tile.label = "Pamir VPN"
+                tile.subtitle = server
+            } else {
+                tile.label = server
+            }
         } else {
             tile.state = Tile.STATE_INACTIVE
             tile.label = "Pamir VPN"

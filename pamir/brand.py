@@ -260,7 +260,16 @@ SPEED_FN = """    private fun appendSpeedString(text: StringBuilder, name: Strin
             AppConfig.TAG_DIRECT -> "Напрямую"
             else -> name ?: ""
         }
-        text.append("$n:  ↓ ${down.toLong().toSpeedString()}  ↑ ${up.toLong().toSpeedString()}\\n")
+        text.append("$n:  ↓ ${pamirSpeed(down)}  ↑ ${pamirSpeed(up)}\\n")
+    }
+
+    private fun pamirSpeed(v: Double): String {
+        val b = v.toLong()
+        return when {
+            b < 1024 -> "$b Б/с"
+            b < 1024 * 1024 -> String.format("%.0f КБ/с", b / 1024.0)
+            else -> String.format("%.1f МБ/с", b / 1048576.0)
+        }
     }
 """
 nm = os.path.join(PKG, 'handler', 'NotificationManager.kt')

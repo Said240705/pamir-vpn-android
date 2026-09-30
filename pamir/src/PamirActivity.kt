@@ -357,6 +357,10 @@ class PamirActivity : AppCompatActivity() {
         servers = list
         daysLeft = list.firstNotNullOfOrNull { Regex("⏳\\s*(\\d+)\\s*D").find(it.rawRemarks)?.groupValues?.get(1)?.toIntOrNull() }
         lastUpdate = MmkvManager.decodeSettingsLong(PREF_LAST_SUB_UPDATE, 0L)
+        if (lastUpdate == 0L && list.isNotEmpty()) {
+            lastUpdate = System.currentTimeMillis()
+            MmkvManager.encodeSettings(PREF_LAST_SUB_UPDATE, lastUpdate)
+        }
         var sel = MmkvManager.getSelectServer()
         if (!MmkvManager.decodeSettingsBool(PREF_USER_CHOSE, false)) {
             list.firstOrNull { !it.isStub && !it.isLte }?.let { sel = it.guid; MmkvManager.setSelectServer(it.guid) }
@@ -1215,8 +1219,8 @@ class PamirActivity : AppCompatActivity() {
             }
             Section("Подписка")
             Group {
-                val ago = if (lastUpdate > 0) agoText(lastUpdate) else "ещё не обновлялись"
-                LinkRow("↻", if (updating) "Обновляем…" else "Обновить серверы", "Обновлено $ago") { updateSubscription() }
+                val upd = if (lastUpdate > 0) "Обновлено ${agoText(lastUpdate)}" else "Ещё не обновлялись"
+                LinkRow("↻", if (updating) "Обновляем…" else "Обновить серверы", upd) { updateSubscription() }
                 LinkRow("👤", "Личный кабинет", "Продление и устройства") { openUrl(CABINET_URL) }
             }
             Section("Помощь")

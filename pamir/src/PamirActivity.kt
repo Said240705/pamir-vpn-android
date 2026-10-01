@@ -33,6 +33,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,6 +49,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -73,6 +76,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -83,6 +88,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.lifecycleScope
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
@@ -102,6 +108,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -131,6 +138,30 @@ private const val PREF_PREFERRED = "pamir_preferred"
 private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
 private const val DOWNLOAD_BASE = "https://app.pamirlink.ru/download/"
 
+/** Popular apps that often refuse to work through a VPN. Only installed ones are shown. */
+private val POPULAR_APPS = listOf(
+    "Банки" to listOf(
+        "ru.sberbankmobile", "com.idamob.tinkoff.android", "ru.vtb24.mobilebanking.android",
+        "ru.alfabank.mobile.android", "ru.raiffeisennews", "ru.gazprombank.android.mobilebank.app",
+        "ru.letobank.Prometheus", "ru.sovcomcard.halva.v1", "ru.psbank.mobile", "ru.mkb.mobile",
+        "ru.rosbank.android", "ru.uralsib.mobile", "com.openbank", "ru.ozon.fintech.finance",
+    ),
+    "Госуслуги и налоги" to listOf(
+        "ru.rostel", "ru.altarix.mos.pgu", "com.gnivts.selfemployed", "ru.fns.lkfl", "ru.gosuslugi.auto",
+    ),
+    "Покупки и доставка" to listOf(
+        "ru.ozon.app.android", "com.wildberries.ru", "ru.beru.android", "com.avito.android",
+        "ru.foodfox.client", "ru.sbcs.store", "ru.megamarket.marketplace", "ru.vkusvill",
+    ),
+    "Сервисы" to listOf(
+        "ru.yandex.taxi", "ru.yandex.yandexmaps", "ru.yandex.searchplugin", "ru.yandex.music",
+        "ru.kinopoisk", "ru.dublgis.dgismobile", "com.vkontakte.android", "ru.oneme.app", "ru.ok.android",
+        "ru.rutube.app", "ru.mts.mymts", "ru.beeline.services", "ru.megafon.mlk", "ru.tele2.mytele2",
+    ),
+)
+
+private data class PApp(val pkg: String, val label: String, val group: String, val icon: ImageBitmap?)
+
 data class PServer(
     val guid: String,
     val flag: String,
@@ -142,7 +173,7 @@ data class PServer(
     val rawRemarks: String,
 )
 
-private enum class Tab { HOME, SETTINGS }
+private enum class Tab { HOME, SETTINGS, APPS }
 
 class PamirActivity : AppCompatActivity() {
 
@@ -171,6 +202,29 @@ class PamirActivity : AppCompatActivity() {
     private var txTotal by mutableLongStateOf(0L)
     private val speedHist = mutableStateListOf<Float>()
     private var pendingReconnect = false
+    private var tab by mutableStateOf(Tab.HOME)
+    private var appList by mutableStateOf<List<PApp>?>(null)
+    private val bypassSel = mutableStateMapOf<String, Boolean>()
+    private var appsChanged = false
+
+    // account / renewal
+    private var loggedIn by mutableStateOf(PamirApi.token != null)
+    private var loginBusy by mutableStateOf(false)
+    private var loginJob: kotlinx.coroutines.Job? = null
+    private var balanceMinor by mutableStateOf<Long?>(null)
+    private var renewOpen by mutableStateOf(false)
+    private var renewLoading by mutableStateOf(false)
+    private var renewKeys by mutableStateOf<List<JSONObject>>(emptyList())
+    private var renewKeyId by mutableStateOf<Int?>(null)
+    private var tariffs by mutableStateOf<List<JSONObject>>(emptyList())
+    private var payBusy by mutableStateOf<String?>(null)
+    private var payState by mutableStateOf<String?>(null)   // waiting | paid | failed
+    private var payUrl = ""
+    private var payOrder: String? = null
+    private var payBuy = false
+    private var payJob: kotlinx.coroutines.Job? = null
+    private var reportOpen by mutableStateOf(false)
+    private var reportBusy by mutableStateOf(false)
 
     private val notifPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -210,6 +264,12 @@ class PamirActivity : AppCompatActivity() {
             updateSubscription(silent = true)
         }
         checkAppUpdate()
+        PamirReminderWorker.schedule(this)
+        lifecycleScope.launch(Dispatchers.IO) {
+            delay(4000)
+            runCatching { PamirCrash.sendPending(applicationContext, proxyPort()) }
+        }
+        if (loggedIn) refreshAccount()
         handleIntent(intent)
     }
 
@@ -226,6 +286,10 @@ class PamirActivity : AppCompatActivity() {
             i.removeExtra(PamirWatch.EXTRA_SERVERS)
             PamirWatch.cancelAlert(this)
             sheetOpen = true
+        }
+        if (i.getBooleanExtra(PamirWatch.EXTRA_RENEW, false)) {
+            i.removeExtra(PamirWatch.EXTRA_RENEW)
+            openRenew()
         }
         if (i.getBooleanExtra(PamirWatch.EXTRA_RECONNECT, false)) {
             i.removeExtra(PamirWatch.EXTRA_RECONNECT)
@@ -244,6 +308,8 @@ class PamirActivity : AppCompatActivity() {
         reloadServers()
         MessageHelper.sendMsg2Service(this, AppConfig.MSG_REGISTER_CLIENT, "")
         PamirWatch.cancelAlert(this)
+        if (tab == Tab.APPS) loadApps()
+        if (payState == "waiting") lifecycleScope.launch { checkPayment() }
         lifecycleScope.launch { delay(1200); precheck() }
     }
 
@@ -324,6 +390,249 @@ class PamirActivity : AppCompatActivity() {
         b < 1024 * 1024 -> String.format("%.0f КБ", b / 1024.0)
         b < 1024L * 1024 * 1024 -> String.format(if (b < 100L * 1024 * 1024) "%.1f МБ" else "%.0f МБ", b / 1048576.0)
         else -> String.format("%.2f ГБ", b / 1073741824.0)
+    }
+
+    // ---------- account: login via Telegram, renewal, reports ----------
+
+    private fun proxyPort(): Int? = if (running) runCatching { SettingsManager.getHttpPort() }.getOrNull()?.takeIf { it > 0 } else null
+
+    /** Runs an API call on IO; on error shows a toast (401 = log out) and returns null. */
+    private suspend fun <T> api(quiet: Boolean = false, block: (Int?) -> T): T? {
+        val port = proxyPort()
+        val r = withContext(Dispatchers.IO) { runCatching { block(port) } }
+        r.exceptionOrNull()?.let { e ->
+            Log.w("Pamir", "api error: ${e.message}")
+            if (e is PamirApi.ApiError && e.code == 401) {
+                logout(); if (!quiet) toast("Войдите заново через Telegram", true)
+            } else if (!quiet) toast(e.message ?: "Нет связи с сервером", true)
+        }
+        return r.getOrNull()
+    }
+
+    private fun loginTelegram() {
+        if (loginBusy) return
+        loginBusy = true
+        loginJob = lifecycleScope.launch {
+            val start = api { p -> PamirApi.call("/auth/telegram/start", "POST", auth = false, proxyPort = p) }
+            if (start == null) { loginBusy = false; return@launch }
+            val token = start.optString("token")
+            val link = start.optString("deep_link").replace("start=weblogin_", "start=applogin_")
+            openUrl(link)
+            val enc = Uri.encode(token)
+            repeat(150) {
+                delay(2000)
+                val r = api(quiet = true) { p -> PamirApi.call("/auth/telegram/poll?token=$enc", auth = false, proxyPort = p) }
+                if (r?.optString("status") == "approved") {
+                    PamirApi.token = r.optString("access_token")
+                    loggedIn = true
+                    loginBusy = false
+                    Log.w("Pamir", "login ok")
+                    onLoggedIn()
+                    return@launch
+                }
+            }
+            loginBusy = false
+            toast("Не дождались подтверждения. Попробуйте ещё раз")
+        }
+    }
+
+    private fun cancelLogin() {
+        loginJob?.cancel(); loginJob = null; loginBusy = false
+    }
+
+    private fun logout() {
+        PamirApi.token = null
+        loggedIn = false
+        balanceMinor = null
+        renewKeys = emptyList()
+    }
+
+    private fun refreshAccount() {
+        lifecycleScope.launch {
+            val me = api(quiet = true) { p -> PamirApi.call("/auth/me", proxyPort = p) } ?: return@launch
+            balanceMinor = if (me.isNull("balance")) null else me.optLong("balance")
+        }
+    }
+
+    /** After login: import the subscriptions of all active keys. */
+    private suspend fun onLoggedIn() {
+        refreshAccount()
+        val keys = api { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys") ?: return
+        val list = (0 until keys.length()).map { keys.getJSONObject(it) }
+        renewKeys = list
+        val urls = list.filter { it.optBoolean("is_active") }.mapNotNull { it.optString("subscription_url").takeIf { u -> u.startsWith("http") } }
+        if (urls.isEmpty()) {
+            toast(if (list.isEmpty()) "Вы вошли. Подписки пока нет — выберите тариф" else "Вы вошли. Подписка закончилась — продлите её", true)
+            openRenew()
+            return
+        }
+        updating = true
+        var added = 0
+        withContext(Dispatchers.IO) {
+            urls.forEach { u -> runCatching { AngConfigManager.importBatchConfig(u, "", false) }.onSuccess { added += it.first + it.second } }
+        }
+        updating = false
+        MmkvManager.encodeSettings(PREF_LAST_SUB_UPDATE, System.currentTimeMillis())
+        reloadServers()
+        toast(if (added > 0) "Готово! Подписка подключена" else "Вы вошли в аккаунт")
+        if (renewOpen) openRenew()
+    }
+
+    private fun mySubUrls(): Set<String> =
+        runCatching { MmkvManager.decodeSubscriptions().map { it.subscription.url }.toSet() }.getOrDefault(emptySet())
+
+    /** Renewal inside the app (tariffs + payment); without login — offer to log in. */
+    private fun openRenew() {
+        renewOpen = true
+        if (payState == "paid" || payState == "failed") payState = null
+        if (!loggedIn) return
+        renewLoading = true
+        lifecycleScope.launch {
+            refreshAccount()
+            val keysJ = api { p -> PamirApi.call("/auth/keys", proxyPort = p) }
+            val tarJ = api(quiet = true) { p -> PamirApi.call("/topup/tariffs", proxyPort = p) }
+            renewLoading = false
+            if (keysJ == null) return@launch
+            val ka = keysJ.optJSONArray("keys")
+            val list = if (ka == null) emptyList() else (0 until ka.length()).map { ka.getJSONObject(it) }
+            renewKeys = list
+            val mine = mySubUrls()
+            renewKeyId = (list.firstOrNull { it.optString("subscription_url") in mine }
+                ?: list.firstOrNull { it.optBoolean("is_active") } ?: list.firstOrNull())?.optInt("id")
+            val ta = tarJ?.optJSONArray("tariffs")
+            tariffs = if (ta == null) emptyList() else (0 until ta.length()).map { ta.getJSONObject(it) }
+        }
+    }
+
+    private fun pay(tariffId: Int, method: String) {
+        if (payBusy != null) return
+        payBusy = "$tariffId:$method"
+        lifecycleScope.launch {
+            val keyId = renewKeyId
+            val buy = keyId == null
+            val body = JSONObject().put("tariff_id", tariffId).put("method", method)
+            if (!buy) body.put("key_id", keyId)
+            val r = api { p -> PamirApi.call(if (buy) "/topup/purchase" else "/topup/renew", "POST", body, proxyPort = p) }
+            payBusy = null
+            if (r == null) return@launch
+            payBuy = buy
+            when {
+                r.optString("payment_url").startsWith("http") -> {
+                    payUrl = r.optString("payment_url")
+                    payOrder = r.optString("order_id").takeIf { it.isNotBlank() }
+                    payState = "waiting"
+                    openUrl(payUrl)
+                    watchPayment()
+                }
+                r.optBoolean("completed") || r.optBoolean("ok") -> onPaid()
+            }
+        }
+    }
+
+    private fun watchPayment() {
+        payJob?.cancel()
+        payJob = lifecycleScope.launch {
+            repeat(200) {
+                delay(4000)
+                if (checkPayment()) return@launch
+            }
+        }
+    }
+
+    /** true = finished (paid or failed). */
+    private suspend fun checkPayment(): Boolean {
+        val order = payOrder ?: return false
+        if (payState != "waiting") return true
+        val r = api(quiet = true) { p -> PamirApi.call("/topup/payment-status?order_id=${Uri.encode(order)}", proxyPort = p) } ?: return false
+        val st = r.optString("status")
+        return when {
+            st == "paid" -> { onPaid(); true }
+            Regex("cancel|fail|expire|reject|declin").containsMatchIn(st) -> { payState = "failed"; true }
+            else -> false
+        }
+    }
+
+    private fun onPaid() {
+        payState = "paid"
+        payJob?.cancel()
+        Log.w("Pamir", "payment ok buy=$payBuy")
+        lifecycleScope.launch {
+            delay(1500)
+            refreshAccount()
+            if (payBuy) onLoggedIn() else updateSubscription(silent = true)
+        }
+    }
+
+    private fun sendReport(text: String, withLog: Boolean) {
+        if (reportBusy) return
+        reportBusy = true
+        lifecycleScope.launch {
+            val ok = api { p ->
+                val log = if (withLog) PamirApi.recentLog() else ""
+                PamirApi.report(applicationContext, "feedback", text, log, p)
+            } != null
+            reportBusy = false
+            if (ok) {
+                reportOpen = false
+                toast("Спасибо! Сообщение отправлено, разберёмся", true)
+            }
+        }
+    }
+
+    private fun rub(minor: Long): String {
+        val v = minor / 100.0
+        return (if (v % 1.0 == 0.0) String.format("%,.0f", v) else String.format("%,.2f", v)).replace(',', ' ') + " ₽"
+    }
+
+    // ---------- apps without VPN ----------
+
+    private fun bypassSet(): MutableSet<String> {
+        val on = MmkvManager.decodeSettingsBool(AppConfig.PREF_PER_APP_PROXY, false) &&
+            MmkvManager.decodeSettingsBool(AppConfig.PREF_BYPASS_APPS, false)
+        return if (on) MmkvManager.decodeSettingsStringSet(AppConfig.PREF_PER_APP_PROXY_SET)?.toMutableSet() ?: mutableSetOf()
+        else mutableSetOf()
+    }
+
+    private fun bypassCount(): Int = bypassSet().count { it != packageName }
+
+    private fun loadApps() {
+        lifecycleScope.launch {
+            val list = withContext(Dispatchers.IO) {
+                POPULAR_APPS.flatMap { (group, pkgs) ->
+                    pkgs.mapNotNull { pkg ->
+                        runCatching {
+                            val ai = packageManager.getApplicationInfo(pkg, 0)
+                            val icon = runCatching { packageManager.getApplicationIcon(ai).toBitmap(96, 96).asImageBitmap() }.getOrNull()
+                            PApp(pkg, packageManager.getApplicationLabel(ai).toString(), group, icon)
+                        }.getOrNull()
+                    }
+                }
+            }
+            val set = bypassSet()
+            bypassSel.clear()
+            list.forEach { bypassSel[it.pkg] = it.pkg in set }
+            appList = list
+        }
+    }
+
+    private fun setBypass(pkgs: List<String>, on: Boolean) {
+        val set = bypassSet()
+        if (on) set.addAll(pkgs) else set.removeAll(pkgs.toSet())
+        set.remove(packageName)
+        MmkvManager.encodeSettings(AppConfig.PREF_PER_APP_PROXY_SET, set)
+        MmkvManager.encodeSettings(AppConfig.PREF_BYPASS_APPS, true)
+        MmkvManager.encodeSettings(AppConfig.PREF_PER_APP_PROXY, set.isNotEmpty())
+        pkgs.forEach { bypassSel[it] = on }
+        appsChanged = true
+    }
+
+    private fun applyAppsIfChanged() {
+        if (!appsChanged) return
+        appsChanged = false
+        if (running) {
+            LauncherManager.restartService(this)
+            toast("Исключения применены — переподключаемся")
+        }
     }
 
     private fun initRouting() {
@@ -666,8 +975,8 @@ class PamirActivity : AppCompatActivity() {
 
     @Composable
     private fun Root() {
-        var tab by remember { mutableStateOf(Tab.HOME) }
-        BackHandler(enabled = tab != Tab.HOME) { tab = Tab.HOME }
+        BackHandler(enabled = tab != Tab.HOME) { tab = if (tab == Tab.APPS) Tab.SETTINGS else Tab.HOME }
+        LaunchedEffect(tab) { if (tab != Tab.APPS) applyAppsIfChanged() }
         Box(
             Modifier
                 .fillMaxSize()
@@ -697,13 +1006,16 @@ class PamirActivity : AppCompatActivity() {
                             when (t) {
                                 Tab.HOME -> Home(onPick = { sheetOpen = true })
                                 Tab.SETTINGS -> Settings()
+                                Tab.APPS -> AppsScreen()
                             }
                         }
                     }
-                    BottomNav(tab) { tab = it }
+                    BottomNav(if (tab == Tab.APPS) Tab.SETTINGS else tab) { tab = it }
                 }
             }
             if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
+            if (renewOpen) RenewSheet(onDismiss = { renewOpen = false })
+            if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
         }
     }
 
@@ -731,16 +1043,22 @@ class PamirActivity : AppCompatActivity() {
             Feature("🌍", "Быстрые европейские серверы")
             Feature("📶", "Работает даже в «белых списках»")
             Spacer(Modifier.weight(1f))
-            if (updating) CircularProgressIndicator(color = Mint, modifier = Modifier.size(28.dp))
+            if (updating || loginBusy) CircularProgressIndicator(color = Mint, modifier = Modifier.size(28.dp))
             Spacer(Modifier.height(12.dp))
-            PrimaryButton("Войти через кабинет") { openUrl(CABINET_URL) }
+            if (loginBusy) {
+                Text("Подтвердите вход в Telegram и вернитесь сюда", color = TextDim, fontSize = 12.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(8.dp))
+                SecondaryButton("Отменить") { cancelLogin() }
+            } else {
+                PrimaryButton("✈  Войти через Telegram") { loginTelegram() }
+            }
             Spacer(Modifier.height(10.dp))
             SecondaryButton("Вставить ссылку подписки") { importFromClipboard() }
             Spacer(Modifier.height(10.dp))
             Text(
-                "Нет подписки? Оформите её в боте @pamirlink_bot",
-                color = TextDim, fontSize = 12.sp, textAlign = TextAlign.Center,
-                modifier = Modifier.clickable { openUrl(BOT_URL) }.padding(8.dp)
+                "Войдите через Telegram — подписка подключится сама. Нет подписки? Её можно оформить сразу после входа",
+                color = TextDim, fontSize = 11.5.sp, textAlign = TextAlign.Center, lineHeight = 16.sp,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
             )
             Spacer(Modifier.height(10.dp))
         }
@@ -826,26 +1144,31 @@ class PamirActivity : AppCompatActivity() {
     @Composable
     private fun StatusPill() {
         val d = daysLeft
+        val warn = d != null && d <= 3
+        val amber = Color(0xFFF0B46A)
         Row(
             Modifier
                 .padding(horizontal = 18.dp)
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(16.dp))
-                .clickable { openUrl(CABINET_URL) }
+                .background(if (warn) Color(0xFF2A1F12) else Surface1)
+                .border(1.dp, if (warn) amber.copy(alpha = 0.45f) else Line, RoundedCornerShape(16.dp))
+                .clickable { openRenew() }
                 .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(if (d == null || d > 0) Mint else Danger))
+            Box(Modifier.size(7.dp).clip(CircleShape).background(if (warn) amber else Mint))
             Spacer(Modifier.width(10.dp))
             val txt = when {
                 d == null -> "Подписка активна"
-                d <= 0 -> "Подписка истекает сегодня"
+                d <= 0 -> "Подписка заканчивается сегодня"
+                d == 1 -> "Подписка закончится завтра"
+                warn -> "Осталось ${d} ${plural(d, "день", "дня", "дней")} — продлите"
                 else -> "Активна · ещё ${d} ${plural(d, "день", "дня", "дней")}"
             }
-            Text(txt, color = TextDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Text("Продлить ›", color = Mint, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+            Text(txt, color = if (warn) Color(0xFFF5D3A6) else TextDim, fontSize = 12.sp, fontWeight = if (warn) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text("Продлить ›", color = if (warn) amber else Mint, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
         }
     }
 
@@ -1189,12 +1512,306 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun RenewSheet(onDismiss: () -> Unit) {
+        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
+            Column(
+                Modifier
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+            ) {
+                Text(if (renewKeys.isEmpty() && loggedIn && !renewLoading) "Оформить подписку" else "Продление подписки",
+                    color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(10.dp))
+                when {
+                    payState == "paid" -> NoteCard("✅", "Оплата прошла", if (payBuy) "Подписка оформлена и уже подключается." else "Новый срок применён — VPN работает без перерыва.", Mint) {
+                        PrimaryButton("Отлично") { payState = null; onDismiss() }
+                    }
+                    payState == "waiting" -> NoteCard("⏳", "Ожидаем оплату", "Оплатите в открывшемся окне и вернитесь сюда — срок обновится сам.", Color(0xFFF0B46A)) {
+                        SecondaryButton("Открыть оплату ещё раз") { openUrl(payUrl) }
+                        Spacer(Modifier.height(6.dp))
+                        Text("Отменить", color = TextDim, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).clickable { payState = null; payJob?.cancel() }.padding(8.dp))
+                    }
+                    payState == "failed" -> NoteCard("⚠", "Оплата не прошла", "Деньги не списаны. Попробуйте ещё раз или выберите другой способ.", Danger) {
+                        SecondaryButton("Выбрать тариф") { payState = null }
+                    }
+                    !loggedIn -> NoteCard("✈", "Войдите через Telegram", "Так вы сможете продлевать подписку прямо здесь — в пару касаний, через СБП, карту или с баланса.", Mint) {
+                        if (loginBusy) {
+                            Text("Подтвердите вход в Telegram и вернитесь сюда", color = TextDim, fontSize = 12.sp)
+                            Spacer(Modifier.height(6.dp))
+                            SecondaryButton("Отменить") { cancelLogin() }
+                        } else PrimaryButton("Войти через Telegram") { loginTelegram() }
+                        Spacer(Modifier.height(4.dp))
+                        Text("Продлить в личном кабинете", color = TextDim, fontSize = 12.sp,
+                            modifier = Modifier.align(Alignment.CenterHorizontally).clickable { openUrl(CABINET_URL) }.padding(8.dp))
+                    }
+                    renewLoading -> Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Mint, modifier = Modifier.size(26.dp))
+                    }
+                    else -> RenewContent()
+                }
+                Spacer(Modifier.height(18.dp))
+            }
+        }
+    }
+
+    @Composable
+    private fun ColumnScope.RenewContent() {
+        if (renewKeys.size > 1) {
+            GroupLabel("Ключ")
+            renewKeys.forEach { k ->
+                val id = k.optInt("id")
+                SheetItem("🔑", k.optString("display_name").ifBlank { "Ключ #$id" }, keyExpiry(k), id == renewKeyId, false) { renewKeyId = id }
+            }
+        } else if (renewKeys.size == 1) {
+            Text("${renewKeys[0].optString("display_name").ifBlank { "Ваш ключ" }} · ${keyExpiry(renewKeys[0])}", color = TextDim, fontSize = 12.sp)
+        }
+        val key = renewKeys.firstOrNull { it.optInt("id") == renewKeyId }
+        val group = key?.optInt("tariff_group_id", 0) ?: 0
+        val list = tariffs.filter { group == 0 || it.optInt("group_id", 0) == 0 || it.optInt("group_id") == group }.ifEmpty { tariffs }
+        GroupLabel("Тариф")
+        if (list.isEmpty()) {
+            Text("Тарифы сейчас недоступны. Попробуйте позже или продлите в кабинете.", color = TextDim, fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton("Открыть кабинет") { openUrl(CABINET_URL) }
+            return
+        }
+        list.forEach { t ->
+            val id = t.optInt("id")
+            val price = t.optLong("price_minor")
+            val days = t.optInt("duration_days")
+            Column(
+                Modifier
+                    .padding(vertical = 4.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(Surface1)
+                    .border(1.dp, Line, RoundedCornerShape(15.dp))
+                    .padding(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(t.optString("name"), color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        if (days > 0) Text("$days ${plural(days, "день", "дня", "дней")}", color = TextDim, fontSize = 11.sp)
+                    }
+                    Text(rub(price), color = Mint, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val busyQr = payBusy == "$id:yookassa_qr"
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Brush.linearGradient(listOf(Mint, MintDeep)))
+                            .clickable { pay(id, "yookassa_qr") },
+                        contentAlignment = Alignment.Center
+                    ) { Text(if (busyQr) "Создаём…" else "СБП / Карта", color = Color(0xFF05241D), fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
+                    val bal = balanceMinor
+                    if (bal != null && bal >= price) {
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Surface2)
+                                .border(1.dp, Line, RoundedCornerShape(12.dp))
+                                .clickable { pay(id, "balance") },
+                            contentAlignment = Alignment.Center
+                        ) { Text(if (payBusy == "$id:balance") "Оплачиваем…" else "С баланса", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                    }
+                }
+            }
+        }
+        balanceMinor?.let {
+            Spacer(Modifier.height(6.dp))
+            Text("На балансе: ${rub(it)}", color = TextDim, fontSize = 11.5.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+        }
+    }
+
+    private fun keyExpiry(k: JSONObject): String {
+        val raw = k.optString("expires_at")
+        if (!k.optBoolean("is_active")) return "закончилась"
+        if (raw.isBlank() || raw == "null") return "активна"
+        val date = raw.take(10).split("-")
+        return if (date.size == 3) "до ${date[2]}.${date[1]}.${date[0]}" else "активна"
+    }
+
+    @Composable
+    private fun NoteCard(icon: String, title: String, text: String, accent: Color, actions: @Composable ColumnScope.() -> Unit) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(Surface1)
+                .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(accent.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+                    Text(icon, color = accent, fontSize = 15.sp)
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(title, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(text, color = TextDim, fontSize = 12.5.sp, lineHeight = 17.sp)
+            Spacer(Modifier.height(14.dp))
+            actions()
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun ReportSheet(onDismiss: () -> Unit) {
+        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        var text by remember { mutableStateOf("") }
+        var withLog by remember { mutableStateOf(true) }
+        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
+            Column(
+                Modifier
+                    .padding(horizontal = 16.dp)
+                    .navigationBarsPadding()
+                    .padding(bottom = 18.dp)
+            ) {
+                Text("Сообщить о проблеме", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(4.dp))
+                Text("Опишите, что случилось: что нажимали, какой сервер, мобильный интернет или Wi-Fi.", color = TextDim, fontSize = 12.sp, lineHeight = 16.sp)
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = text, onValueChange = { if (it.length <= 1500) text = it },
+                    modifier = Modifier.fillMaxWidth().height(130.dp),
+                    placeholder = { Text("Например: не подключается Испания 1 на мобильном интернете", color = TextDim.copy(alpha = 0.7f), fontSize = 13.sp) },
+                    textStyle = androidx.compose.ui.text.TextStyle(color = TextMain, fontSize = 14.sp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647),
+                        cursorColor = Mint, focusedContainerColor = Surface1, unfocusedContainerColor = Surface1
+                    )
+                )
+                Spacer(Modifier.height(4.dp))
+                ToggleRow("📎", "Приложить журнал", "Технические записи — без паролей и ссылок", withLog) { withLog = it }
+                Spacer(Modifier.height(8.dp))
+                if (reportBusy) Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(24.dp))
+                } else PrimaryButton("Отправить") {
+                    if (text.isBlank()) toast("Опишите проблему хотя бы парой слов") else sendReport(text.trim(), withLog)
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("Если вы вошли через Telegram, мы сможем написать вам", color = TextDim, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+            }
+        }
+    }
+
+    @Composable
+    private fun AppsScreen() {
+        val list = appList
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 16.dp)
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("‹", color = TextMain, fontSize = 26.sp, modifier = Modifier.clip(CircleShape).clickable { tab = Tab.SETTINGS }.padding(horizontal = 12.dp, vertical = 2.dp))
+                Text("Приложения без VPN", color = TextMain, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
+            }
+            Text(
+                "Некоторые банки и госсервисы не работают, когда включён VPN. Отметьте их — они будут ходить в интернет напрямую, а всё остальное останется защищённым.",
+                color = TextDim, fontSize = 12.sp, lineHeight = 17.sp,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 6.dp)
+            )
+            when {
+                list == null -> Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(26.dp))
+                }
+                list.isEmpty() -> Column(
+                    Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Surface1)
+                        .border(1.dp, Line, RoundedCornerShape(18.dp))
+                        .padding(16.dp)
+                ) {
+                    Text("Популярных банков и сервисов не нашли", color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Нужное приложение можно выбрать из полного списка ниже.", color = TextDim, fontSize = 12.sp)
+                }
+                else -> {
+                    val rec = list.filter { it.group == "Банки" || it.group == "Госуслуги и налоги" }.map { it.pkg }
+                    if (rec.isNotEmpty() && rec.any { bypassSel[it] != true }) {
+                        Box(
+                            Modifier
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .clip(RoundedCornerShape(13.dp))
+                                .background(Mint.copy(alpha = 0.10f))
+                                .border(1.dp, Mint.copy(alpha = 0.35f), RoundedCornerShape(13.dp))
+                                .clickable { setBypass(rec, true) },
+                            contentAlignment = Alignment.Center
+                        ) { Text("Отметить все банки и Госуслуги", color = Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                    }
+                    list.groupBy { it.group }.forEach { (group, apps) ->
+                        Section(group)
+                        Group {
+                            apps.forEach { a ->
+                                val on = bypassSel[a.pkg] == true
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { setBypass(listOf(a.pkg), !on) }
+                                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (a.icon != null) Image(a.icon, null, Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)))
+                                    else RowIcon("▦")
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(a.label, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(if (on) "Напрямую, без VPN" else "Через VPN", color = if (on) Mint else TextDim, fontSize = 11.sp)
+                                    }
+                                    Switch(modifier = Modifier.scale(0.8f),
+                                        checked = on, onCheckedChange = { setBypass(listOf(a.pkg), it) },
+                                        colors = SwitchDefaults.colors(
+                                            checkedTrackColor = MintDeep, checkedThumbColor = Color.White,
+                                            uncheckedTrackColor = Color(0xFF2A3647), uncheckedThumbColor = Color(0xFFB8C4D2),
+                                            uncheckedBorderColor = Color.Transparent
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Section("Другие")
+            Group {
+                LinkRow("☰", "Все приложения", "Выбрать любое приложение из списка") {
+                    appsChanged = true
+                    startActivity(Intent(this@PamirActivity, PerAppProxyActivity::class.java))
+                }
+            }
+        }
+    }
+
     @Composable
     private fun Settings() {
         var ru by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) }
         var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
         var smart by remember { mutableStateOf(smartLte()) }
         var alerts by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_ALERTS, true)) }
+        var remind by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_REMIND, true)) }
         Column(
             Modifier
                 .fillMaxSize()
@@ -1213,8 +1830,20 @@ class PamirActivity : AppCompatActivity() {
                     alerts = it; MmkvManager.encodeSettings(PamirWatch.K_ALERTS, it)
                     if (it) askNotifications(fromSettings = true)
                 }
-                LinkRow("▦", "Приложения без VPN", "Выбрать исключения") {
-                    startActivity(Intent(this@PamirActivity, PerAppProxyActivity::class.java))
+                val bc = remember { bypassCount() }
+                LinkRow("▦", "Приложения без VPN", if (bc > 0) "Без VPN: $bc ${plural(bc, "приложение", "приложения", "приложений")}" else "Банки, Госуслуги и др.") {
+                    loadApps(); tab = Tab.APPS
+                }
+            }
+            Section("Аккаунт")
+            Group {
+                if (loggedIn) {
+                    LinkRow("✈", "Вы вошли через Telegram", balanceMinor?.let { "Баланс: ${rub(it)} · продление в приложении" } ?: "Продление прямо в приложении") { openRenew() }
+                    LinkRow("↩", "Выйти из аккаунта", "VPN продолжит работать") { logout(); toast("Вы вышли из аккаунта") }
+                } else {
+                    LinkRow("✈", if (loginBusy) "Ждём подтверждения…" else "Войти через Telegram", "Продление и оплата прямо в приложении") {
+                        if (loginBusy) cancelLogin() else loginTelegram()
+                    }
                 }
             }
             Section("Подписка")
@@ -1222,10 +1851,15 @@ class PamirActivity : AppCompatActivity() {
                 val upd = if (lastUpdate > 0) "Обновлено ${agoText(lastUpdate)}" else "Ещё не обновлялись"
                 LinkRow("↻", if (updating) "Обновляем…" else "Обновить серверы", upd) { updateSubscription() }
                 LinkRow("👤", "Личный кабинет", "Продление и устройства") { openUrl(CABINET_URL) }
+                ToggleRow("⏰", "Напоминать о продлении", "За 3 дня и за день до конца подписки", remind) {
+                    remind = it; MmkvManager.encodeSettings(PamirWatch.K_REMIND, it)
+                    if (it) askNotifications(fromSettings = true)
+                }
             }
             Section("Помощь")
             Group {
                 LinkRow("✈", "Поддержка", "Ответим в Telegram") { openUrl(BOT_URL) }
+                LinkRow("🆘", "Сообщить о проблеме", "Отправим описание и журнал разработчикам") { reportOpen = true }
                 LinkRow("ⓘ", "О приложении", if (newVersion != null) "Версия ${appVersion()} · доступна $newVersion" else "Версия ${appVersion()} · актуальная") {
                     if (newVersion != null) installUpdate() else { toast("Проверяем обновления…"); checkAppUpdate() }
                 }

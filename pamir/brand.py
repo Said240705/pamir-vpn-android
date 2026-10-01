@@ -212,7 +212,8 @@ edit(os.path.join(PKG, 'handler', 'NotificationManager.kt'), [
 # 10. background features: drop alerts + watchdog, branded tile/widget/status icon, cleaner notification
 SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
 RES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res')
-shutil.copy(os.path.join(SRC, 'PamirWatch.kt'), os.path.join(dst, 'PamirWatch.kt'))
+for f in glob.glob(os.path.join(SRC, 'Pamir*.kt')):
+    shutil.copy(f, os.path.join(dst, os.path.basename(f)))
 shutil.copy(os.path.join(SRC, 'QSTileService.kt'), os.path.join(PKG, 'service', 'QSTileService.kt'))
 shutil.copy(os.path.join(SRC, 'WidgetProvider.kt'), os.path.join(PKG, 'receiver', 'WidgetProvider.kt'))
 for f in glob.glob(os.path.join(MAIN, 'res', 'drawable-*dpi', 'ic_stat_*.png')):
@@ -278,6 +279,12 @@ edit(nm, [
      '.setContentTitle(currentConfig?.remarks?.let { com.v2ray.ang.pamir.PamirWatch.title(it) } ?: service.getString(R.string.app_name))\n            .setColor(0xFF2BEFC0.toInt())'),
     (re.compile(r'    private fun appendSpeedString\(text: StringBuilder, name: String\?, up: Double, down: Double\) \{.*?\n    \}\n', re.S),
      lambda m: SPEED_FN),
+])
+
+
+# 11. crash reports from every process (saved to files, sent on next launch)
+edit(os.path.join(PKG, 'AngApplication.kt'), [
+    ('        MmkvManager.initialize(this)\n', '        MmkvManager.initialize(this)\n        com.v2ray.ang.pamir.PamirCrash.install(this)\n'),
 ])
 
 print(f'brand: ok -> ru.pamirlink.vpn {VERSION} ({CODE}), owner {OWNER}')

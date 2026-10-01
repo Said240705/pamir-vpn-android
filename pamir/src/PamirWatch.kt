@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 object PamirWatch {
     const val EXTRA_RECONNECT = "pamir_reconnect"
     const val EXTRA_SERVERS = "pamir_servers"
+    const val EXTRA_RENEW = "pamir_renew"
 
     const val K_CONN_AT = "pamir_conn_at"
     const val K_BASE_RX = "pamir_base_rx"
@@ -48,10 +49,13 @@ object PamirWatch {
     const val K_SMART_LTE = "pamir_smart_lte"
     const val K_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
     const val K_PREFERRED = "pamir_preferred"
+    const val K_REMIND = "pamir_remind"
+    private const val K_REMIND_LAST = "pamir_remind_last"
     private const val K_USER_STOP = "pamir_user_stop"
 
     private const val CHANNEL = "pamir_status"
     const val ALERT_ID = 7311
+    const val REMIND_ID = 7312
     private const val TAG = "Pamir"
 
     private var job: Job? = null
@@ -205,13 +209,38 @@ object PamirWatch {
         }.getOrDefault(true)
     }
 
+    // ---------- subscription expiry ----------
+
+    /** Days left from the server names ("…|⏳3D"), null = unknown / unlimited. */
+    fun daysLeft(): Int? = MmkvManager.decodeAllServerList().asSequence()
+        .mapNotNull { MmkvManager.decodeServerConfig(it)?.remarks }
+        .mapNotNull { Regex("⏳\\s*(\\d+)\\s*D").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+        .firstOrNull()
+
+    /** Reminder 3 days, 1 day and on the last day. Called by [PamirReminderWorker] twice a day. */
+    fun checkExpiry(ctx: Context) {
+        if (!MmkvManager.decodeSettingsBool(K_REMIND, true)) return
+        val d = daysLeft() ?: return
+        if (d !in setOf(0, 1, 3)) return
+        val key = "${System.currentTimeMillis() / 86_400_000L}:$d"
+        if (MmkvManager.decodeSettingsString(K_REMIND_LAST, "") == key) return
+        MmkvManager.encodeSettings(K_REMIND_LAST, key)
+        val title = when (d) {
+            0 -> "Подписка заканчивается сегодня"
+            1 -> "Подписка закончится завтра"
+            else -> "Подписка закончится через 3 дня"
+        }
+        Log.w(TAG, "expiry reminder d=$d")
+        notify(ctx, title, "Продлите заранее, чтобы VPN не отключился в неподходящий момент", EXTRA_RENEW, "Продлить", REMIND_ID)
+    }
+
     // ---------- notifications ----------
 
     fun cancelAlert(ctx: Context) {
         runCatching { (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_ID) }
     }
 
-    private fun notify(ctx: Context, title: String, text: String, extra: String, action: String?) {
+    private fun notify(ctx: Context, title: String, text: String, extra: String, action: String?, id: Int = ALERT_ID) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
@@ -240,6 +269,6 @@ object PamirWatch {
             .setOnlyAlertOnce(true)
             .setContentIntent(pi)
         if (action != null) b.addAction(0, action, pi)
-        runCatching { nm.notify(ALERT_ID, b.build()) }
+        runCatching { nm.notify(id, b.build()) }
     }
 }

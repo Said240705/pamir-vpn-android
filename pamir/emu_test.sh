@@ -59,8 +59,25 @@ adb shell cmd statusbar click-tile $T; sleep 12; vpn_state; shot tile_on_again
 adb shell cmd statusbar expand-notifications; sleep 3; shot notifications
 adb shell cmd statusbar collapse; sleep 3; shot app_after_tile
 
+log "== окно продления (без входа)"
+tap_text 'Продлить'; sleep 3; shot renew_sheet
+adb shell input keyevent KEYCODE_BACK; sleep 2
+
 log "== настройки"
 tap_text '^Настройки$'; sleep 3; shot settings
+
+log "== приложения без VPN"
+tap_text '^Приложения без VPN$'; sleep 4; shot apps_screen
+adb shell input keyevent KEYCODE_BACK; sleep 2
+
+log "== сообщить о проблеме (отправит тестовый отчёт админу)"
+adb shell input swipe 160 520 160 120 400; sleep 2; shot settings_bottom
+tap_text '^Сообщить о проблеме$'; sleep 3
+tap_text '^Например'; sleep 1
+adb shell input text "Avtotest%sPamir%sVPN%s-%sotchet%siz%semulyatora"; sleep 1
+adb shell input keyevent KEYCODE_BACK; sleep 1; shot report_sheet
+tap_text '^Отправить$'; sleep 6; shot report_sent
+adb shell input swipe 160 150 160 560 400; sleep 1
 
 log "== отключение"
 tap_text '^VPN$'; sleep 2

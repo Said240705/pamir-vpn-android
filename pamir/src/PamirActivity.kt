@@ -109,7 +109,10 @@ import androidx.lifecycle.lifecycleScope
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.dto.RealPingResult
+import com.v2ray.ang.dto.TestServiceMessage
 import com.v2ray.ang.enums.RoutingType
+import com.v2ray.ang.extension.serializable
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
@@ -118,12 +121,14 @@ import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.ui.main.MainActivity
 import com.v2ray.ang.ui.perappproxy.PerAppProxyActivity
 import com.v2ray.ang.util.Utils
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
@@ -196,6 +201,10 @@ class PamirActivity : AppCompatActivity() {
     private var selected by mutableStateOf<String?>(null)
     private val pings = mutableStateMapOf<String, Int>()
     private var pingBusy by mutableStateOf(false)
+    /** Servers measured through the core in this session; the quick TCP check does not overwrite them. */
+    private val realPinged = mutableSetOf<String>()
+    private var pingRequest: String? = null
+    private var pingDone: CompletableDeferred<Unit>? = null
     private var updating by mutableStateOf(false)
     private var connectedAt by mutableLongStateOf(0L)
     private var ipInfo by mutableStateOf("")
@@ -267,8 +276,19 @@ class PamirActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Log.w("Pamir", "state msg ${intent?.getIntExtra("key", 0)} ${intent?.getStringExtra("content") ?: ""}")
             when (intent?.getIntExtra("key", 0)) {
-                AppConfig.MSG_STATE_RUNNING, AppConfig.MSG_STATE_START_SUCCESS -> onRunning(true)
+                AppConfig.MSG_STATE_RUNNING, AppConfig.MSG_STATE_START_SUCCESS -> {
+                    reloadServers() // the watchdog may have switched the server in the background
+                    onRunning(true)
+                }
                 AppConfig.MSG_STATE_NOT_RUNNING, AppConfig.MSG_STATE_STOP_SUCCESS -> onRunning(false)
+                AppConfig.MSG_MEASURE_CONFIG_SUCCESS -> if (intent.getStringExtra(MessageHelper.EXTRA_REQUEST_ID) == pingRequest) {
+                    intent.serializable<RealPingResult>("content")?.let {
+                        realPinged += it.guid
+                        pings[it.guid] = if (it.delayMillis > 0) it.delayMillis.toInt() else -1
+                    }
+                }
+                AppConfig.MSG_MEASURE_CONFIG_FINISH, AppConfig.MSG_MEASURE_CONFIG_CANCEL ->
+                    if (intent.getStringExtra(MessageHelper.EXTRA_REQUEST_ID) == pingRequest) pingDone?.complete(Unit)
                 AppConfig.MSG_STATE_START_FAILURE -> {
                     onRunning(false)
                     toast("Не удалось подключиться. Попробуйте другой сервер", action = "Сменить") { sheetOpen = true }
@@ -905,22 +925,44 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun runPing() {
+    /**
+     * Server check. [real] measures a request through each server with the core (v2rayNG CoreTestService,
+     * separate process, results arrive in [stateReceiver]); otherwise a quick TCP connect, used for the
+     * silent background check. When the core test gives nothing in time, the TCP check is used instead.
+     */
+    private suspend fun runPing(real: Boolean = true) {
         if (pingBusy) return
         pingBusy = true
         val targets = servers.filter { !it.isStub }
-        withContext(Dispatchers.IO) {
-            targets.map { s ->
-                async {
-                    val ms = runCatching {
-                        val t0 = System.nanoTime()
-                        Socket().use { it.connect(InetSocketAddress(s.host, s.port), 3000) }
-                        ((System.nanoTime() - t0) / 1_000_000).toInt()
-                    }.getOrDefault(-1)
-                    s.guid to ms
-                }
-            }.awaitAll()
-        }.forEach { (g, ms) -> pings[g] = ms }
+        var measured = false
+        if (real && targets.isNotEmpty()) {
+            val id = java.util.UUID.randomUUID().toString()
+            val done = CompletableDeferred<Unit>()
+            pingRequest = id
+            pingDone = done
+            targets.forEach { realPinged -= it.guid }
+            MessageHelper.sendMsg2TestService(this, TestServiceMessage(AppConfig.MSG_MEASURE_CONFIG_START, serverGuids = targets.map { it.guid }), id)
+            withTimeoutOrNull(45_000) { done.await() }
+            pingRequest = null
+            pingDone = null
+            measured = targets.any { it.guid in realPinged }
+            if (measured) targets.filter { it.guid !in realPinged }.forEach { pings[it.guid] = -1 }
+            Log.w("Pamir", "real ping: ${targets.count { it.guid in realPinged }}/${targets.size} answered")
+        }
+        if (!measured) {
+            withContext(Dispatchers.IO) {
+                targets.map { s ->
+                    async {
+                        val ms = runCatching {
+                            val t0 = System.nanoTime()
+                            Socket().use { it.connect(InetSocketAddress(s.host, s.port), 3000) }
+                            ((System.nanoTime() - t0) / 1_000_000).toInt()
+                        }.getOrDefault(-1)
+                        s.guid to ms
+                    }
+                }.awaitAll()
+            }.forEach { (g, ms) -> if (g !in realPinged) pings[g] = ms }
+        }
         pingBusy = false
     }
 
@@ -978,7 +1020,7 @@ class PamirActivity : AppCompatActivity() {
         if (running || connecting || servers.isEmpty()) return
         if (System.currentTimeMillis() - lastPrecheck < 60_000) return
         lastPrecheck = System.currentTimeMillis()
-        runPing()
+        runPing(real = false)
         val normal = servers.filter { !it.isStub && !it.isLte }
         val reachable = normal.any { (pings[it.guid] ?: -1) > 0 }
         whitelist = normal.isNotEmpty() && !reachable && lteServer() != null
@@ -1651,7 +1693,7 @@ class PamirActivity : AppCompatActivity() {
     @Composable
     private fun ServerSheet(onDismiss: () -> Unit) {
         val c = Pamir.colors
-        LaunchedEffect(Unit) { if (pings.isEmpty()) runPing() }
+        LaunchedEffect(Unit) { if (realPinged.isEmpty()) runPing() }
         val auto = MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false)
         PamirSheet(
             onDismiss = onDismiss,
@@ -2328,6 +2370,7 @@ class PamirActivity : AppCompatActivity() {
         var ru by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) }
         var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
         var smart by remember { mutableStateOf(smartLte()) }
+        var autoSwitch by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_AUTO_SWITCH, true)) }
         val c = Pamir.colors
         Column(
             Modifier
@@ -2340,6 +2383,10 @@ class PamirActivity : AppCompatActivity() {
             SectionHeader("Подключение")
             RowGroup {
                 ToggleRow(PamirIcons.Split, "Сайты РФ напрямую", "Госуслуги, банки — без VPN", ru) { ru = it; setRuDirect(it) }
+                RowDivider()
+                ToggleRow(PamirIcons.Refresh, "Автосмена сервера", "Если сервер перестал отвечать, подключим другой", autoSwitch) {
+                    autoSwitch = it; MmkvManager.encodeSettings(PamirWatch.K_AUTO_SWITCH, it)
+                }
                 RowDivider()
                 ToggleRow(PamirIcons.Signal, "Умный LTE-режим", "Сам включит LTE Обход при «белых списках»", smart) {
                     smart = it; MmkvManager.encodeSettings(PREF_SMART_LTE, it)

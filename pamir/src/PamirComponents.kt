@@ -439,12 +439,12 @@ fun NoteCard(icon: ImageVector, title: String, text: String, tone: Tone, actions
 
 enum class PingQuality { UNKNOWN, GOOD, FAIR, POOR, DOWN }
 
-/** TCP connect time to the server: < 150 ms good, < 350 ms fair, slower poor, <= 0 no answer. */
+/** Server response time (a full request through the core, or a TCP connect): < 350 ms good, < 800 ms fair, slower poor, <= 0 no answer. */
 fun pingQuality(ms: Int?): PingQuality = when {
     ms == null -> PingQuality.UNKNOWN
     ms <= 0 -> PingQuality.DOWN
-    ms < 150 -> PingQuality.GOOD
-    ms < 350 -> PingQuality.FAIR
+    ms < 350 -> PingQuality.GOOD
+    ms < 800 -> PingQuality.FAIR
     else -> PingQuality.POOR
 }
 

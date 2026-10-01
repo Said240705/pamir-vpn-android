@@ -25,16 +25,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /**
  * Pamir background logic that lives next to the VPN core (":daemon" process):
  *  - remembers when the connection started and the traffic counters at that moment;
  *  - shows a notification when the VPN drops without the user pressing "stop";
  *  - watchdog: while the screen is on, checks that traffic really goes through the server;
- *    if it does not, switches to "LTE Обход" (smart LTE) or tells the user.
+ *    if it does not, switches to another server that answers, then to "LTE Обход" (smart LTE),
+ *    or tells the user.
  * Also holds helpers shared with the UI (server names, LTE detection).
  */
 object PamirWatch {
@@ -47,11 +53,15 @@ object PamirWatch {
     const val K_BASE_TX = "pamir_base_tx"
     const val K_ALERTS = "pamir_drop_alerts"
     const val K_SMART_LTE = "pamir_smart_lte"
+    const val K_AUTO_SWITCH = "pamir_auto_switch"
     const val K_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
     const val K_PREFERRED = "pamir_preferred"
     const val K_REMIND = "pamir_remind"
     private const val K_REMIND_LAST = "pamir_remind_last"
     private const val K_USER_STOP = "pamir_user_stop"
+    // Same keys as PREF_USER_CHOSE / PREF_AUTO_BEST in PamirActivity.
+    private const val K_USER_CHOSE = "pamir_user_chose"
+    private const val K_AUTO_BEST = "pamir_auto_best"
 
     private const val CHANNEL = "pamir_status"
     const val ALERT_ID = 7311
@@ -59,6 +69,10 @@ object PamirWatch {
     private const val TAG = "Pamir"
 
     private var job: Job? = null
+    /** Servers the watchdog already left during the current outage; forgotten after [SWITCH_WINDOW_MS]. */
+    private val leftServers = mutableSetOf<String>()
+    private var lastSwitchAt = 0L
+    private const val SWITCH_WINDOW_MS = 10 * 60_000L
 
     // ---------- shared helpers ----------
 
@@ -148,6 +162,7 @@ object PamirWatch {
                             Log.w(TAG, "watchdog: no response ($fails)")
                             if (fails >= 2 && !alerted) {
                                 alerted = true
+                                if (switchToNextServer(ctx)) return@launch
                                 if (switchToLte(ctx)) return@launch
                                 if (alertsOn()) {
                                     notify(
@@ -164,6 +179,48 @@ object PamirWatch {
             }
         }
     }
+
+    /**
+     * Regular server stopped answering -> restart on the regular server that answers fastest (TCP connect from
+     * this process, which bypasses the tunnel). Each server is left at most once per [SWITCH_WINDOW_MS], so a
+     * dead network does not make the watchdog cycle through the list; then smart LTE takes over.
+     */
+    private suspend fun switchToNextServer(ctx: Context): Boolean {
+        if (!MmkvManager.decodeSettingsBool(K_AUTO_SWITCH, true)) return false
+        val cur = MmkvManager.getSelectServer() ?: return false
+        val curP = MmkvManager.decodeServerConfig(cur) ?: return false
+        if (isLte(curP)) return false
+        val now = System.currentTimeMillis()
+        if (now - lastSwitchAt > SWITCH_WINDOW_MS) leftServers.clear()
+        leftServers += cur
+        val candidates = MmkvManager.decodeAllServerList().mapNotNull { g ->
+            MmkvManager.decodeServerConfig(g)?.takeIf { g !in leftServers && !isLte(it) && !isStub(it) }?.let { g to it }
+        }
+        if (candidates.isEmpty()) return false
+        val best = coroutineScope {
+            candidates.map { (g, p) -> async { g to tcpConnectMs(p) } }.awaitAll()
+        }.filter { it.second >= 0 }.minByOrNull { it.second } ?: return false
+        val next = MmkvManager.decodeServerConfig(best.first) ?: return false
+        Log.w(TAG, "watchdog: switching server (${best.second} ms)")
+        lastSwitchAt = now
+        MmkvManager.setSelectServer(best.first)
+        MmkvManager.encodeSettings(K_USER_CHOSE, true) // keep the choice when the app reloads the list
+        MmkvManager.encodeSettings(K_AUTO_BEST, false)
+        markUserStop()
+        MessageHelper.sendMsg2Service(ctx, AppConfig.MSG_STATE_RESTART, "")
+        notify(
+            ctx, "Переключили на ${title(next.remarks)}",
+            "${title(curP.remarks)} перестал отвечать — подключились к другому серверу",
+            EXTRA_SERVERS, "Выбрать сервер"
+        )
+        return true
+    }
+
+    private fun tcpConnectMs(p: ProfileItem): Long = runCatching {
+        val t0 = System.nanoTime()
+        Socket().use { it.connect(InetSocketAddress(p.server.orEmpty(), p.serverPort?.toIntOrNull() ?: 443), 3000) }
+        (System.nanoTime() - t0) / 1_000_000
+    }.getOrDefault(-1L)
 
     /** Smart LTE in background: regular server is dead -> switch to "LTE Обход" once. */
     private fun switchToLte(ctx: Context): Boolean {

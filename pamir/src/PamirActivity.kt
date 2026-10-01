@@ -83,6 +83,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -224,6 +227,8 @@ class PamirActivity : AppCompatActivity() {
     private var payBuy = false
     private var payJob: kotlinx.coroutines.Job? = null
     private var reportOpen by mutableStateOf(false)
+    private var emailLoginOpen by mutableStateOf(false)
+    private var emailBusy by mutableStateOf(false)
     private var reportBusy by mutableStateOf(false)
 
     private val notifPermission =
@@ -438,6 +443,33 @@ class PamirActivity : AppCompatActivity() {
 
     private fun cancelLogin() {
         loginJob?.cancel(); loginJob = null; loginBusy = false
+    }
+
+    private fun loginEmail(email: String, password: String) {
+        if (emailBusy) return
+        if (!email.contains("@") || password.isBlank()) { toast("Введите почту и пароль"); return }
+        emailBusy = true
+        lifecycleScope.launch {
+            val r = api { p ->
+                PamirApi.call("/auth/email/login", "POST", JSONObject().put("email", email.trim()).put("password", password), auth = false, proxyPort = p)
+            }
+            emailBusy = false
+            val t = r?.optString("access_token").orEmpty()
+            if (t.isBlank()) return@launch
+            PamirApi.token = t
+            loggedIn = true
+            emailLoginOpen = false
+            Log.w("Pamir", "email login ok")
+            onLoggedIn()
+        }
+    }
+
+    private fun forgotPassword(email: String) {
+        if (!email.contains("@")) { toast("Сначала введите почту"); return }
+        lifecycleScope.launch {
+            val r = api { p -> PamirApi.call("/auth/email/forgot-password", "POST", JSONObject().put("email", email.trim()), auth = false, proxyPort = p) }
+            if (r != null) toast("Если почта зарегистрирована, мы отправили ссылку для сброса пароля", true)
+        }
     }
 
     private fun logout() {
@@ -1016,6 +1048,7 @@ class PamirActivity : AppCompatActivity() {
             if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
             if (renewOpen) RenewSheet(onDismiss = { renewOpen = false })
             if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
+            if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
         }
     }
 
@@ -1050,16 +1083,17 @@ class PamirActivity : AppCompatActivity() {
                 Spacer(Modifier.height(8.dp))
                 SecondaryButton("Отменить") { cancelLogin() }
             } else {
-                PrimaryButton("✈  Войти через Telegram") { loginTelegram() }
+                PrimaryButton2("✈  Войти через Telegram", "Подписка подключится сама") { loginTelegram() }
             }
             Spacer(Modifier.height(10.dp))
-            SecondaryButton("Вставить ссылку подписки") { importFromClipboard() }
-            Spacer(Modifier.height(10.dp))
+            SecondaryButton("Войти по почте и паролю") { emailLoginOpen = true }
+            Spacer(Modifier.height(4.dp))
             Text(
-                "Войдите через Telegram — подписка подключится сама. Нет подписки? Её можно оформить сразу после входа",
-                color = TextDim, fontSize = 11.5.sp, textAlign = TextAlign.Center, lineHeight = 16.sp,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                "Вставить ссылку подписки",
+                color = TextDim, fontSize = 12.5.sp,
+                modifier = Modifier.clickable { importFromClipboard() }.padding(10.dp)
             )
+            Spacer(Modifier.height(10.dp))
             Spacer(Modifier.height(10.dp))
         }
     }
@@ -1544,6 +1578,8 @@ class PamirActivity : AppCompatActivity() {
                             Spacer(Modifier.height(6.dp))
                             SecondaryButton("Отменить") { cancelLogin() }
                         } else PrimaryButton("Войти через Telegram") { loginTelegram() }
+                        Spacer(Modifier.height(8.dp))
+                        SecondaryButton("Войти по почте и паролю") { emailLoginOpen = true }
                         Spacer(Modifier.height(4.dp))
                         Text("Продлить в личном кабинете", color = TextDim, fontSize = 12.sp,
                             modifier = Modifier.align(Alignment.CenterHorizontally).clickable { openUrl(CABINET_URL) }.padding(8.dp))
@@ -1810,8 +1846,6 @@ class PamirActivity : AppCompatActivity() {
         var ru by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) }
         var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
         var smart by remember { mutableStateOf(smartLte()) }
-        var alerts by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_ALERTS, true)) }
-        var remind by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_REMIND, true)) }
         Column(
             Modifier
                 .fillMaxSize()
@@ -1826,10 +1860,6 @@ class PamirActivity : AppCompatActivity() {
                     smart = it; MmkvManager.encodeSettings(PREF_SMART_LTE, it)
                 }
                 ToggleRow("⟳", "Автоподключение", "При включении телефона", boot) { boot = it; MmkvManager.encodeStartOnBoot(it) }
-                ToggleRow("🔔", "Сообщать об обрыве", "Уведомим, если VPN отключится или сервер не отвечает", alerts) {
-                    alerts = it; MmkvManager.encodeSettings(PamirWatch.K_ALERTS, it)
-                    if (it) askNotifications(fromSettings = true)
-                }
                 val bc = remember { bypassCount() }
                 LinkRow("▦", "Приложения без VPN", if (bc > 0) "Без VPN: $bc ${plural(bc, "приложение", "приложения", "приложений")}" else "Банки, Госуслуги и др.") {
                     loadApps(); tab = Tab.APPS
@@ -1838,12 +1868,13 @@ class PamirActivity : AppCompatActivity() {
             Section("Аккаунт")
             Group {
                 if (loggedIn) {
-                    LinkRow("✈", "Вы вошли через Telegram", balanceMinor?.let { "Баланс: ${rub(it)} · продление в приложении" } ?: "Продление прямо в приложении") { openRenew() }
+                    LinkRow("✈", "Вы вошли в аккаунт", balanceMinor?.let { "Баланс: ${rub(it)} · продление в приложении" } ?: "Продление прямо в приложении") { openRenew() }
                     LinkRow("↩", "Выйти из аккаунта", "VPN продолжит работать") { logout(); toast("Вы вышли из аккаунта") }
                 } else {
                     LinkRow("✈", if (loginBusy) "Ждём подтверждения…" else "Войти через Telegram", "Продление и оплата прямо в приложении") {
                         if (loginBusy) cancelLogin() else loginTelegram()
                     }
+                    LinkRow("✉", "Войти по почте", "Если привязали почту в кабинете") { emailLoginOpen = true }
                 }
             }
             Section("Подписка")
@@ -1851,10 +1882,6 @@ class PamirActivity : AppCompatActivity() {
                 val upd = if (lastUpdate > 0) "Обновлено ${agoText(lastUpdate)}" else "Ещё не обновлялись"
                 LinkRow("↻", if (updating) "Обновляем…" else "Обновить серверы", upd) { updateSubscription() }
                 LinkRow("👤", "Личный кабинет", "Продление и устройства") { openUrl(CABINET_URL) }
-                ToggleRow("⏰", "Напоминать о продлении", "За 3 дня и за день до конца подписки", remind) {
-                    remind = it; MmkvManager.encodeSettings(PamirWatch.K_REMIND, it)
-                    if (it) askNotifications(fromSettings = true)
-                }
             }
             Section("Помощь")
             Group {
@@ -2020,6 +2047,76 @@ class PamirActivity : AppCompatActivity() {
                 .clickable { onClick() },
             contentAlignment = Alignment.Center
         ) { Text(text, color = Color(0xFF05241D), fontSize = 15.sp, fontWeight = FontWeight.ExtraBold) }
+    }
+
+    @Composable
+    private fun PrimaryButton2(title: String, subtitle: String, onClick: () -> Unit) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.linearGradient(listOf(Mint, MintDeep)))
+                .clickable { onClick() },
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(title, color = Color(0xFF05241D), fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
+            Text(subtitle, color = Color(0xFF05241D).copy(alpha = 0.72f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    private fun EmailLoginSheet(onDismiss: () -> Unit) {
+        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        var email by remember { mutableStateOf("") }
+        var pass by remember { mutableStateOf("") }
+        val fieldColors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647), cursorColor = Mint,
+            focusedContainerColor = Surface1, unfocusedContainerColor = Surface1,
+            focusedTextColor = TextMain, unfocusedTextColor = TextMain
+        )
+        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
+            Column(
+                Modifier
+                    .padding(horizontal = 16.dp)
+                    .navigationBarsPadding()
+                    .padding(bottom = 18.dp)
+            ) {
+                Text("Вход по почте", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(4.dp))
+                Text("Почта и пароль от личного кабинета Pamir VPN", color = TextDim, fontSize = 12.sp)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = email, onValueChange = { email = it.trim() }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Почта", color = TextDim.copy(alpha = 0.7f), fontSize = 14.sp) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    shape = RoundedCornerShape(14.dp), colors = fieldColors
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = pass, onValueChange = { pass = it }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Пароль", color = TextDim.copy(alpha = 0.7f), fontSize = 14.sp) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    shape = RoundedCornerShape(14.dp), colors = fieldColors
+                )
+                Spacer(Modifier.height(14.dp))
+                if (emailBusy) Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(24.dp))
+                } else PrimaryButton("Войти") { loginEmail(email, pass) }
+                Spacer(Modifier.height(4.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Забыли пароль?", color = Mint, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable { forgotPassword(email) }.padding(vertical = 10.dp, horizontal = 4.dp))
+                    Text("Регистрация", color = TextDim, fontSize = 12.5.sp,
+                        modifier = Modifier.clickable { openUrl(CABINET_URL) }.padding(vertical = 10.dp, horizontal = 4.dp))
+                }
+            }
+        }
     }
 
     @Composable

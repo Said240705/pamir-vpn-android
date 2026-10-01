@@ -35,6 +35,10 @@ adb shell pm grant $P android.permission.POST_NOTIFICATIONS >/dev/null 2>&1
 adb shell input keyevent KEYCODE_HOME; sleep 2; shot home
 adb shell monkey -p $P -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; sleep 10; shot launch
 
+log "== окно входа по почте"
+tap_text '^Войти по почте и паролю$'; sleep 3; shot email_login
+adb shell input keyevent KEYCODE_BACK; sleep 2
+
 log "== импорт подписки"
 ENC=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ.get('SUB_URL',''),safe=''))")
 [ -z "$ENC" ] && log "!!! нет секрета TEST_SUB_URL"

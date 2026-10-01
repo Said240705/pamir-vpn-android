@@ -126,7 +126,7 @@ object PamirWatch {
         }.onFailure { Log.w(TAG, "onStopped: ${it.message}") }
     }
 
-    private fun alertsOn() = MmkvManager.decodeSettingsBool(K_ALERTS, true)
+    private fun alertsOn() = true // always on
 
     private fun startWatchdog(ctx: Context) {
         job?.cancel()
@@ -219,7 +219,6 @@ object PamirWatch {
 
     /** Reminder 3 days, 1 day and on the last day. Called by [PamirReminderWorker] twice a day. */
     fun checkExpiry(ctx: Context) {
-        if (!MmkvManager.decodeSettingsBool(K_REMIND, true)) return
         val d = daysLeft() ?: return
         if (d !in setOf(0, 1, 3)) return
         val key = "${System.currentTimeMillis() / 86_400_000L}:$d"

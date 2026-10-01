@@ -150,6 +150,8 @@ private const val DOWNLOAD_BASE = "https://app.pamirlink.ru/download/"
 /** Latest non-prerelease build; AppConfig.APP_URL is github.com/<owner>/pamir-vpn-android after branding. */
 private val GITHUB_LATEST = AppConfig.APP_URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest"
 private const val PREF_THEME = "pamir_theme"
+/** Id of the account key whose subscription this phone uses (an account can hold keys for several people). */
+private const val PREF_DEVICE_KEY = "pamir_device_key"
 /** Favorite servers by display name: subscription updates recreate server GUIDs, names stay. */
 private const val PREF_FAVORITES = "pamir_favorites"
 // Navigation bar scrims for 3-button navigation, the androidx defaults.
@@ -258,6 +260,10 @@ class PamirActivity : AppCompatActivity() {
     private var cabBusy by mutableStateOf<String?>(null)
     private var emailLoginOpen by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
+    // which key of the account this phone uses
+    private var deviceKeyId by mutableStateOf(MmkvManager.decodeSettingsString(PREF_DEVICE_KEY, "")?.toIntOrNull())
+    private var keyPickerOpen by mutableStateOf(false)
+    private var keyPickerMigrate by mutableStateOf(false)
     private var reportBusy by mutableStateOf(false)
     // look and feel
     private var themeMode by mutableStateOf(PamirThemeMode.from(MmkvManager.decodeSettingsString(PREF_THEME, PamirThemeMode.DARK.key)))
@@ -318,7 +324,10 @@ class PamirActivity : AppCompatActivity() {
             delay(4000)
             runCatching { PamirCrash.sendPending(applicationContext, proxyPort()) }
         }
-        if (loggedIn) refreshAccount()
+        if (loggedIn) {
+            refreshAccount()
+            lifecycleScope.launch { checkDeviceKeys() }
+        }
         handleIntent(intent)
     }
 
@@ -530,32 +539,117 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    /** After login: import the subscriptions of all active keys. */
+    /**
+     * After login: put one key on this phone. A single active key (or the one already installed here) is used
+     * right away; with several keys the user picks theirs, the others can be sent to family from the cabinet.
+     */
     private suspend fun onLoggedIn() {
         refreshAccount()
         val keys = api { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys") ?: return
         val list = (0 until keys.length()).map { keys.getJSONObject(it) }
         renewKeys = list
-        val urls = list.filter { it.optBoolean("is_active") }.mapNotNull { it.optString("subscription_url").takeIf { u -> u.startsWith("http") } }
-        if (urls.isEmpty()) {
+        val active = activeKeys(list)
+        if (active.isEmpty()) {
             toast(if (list.isEmpty()) "Вы вошли. Подписки пока нет — выберите тариф" else "Вы вошли. Подписка закончилась — продлите её", true)
             openRenew()
             return
         }
-        updating = true
-        var added = 0
-        withContext(Dispatchers.IO) {
-            urls.forEach { u -> runCatching { AngConfigManager.importBatchConfig(u, "", false) }.onSuccess { added += it.first + it.second } }
+        val onDevice = keysOnDevice(active)
+        when {
+            active.size == 1 -> applyDeviceKey(active[0])
+            onDevice.size == 1 -> {
+                rememberDeviceKey(onDevice[0])
+                toast("Вы вошли в аккаунт")
+            }
+            else -> openKeyPicker(migrate = onDevice.size > 1)
         }
-        updating = false
-        MmkvManager.encodeSettings(PREF_LAST_SUB_UPDATE, System.currentTimeMillis())
-        reloadServers()
-        toast(if (added > 0) "Готово! Подписка подключена" else "Вы вошли в аккаунт")
         if (renewOpen) openRenew()
     }
 
-    private fun mySubUrls(): Set<String> =
-        runCatching { MmkvManager.decodeSubscriptions().map { it.subscription.url }.toSet() }.getOrDefault(emptySet())
+    // ---------- keys on this phone ----------
+
+    private fun subKey(url: String) = url.trim().trimEnd('/')
+
+    private fun keyName(k: JSONObject) = k.optString("display_name").takeIf { it.isNotBlank() && it != "null" } ?: "Ключ #${k.optInt("id")}"
+
+    private fun activeKeys(list: List<JSONObject>) =
+        list.filter { it.optBoolean("is_active") && it.optString("subscription_url").startsWith("http") }
+
+    private fun deviceSubs() = runCatching { MmkvManager.decodeSubscriptions() }.getOrDefault(emptyList())
+
+    /** Account keys whose subscription is installed on this phone. */
+    private fun keysOnDevice(keys: List<JSONObject>): List<JSONObject> {
+        val mine = deviceSubs().map { subKey(it.subscription.url) }.toSet()
+        return keys.filter { subKey(it.optString("subscription_url")) in mine }
+    }
+
+    private fun rememberDeviceKey(k: JSONObject) {
+        deviceKeyId = k.optInt("id")
+        MmkvManager.encodeSettings(PREF_DEVICE_KEY, k.optInt("id").toString())
+    }
+
+    /** Start: an older login may have installed every key of the account here; then ask which one to keep. */
+    private suspend fun checkDeviceKeys() {
+        val keys = api(quiet = true) { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys") ?: return
+        val list = (0 until keys.length()).map { keys.getJSONObject(it) }
+        renewKeys = list
+        val onDevice = keysOnDevice(list)
+        when {
+            onDevice.size > 1 -> openKeyPicker(migrate = true)
+            onDevice.size == 1 && deviceKeyId != onDevice[0].optInt("id") -> rememberDeviceKey(onDevice[0])
+        }
+    }
+
+    private fun openKeyPicker(migrate: Boolean = false) {
+        keyPickerMigrate = migrate
+        keyPickerOpen = true
+        if (renewKeys.isEmpty() && loggedIn) lifecycleScope.launch {
+            api { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys")?.let { ka -> renewKeys = (0 until ka.length()).map { ka.getJSONObject(it) } }
+        }
+    }
+
+    /**
+     * Makes [key] the only key of this account on the phone: removes the subscriptions of the account's other keys
+     * (subscriptions added by hand from elsewhere stay), imports this one if missing and reconnects if needed.
+     */
+    private suspend fun applyDeviceKey(key: JSONObject) {
+        val url = key.optString("subscription_url")
+        val accountUrls = renewKeys.map { subKey(it.optString("subscription_url")) }.toSet()
+        updating = true
+        val ok = withContext(Dispatchers.IO) {
+            deviceSubs().filter { subKey(it.subscription.url) in accountUrls && subKey(it.subscription.url) != subKey(url) }
+                .forEach { sub -> runCatching { SettingsManager.removeSubscriptionWithDefault(sub.guid) }.onFailure { Log.w("Pamir", "remove sub: ${it.message}") } }
+            if (deviceSubs().any { subKey(it.subscription.url) == subKey(url) }) true
+            else runCatching { AngConfigManager.importBatchConfig(url, "", false) }
+                .onFailure { Log.w("Pamir", "import key: ${it.message}") }.getOrNull()?.let { it.first + it.second > 0 } ?: false
+        }
+        updating = false
+        if (!ok) {
+            toast("Не удалось подключить ключ. Проверьте интернет", action = "Повторить") { lifecycleScope.launch { applyDeviceKey(key) } }
+            return
+        }
+        rememberDeviceKey(key)
+        keyPickerOpen = false
+        MmkvManager.encodeSettings(PREF_USER_CHOSE, false) // servers changed: start from the first server of this key
+        MmkvManager.encodeSettings(PREF_LAST_SUB_UPDATE, System.currentTimeMillis())
+        reloadServers()
+        if (running) LauncherManager.restartService(this)
+        toast("Готово! На этом телефоне: ${keyName(key)}")
+    }
+
+    /** Message for WhatsApp/Telegram: how to install the app and connect this key on another phone. */
+    private fun shareKey(k: JSONObject) {
+        val text = "Pamir VPN — ключ «${keyName(k)}»\n\n" +
+            "1. Установите приложение: ${DOWNLOAD_BASE}pamir-vpn-universal.apk\n" +
+            "2. Скопируйте ссылку ниже, откройте Pamir VPN и нажмите «Вставить ссылку подписки»:\n" +
+            k.optString("subscription_url") + "\n\n" +
+            "На iPhone ссылку можно вставить в приложение Happ или Streisand."
+        runCatching {
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "Отправить ключ"))
+        }
+    }
+
+    private fun mySubUrls(): Set<String> = deviceSubs().map { subKey(it.subscription.url) }.toSet()
 
     /** Renewal inside the app (tariffs + payment); without login — offer to log in. */
     private fun openRenew(forceKeyId: Int? = null) {
@@ -573,7 +667,8 @@ class PamirActivity : AppCompatActivity() {
             val list = if (ka == null) emptyList() else (0 until ka.length()).map { ka.getJSONObject(it) }
             renewKeys = list
             val mine = mySubUrls()
-            renewKeyId = forceKeyId ?: (list.firstOrNull { it.optString("subscription_url") in mine }
+            renewKeyId = forceKeyId ?: (list.firstOrNull { it.optInt("id") == deviceKeyId }
+                ?: list.firstOrNull { subKey(it.optString("subscription_url")) in mine }
                 ?: list.firstOrNull { it.optBoolean("is_active") } ?: list.firstOrNull())?.optInt("id")
             val ta = tarJ?.optJSONArray("tariffs")
             tariffs = if (ta == null) emptyList() else (0 until ta.length()).map { ta.getJSONObject(it) }
@@ -1208,7 +1303,7 @@ class PamirActivity : AppCompatActivity() {
      * otherwise a system toast is used, because a sheet window would hide the snackbar.
      */
     private fun toast(message: CharSequence, long: Boolean = false, action: String? = null, onAction: (() -> Unit)? = null) {
-        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen
+        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen
         if (sheetShown || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             applicationContext.toast(message, long)
             return
@@ -1321,6 +1416,7 @@ class PamirActivity : AppCompatActivity() {
             if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
             if (cabTopupOpen) TopupSheet(onDismiss = { cabTopupOpen = false })
             if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
+            if (keyPickerOpen) KeyPickerSheet(onDismiss = { keyPickerOpen = false })
         }
     }
 
@@ -1355,7 +1451,9 @@ class PamirActivity : AppCompatActivity() {
             OnboardingStep(2, "Подписка подключится сама", "Серверы загрузятся автоматически")
             OnboardingStep(3, "Нажмите большую кнопку", "Подключение в одно касание")
             Spacer(Modifier.height(Gap.xl))
-            if (loginBusy) {
+            if (loggedIn && activeKeys(renewKeys).size > 1) {
+                PrimaryButton("Выбрать ключ для этого телефона", icon = PamirIcons.Key, loading = updating) { openKeyPicker() }
+            } else if (loginBusy) {
                 Text("Подтвердите вход в Telegram и вернитесь сюда", style = PamirType.support, color = c.textDim, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(Gap.m))
                 SecondaryButton("Отменить") { cancelLogin() }
@@ -2075,11 +2173,19 @@ class PamirActivity : AppCompatActivity() {
         PamirCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(k.optString("display_name").ifBlank { "Ключ #$id" }, style = PamirType.subtitle, color = c.text)
+                    Text(keyName(k), style = PamirType.subtitle, color = c.text)
                     val tn = k.optString("tariff_name").takeIf { it.isNotBlank() && it != "null" }
                     if (tn != null) Text(tn, style = PamirType.support, color = c.textDim)
                 }
                 Chip(status, tone)
+            }
+            if (id == deviceKeyId && renewKeys.size > 1) {
+                Spacer(Modifier.height(Gap.s))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(PamirIcons.Phone, contentDescription = null, modifier = Modifier.size(16.dp), tint = c.accentText)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Используется на этом телефоне", style = PamirType.caption.copy(fontWeight = FontWeight.SemiBold), color = c.accentText)
+                }
             }
             Spacer(Modifier.height(Gap.m))
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2104,6 +2210,15 @@ class PamirActivity : AppCompatActivity() {
             }
             Spacer(Modifier.height(Gap.l))
             PrimaryButton(if (active) "Продлить" else "Возобновить") { openRenew(id) }
+            if (active && k.optString("subscription_url").startsWith("http")) {
+                Spacer(Modifier.height(Gap.s))
+                SecondaryButton("Отправить на другой телефон", icon = PamirIcons.Share) { shareKey(k) }
+                if (id != deviceKeyId && renewKeys.size > 1) {
+                    TextAction("Использовать на этом телефоне", Modifier.align(Alignment.CenterHorizontally), color = c.accentText, icon = PamirIcons.Phone) {
+                        if (!updating) lifecycleScope.launch { applyDeviceKey(k) }
+                    }
+                }
+            }
         }
     }
 
@@ -2421,6 +2536,9 @@ class PamirActivity : AppCompatActivity() {
             SectionHeader("Аккаунт")
             RowGroup {
                 if (loggedIn) {
+                    val dk = renewKeys.firstOrNull { it.optInt("id") == deviceKeyId }
+                    LinkRow(PamirIcons.Key, "Ключ на этом телефоне", dk?.let { keyName(it) + " · сменить" } ?: "Выбрать, какой ключ использовать") { openKeyPicker() }
+                    RowDivider()
                     LinkRow(PamirIcons.Person, "Вы вошли в аккаунт", balanceMinor?.let { "Баланс: ${rub(it)} · продление в приложении" } ?: "Продление прямо в приложении") { openRenew() }
                     RowDivider()
                     LinkRow(PamirIcons.Logout, "Выйти из аккаунта", "VPN продолжит работать", tone = Tone.DANGER) { logout(); toast("Вы вышли из аккаунта") }
@@ -2476,6 +2594,42 @@ class PamirActivity : AppCompatActivity() {
             b == 1 -> one
             b in 2..4 -> few
             else -> many
+        }
+    }
+
+    // ---------- key of this phone ----------
+
+    @Composable
+    private fun KeyPickerSheet(onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        val keys = activeKeys(renewKeys)
+        PamirSheet(
+            onDismiss = onDismiss,
+            title = "Какой ключ на этом телефоне?",
+            subtitle = if (keyPickerMigrate) "Сейчас здесь подключены сразу несколько ключей, поэтому серверы повторяются. Оставьте свой — остальные можно отправить близким из кабинета."
+            else "У вас несколько ключей. Выберите свой — остальные можно отправить близким из кабинета."
+        ) {
+            if (keys.isEmpty()) {
+                SkeletonCard("Загружаем ключи")
+                return@PamirSheet
+            }
+            keys.forEach { k ->
+                SheetRow(
+                    selected = k.optInt("id") == deviceKeyId,
+                    leading = { IconBadge(PamirIcons.Key, size = 40.dp) },
+                    title = keyName(k),
+                    detail = keyExpiry(k),
+                    onClick = { if (!updating) lifecycleScope.launch { applyDeviceKey(k) } }
+                )
+            }
+            if (updating) {
+                Spacer(Modifier.height(Gap.m))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(color = c.accentText, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(Gap.s))
+                    Text("Подключаем ключ…", style = PamirType.support, color = c.textDim)
+                }
+            }
         }
     }
 

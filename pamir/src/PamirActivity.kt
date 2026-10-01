@@ -264,6 +264,10 @@ class PamirActivity : AppCompatActivity() {
     private var deviceKeyId by mutableStateOf(MmkvManager.decodeSettingsString(PREF_DEVICE_KEY, "")?.toIntOrNull())
     private var keyPickerOpen by mutableStateOf(false)
     private var keyPickerMigrate by mutableStateOf(false)
+    /** Free trial from /topup/trial-offer: {available, offer_id, name, duration_days}; null when not offered. */
+    private var trialOffer by mutableStateOf<JSONObject?>(null)
+    private var trialBusy by mutableStateOf(false)
+    private var renameTarget by mutableStateOf<JSONObject?>(null)
     private var reportBusy by mutableStateOf(false)
     // look and feel
     private var themeMode by mutableStateOf(PamirThemeMode.from(MmkvManager.decodeSettingsString(PREF_THEME, PamirThemeMode.DARK.key)))
@@ -637,6 +641,50 @@ class PamirActivity : AppCompatActivity() {
         toast("Готово! На этом телефоне: ${keyName(key)}")
     }
 
+    private suspend fun loadTrialOffer() {
+        val o = api(quiet = true) { p -> PamirApi.call("/topup/trial-offer", proxyPort = p) }
+        trialOffer = o?.takeIf { it.optBoolean("available") && it.has("offer_id") }
+    }
+
+    /** Activates the free trial; the new key goes straight onto this phone. */
+    private fun activateTrial() {
+        val offer = trialOffer ?: return
+        if (trialBusy) return
+        trialBusy = true
+        lifecycleScope.launch {
+            val before = renewKeys.map { it.optInt("id") }.toSet()
+            val r = api { p -> PamirApi.call("/topup/trial-activate", "POST", JSONObject().put("offer_id", offer.optInt("offer_id")), proxyPort = p) }
+            if (r == null) { trialBusy = false; return@launch }
+            trialOffer = null
+            val ka = api { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys")
+            val list = if (ka == null) emptyList() else (0 until ka.length()).map { ka.getJSONObject(it) }
+            if (list.isNotEmpty()) renewKeys = list
+            val key = activeKeys(list).firstOrNull { it.optInt("id") !in before } ?: activeKeys(list).firstOrNull()
+            trialBusy = false
+            if (key != null) {
+                renewOpen = false
+                applyDeviceKey(key)
+            } else {
+                toast("Пробный период активирован. Ключ появится в кабинете через минуту", true)
+            }
+            loadCabinet(silent = true)
+        }
+    }
+
+    private fun renameKey(k: JSONObject, name: String) {
+        val n = name.trim()
+        if (n.isEmpty() || cabBusy != null) return
+        cabBusy = "rename"
+        lifecycleScope.launch {
+            val r = api { p -> PamirApi.call("/auth/keys/rename", "POST", JSONObject().put("key_id", k.optInt("id")).put("new_name", n), proxyPort = p) }
+            cabBusy = null
+            if (r == null) return@launch
+            renewKeys = renewKeys.map { if (it.optInt("id") == k.optInt("id")) JSONObject(it.toString()).put("display_name", n) else it }
+            renameTarget = null
+            toast("Ключ переименован: $n")
+        }
+    }
+
     /** Message for WhatsApp/Telegram: how to install the app and connect this key on another phone. */
     private fun shareKey(k: JSONObject) {
         val text = "Pamir VPN — ключ «${keyName(k)}»\n\n" +
@@ -661,6 +709,7 @@ class PamirActivity : AppCompatActivity() {
             refreshAccount()
             val keysJ = api { p -> PamirApi.call("/auth/keys", proxyPort = p) }
             val tarJ = api(quiet = true) { p -> PamirApi.call("/topup/tariffs", proxyPort = p) }
+            loadTrialOffer()
             renewLoading = false
             if (keysJ == null) return@launch
             val ka = keysJ.optJSONArray("keys")
@@ -770,6 +819,7 @@ class PamirActivity : AppCompatActivity() {
             }
             cabDevices = dev
             cabReferral = api(quiet = true) { p -> PamirApi.call("/topup/referral", proxyPort = p) }
+            loadTrialOffer()
             val from = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(System.currentTimeMillis() - 365L * 86_400_000))
             val pj = api(quiet = true) { p -> PamirApi.call("/topup/payments?date_from=$from", proxyPort = p) }
             pj?.optJSONArray("payments")?.let { a -> cabPayments = (0 until a.length()).map { a.getJSONObject(it) } }
@@ -1303,7 +1353,7 @@ class PamirActivity : AppCompatActivity() {
      * otherwise a system toast is used, because a sheet window would hide the snackbar.
      */
     private fun toast(message: CharSequence, long: Boolean = false, action: String? = null, onAction: (() -> Unit)? = null) {
-        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen
+        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen || renameTarget != null
         if (sheetShown || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             applicationContext.toast(message, long)
             return
@@ -1417,6 +1467,7 @@ class PamirActivity : AppCompatActivity() {
             if (cabTopupOpen) TopupSheet(onDismiss = { cabTopupOpen = false })
             if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
             if (keyPickerOpen) KeyPickerSheet(onDismiss = { keyPickerOpen = false })
+            renameTarget?.let { RenameKeySheet(it, onDismiss = { renameTarget = null }) }
         }
     }
 
@@ -1975,8 +2026,25 @@ class PamirActivity : AppCompatActivity() {
     }
 
     @Composable
+    private fun TrialCard() {
+        val o = trialOffer ?: return
+        val days = o.optInt("duration_days")
+        NoteCard(
+            PamirIcons.Star, "Пробный период — бесплатно",
+            "${o.optString("name").takeIf { it.isNotBlank() && it != "null" } ?: "VPN"} на $days ${plural(days, "день", "дня", "дней")}. Один раз, без оплаты и привязки карты.",
+            Tone.ACCENT
+        ) {
+            PrimaryButton("Попробовать бесплатно", icon = PamirIcons.Bolt, loading = trialBusy) { activateTrial() }
+        }
+    }
+
+    @Composable
     private fun ColumnScope.RenewContent() {
         val c = Pamir.colors
+        if (trialOffer != null) {
+            TrialCard()
+            Spacer(Modifier.height(Gap.s))
+        }
         if (renewKeys.size > 1) {
             SectionHeader("Ключ", Modifier.padding(top = 0.dp))
             renewKeys.forEach { k ->
@@ -2108,6 +2176,10 @@ class PamirActivity : AppCompatActivity() {
                 SkeletonCard("Загружаем кабинет")
                 return@Column
             }
+            if (trialOffer != null) {
+                Spacer(Modifier.height(Gap.m))
+                TrialCard()
+            }
             SectionHeader("Подписка")
             if (renewKeys.isEmpty() && cabLoaded) {
                 NoteCard(PamirIcons.Key, "Подписки пока нет", "Выберите тариф — подключится за минуту.", Tone.ACCENT) {
@@ -2213,8 +2285,11 @@ class PamirActivity : AppCompatActivity() {
             if (active && k.optString("subscription_url").startsWith("http")) {
                 Spacer(Modifier.height(Gap.s))
                 SecondaryButton("Отправить на другой телефон", icon = PamirIcons.Share) { shareKey(k) }
-                if (id != deviceKeyId && renewKeys.size > 1) {
-                    TextAction("Использовать на этом телефоне", Modifier.align(Alignment.CenterHorizontally), color = c.accentText, icon = PamirIcons.Phone) {
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextAction("Переименовать", color = c.textDim, icon = PamirIcons.Edit) { renameTarget = k }
+                if (active && id != deviceKeyId && renewKeys.size > 1) {
+                    TextAction("На этот телефон", color = c.accentText, icon = PamirIcons.Phone) {
                         if (!updating) lifecycleScope.launch { applyDeviceKey(k) }
                     }
                 }
@@ -2630,6 +2705,25 @@ class PamirActivity : AppCompatActivity() {
                     Text("Подключаем ключ…", style = PamirType.support, color = c.textDim)
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun RenameKeySheet(k: JSONObject, onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        var name by remember { mutableStateOf(keyName(k)) }
+        PamirSheet(onDismiss = onDismiss, title = "Название ключа", subtitle = "Например: «Мама» или «Ноутбук» — чтобы не путать ключи") {
+            OutlinedTextField(
+                value = name, onValueChange = { name = it.take(40) }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                leadingIcon = { Icon(PamirIcons.Key, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { renameKey(k, name) }),
+                shape = Radius.m, colors = pamirFieldColors()
+            )
+            Spacer(Modifier.height(Gap.l))
+            PrimaryButton("Сохранить", loading = cabBusy == "rename") { renameKey(k, name) }
         }
     }
 

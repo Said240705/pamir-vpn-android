@@ -77,7 +77,8 @@ object PamirApi {
             }
             throw ApiError(code, msg)
         }
-        return if (text.isBlank()) JSONObject() else JSONObject(text)
+        // Some endpoints answer with a bare value (true, "ok"); keep it instead of failing on success.
+        return if (text.isBlank()) JSONObject() else runCatching { JSONObject(text) }.getOrElse { JSONObject().put("result", text) }
     }
 
     fun deviceName(): String =

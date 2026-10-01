@@ -5,27 +5,30 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.text.Html
 import android.content.IntentFilter
 import android.net.TrafficStats
 import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
 import android.os.Process
+import android.text.Html
 import android.util.Log
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -37,30 +40,32 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -73,32 +78,41 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
+import com.v2ray.ang.dto.RealPingResult
+import com.v2ray.ang.dto.TestServiceMessage
 import com.v2ray.ang.enums.RoutingType
+import com.v2ray.ang.extension.serializable
 import com.v2ray.ang.extension.toast
 import com.v2ray.ang.handler.AngConfigManager
 import com.v2ray.ang.handler.MmkvManager
@@ -107,28 +121,19 @@ import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.ui.main.MainActivity
 import com.v2ray.ang.ui.perappproxy.PerAppProxyActivity
 import com.v2ray.ang.util.Utils
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
-
-// ---------- palette ----------
-private val BgColor = Color(0xFF0A121D)
-private val Surface1 = Color(0xFF111C2B)
-private val Surface2 = Color(0xFF162335)
-private val Line = Color(0x12FFFFFF)
-private val Mint = Color(0xFF2BEFC0)
-private val MintDeep = Color(0xFF17B896)
-private val TextMain = Color(0xFFEEF3F7)
-private val TextDim = Color(0xFF8494A8)
-private val Danger = Color(0xFFF0766A)
 
 private const val CABINET_URL = "https://app.pamirlink.ru/?from=android"
 private const val BOT_URL = "https://t.me/pamirlink_bot"
@@ -142,6 +147,14 @@ private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
 private const val PREF_PREFERRED = "pamir_preferred"
 private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
 private const val DOWNLOAD_BASE = "https://app.pamirlink.ru/download/"
+/** Latest non-prerelease build; AppConfig.APP_URL is github.com/<owner>/pamir-vpn-android after branding. */
+private val GITHUB_LATEST = AppConfig.APP_URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest"
+private const val PREF_THEME = "pamir_theme"
+/** Favorite servers by display name: subscription updates recreate server GUIDs, names stay. */
+private const val PREF_FAVORITES = "pamir_favorites"
+// Navigation bar scrims for 3-button navigation, the androidx defaults.
+private val NAV_SCRIM_LIGHT = android.graphics.Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+private val NAV_SCRIM_DARK = android.graphics.Color.argb(0x80, 0x1b, 0x1b, 0x1b)
 
 /** Popular apps that often refuse to work through a VPN. Only installed ones are shown. */
 private val POPULAR_APPS = listOf(
@@ -188,6 +201,10 @@ class PamirActivity : AppCompatActivity() {
     private var selected by mutableStateOf<String?>(null)
     private val pings = mutableStateMapOf<String, Int>()
     private var pingBusy by mutableStateOf(false)
+    /** Servers measured through the core in this session; the quick TCP check does not overwrite them. */
+    private val realPinged = mutableSetOf<String>()
+    private var pingRequest: String? = null
+    private var pingDone: CompletableDeferred<Unit>? = null
     private var updating by mutableStateOf(false)
     private var connectedAt by mutableLongStateOf(0L)
     private var ipInfo by mutableStateOf("")
@@ -197,7 +214,8 @@ class PamirActivity : AppCompatActivity() {
     private var autoSwitched = false
     private var lastPrecheck = 0L
     private var newVersion by mutableStateOf<String?>(null)
-    private var newVersionUrl = ""
+    /** Download URLs of [newVersion], tried in order: GitHub first, the site as a fallback. */
+    private var newVersionUrls = emptyList<String>()
     private var updProgress by mutableStateOf(-1)
     private var assetsJob: kotlinx.coroutines.Job? = null
     private var sheetOpen by mutableStateOf(false)
@@ -241,6 +259,10 @@ class PamirActivity : AppCompatActivity() {
     private var emailLoginOpen by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
     private var reportBusy by mutableStateOf(false)
+    // look and feel
+    private var themeMode by mutableStateOf(PamirThemeMode.from(MmkvManager.decodeSettingsString(PREF_THEME, PamirThemeMode.DARK.key)))
+    private var favorites by mutableStateOf(MmkvManager.decodeSettingsStringSet(PREF_FAVORITES)?.toSet() ?: emptySet())
+    private val snackbar = SnackbarHostState()
 
     private val notifPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -254,11 +276,22 @@ class PamirActivity : AppCompatActivity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Log.w("Pamir", "state msg ${intent?.getIntExtra("key", 0)} ${intent?.getStringExtra("content") ?: ""}")
             when (intent?.getIntExtra("key", 0)) {
-                AppConfig.MSG_STATE_RUNNING, AppConfig.MSG_STATE_START_SUCCESS -> onRunning(true)
+                AppConfig.MSG_STATE_RUNNING, AppConfig.MSG_STATE_START_SUCCESS -> {
+                    reloadServers() // the watchdog may have switched the server in the background
+                    onRunning(true)
+                }
                 AppConfig.MSG_STATE_NOT_RUNNING, AppConfig.MSG_STATE_STOP_SUCCESS -> onRunning(false)
+                AppConfig.MSG_MEASURE_CONFIG_SUCCESS -> if (intent.getStringExtra(MessageHelper.EXTRA_REQUEST_ID) == pingRequest) {
+                    intent.serializable<RealPingResult>("content")?.let {
+                        realPinged += it.guid
+                        pings[it.guid] = if (it.delayMillis > 0) it.delayMillis.toInt() else -1
+                    }
+                }
+                AppConfig.MSG_MEASURE_CONFIG_FINISH, AppConfig.MSG_MEASURE_CONFIG_CANCEL ->
+                    if (intent.getStringExtra(MessageHelper.EXTRA_REQUEST_ID) == pingRequest) pingDone?.complete(Unit)
                 AppConfig.MSG_STATE_START_FAILURE -> {
                     onRunning(false)
-                    toast("Не удалось подключиться. Попробуйте другой сервер")
+                    toast("Не удалось подключиться. Попробуйте другой сервер", action = "Сменить") { sheetOpen = true }
                 }
             }
         }
@@ -275,7 +308,7 @@ class PamirActivity : AppCompatActivity() {
         }
         initRouting()
         reloadServers()
-        setContent { PamirTheme { Root() } }
+        setContent { PamirTheme(themeMode) { Root() } }
         if (servers.isNotEmpty() && System.currentTimeMillis() - lastUpdate > 60 * 60 * 1000L) {
             updateSubscription(silent = true)
         }
@@ -892,22 +925,44 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun runPing() {
+    /**
+     * Server check. [real] measures a request through each server with the core (v2rayNG CoreTestService,
+     * separate process, results arrive in [stateReceiver]); otherwise a quick TCP connect, used for the
+     * silent background check. When the core test gives nothing in time, the TCP check is used instead.
+     */
+    private suspend fun runPing(real: Boolean = true) {
         if (pingBusy) return
         pingBusy = true
         val targets = servers.filter { !it.isStub }
-        withContext(Dispatchers.IO) {
-            targets.map { s ->
-                async {
-                    val ms = runCatching {
-                        val t0 = System.nanoTime()
-                        Socket().use { it.connect(InetSocketAddress(s.host, s.port), 3000) }
-                        ((System.nanoTime() - t0) / 1_000_000).toInt()
-                    }.getOrDefault(-1)
-                    s.guid to ms
-                }
-            }.awaitAll()
-        }.forEach { (g, ms) -> pings[g] = ms }
+        var measured = false
+        if (real && targets.isNotEmpty()) {
+            val id = java.util.UUID.randomUUID().toString()
+            val done = CompletableDeferred<Unit>()
+            pingRequest = id
+            pingDone = done
+            targets.forEach { realPinged -= it.guid }
+            MessageHelper.sendMsg2TestService(this, TestServiceMessage(AppConfig.MSG_MEASURE_CONFIG_START, serverGuids = targets.map { it.guid }), id)
+            withTimeoutOrNull(45_000) { done.await() }
+            pingRequest = null
+            pingDone = null
+            measured = targets.any { it.guid in realPinged }
+            if (measured) targets.filter { it.guid !in realPinged }.forEach { pings[it.guid] = -1 }
+            Log.w("Pamir", "real ping: ${targets.count { it.guid in realPinged }}/${targets.size} answered")
+        }
+        if (!measured) {
+            withContext(Dispatchers.IO) {
+                targets.map { s ->
+                    async {
+                        val ms = runCatching {
+                            val t0 = System.nanoTime()
+                            Socket().use { it.connect(InetSocketAddress(s.host, s.port), 3000) }
+                            ((System.nanoTime() - t0) / 1_000_000).toInt()
+                        }.getOrDefault(-1)
+                        s.guid to ms
+                    }
+                }.awaitAll()
+            }.forEach { (g, ms) -> if (g !in realPinged) pings[g] = ms }
+        }
         pingBusy = false
     }
 
@@ -941,7 +996,7 @@ class PamirActivity : AppCompatActivity() {
                 fetchIp()
             } else {
                 ipInfo = "нет ответа"
-                toast("Нет соединения через VPN. Попробуйте другой сервер", true)
+                toast("Нет соединения через VPN. Попробуйте другой сервер", true, action = "Сменить") { sheetOpen = true }
             }
         }
     }
@@ -965,7 +1020,7 @@ class PamirActivity : AppCompatActivity() {
         if (running || connecting || servers.isEmpty()) return
         if (System.currentTimeMillis() - lastPrecheck < 60_000) return
         lastPrecheck = System.currentTimeMillis()
-        runPing()
+        runPing(real = false)
         val normal = servers.filter { !it.isStub && !it.isLte }
         val reachable = normal.any { (pings[it.guid] ?: -1) > 0 }
         whitelist = normal.isNotEmpty() && !reachable && lteServer() != null
@@ -981,26 +1036,51 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /** A published app build: version and where its APK for this device can be downloaded. */
+    private class UpdateSource(val version: String, val url: String)
+
+    private fun httpGet(url: String, accept: String? = null): String {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 6000; c.readTimeout = 6000
+        c.setRequestProperty("Cache-Control", "no-cache")
+        if (accept != null) c.setRequestProperty("Accept", accept)
+        return c.inputStream.bufferedReader().use { it.readText() }
+    }
+
+    private fun prefersArm64() = android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a")
+
+    /** GitHub releases: fixed-name copies (pamir-vpn.apk, pamir-vpn-universal.apk) or the versioned APKs. */
+    private fun updateFromGithub(): UpdateSource? {
+        val o = JSONObject(httpGet(GITHUB_LATEST, "application/vnd.github+json"))
+        val v = o.optString("tag_name").removePrefix("v")
+        val assets = o.optJSONArray("assets") ?: return null
+        val urls = (0 until assets.length()).associate { assets.getJSONObject(it).let { a -> a.optString("name") to a.optString("browser_download_url") } }
+        fun pick(fixed: String, suffix: String) = urls[fixed] ?: urls.entries.firstOrNull { it.key.endsWith(suffix) }?.value
+        val url = (if (prefersArm64()) pick("pamir-vpn.apk", "_arm64-v8a.apk") else null) ?: pick("pamir-vpn-universal.apk", "_universal.apk")
+        return if (v.isNotBlank() && url != null) UpdateSource(v, url) else null
+    }
+
+    /** The site mirror (download/android.json), kept for when GitHub is slow or blocked. */
+    private fun updateFromSite(): UpdateSource? {
+        val o = JSONObject(httpGet(UPDATE_JSON))
+        val v = o.optString("version")
+        val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
+        val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
+        return if (v.isNotBlank()) UpdateSource(v, DOWNLOAD_BASE + file) else null
+    }
+
+    /** Asks GitHub and the site in parallel; offers the newest version and every source that has it. */
     private fun checkAppUpdate() {
         lifecycleScope.launch {
-            val json = withContext(Dispatchers.IO) {
-                runCatching {
-                    val c = URL(UPDATE_JSON).openConnection() as HttpURLConnection
-                    c.connectTimeout = 6000; c.readTimeout = 6000
-                    c.setRequestProperty("Cache-Control", "no-cache")
-                    c.inputStream.bufferedReader().use { it.readText() }
-                }.getOrNull()
-            } ?: return@launch
-            runCatching {
-                val o = org.json.JSONObject(json)
-                val v = o.optString("version")
-                if (v.isNotBlank() && isNewer(v, appVersion())) {
-                    val abi = if (android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a") && o.has("arm64-v8a")) "arm64-v8a" else "universal"
-                    val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
-                    newVersionUrl = DOWNLOAD_BASE + file
-                    newVersion = v
-                }
+            val found = withContext(Dispatchers.IO) {
+                val gh = async { runCatching { updateFromGithub() }.onFailure { Log.w("Pamir", "update github: ${it.message}") }.getOrNull() }
+                val site = async { runCatching { updateFromSite() }.onFailure { Log.w("Pamir", "update site: ${it.message}") }.getOrNull() }
+                listOfNotNull(gh.await(), site.await())
             }
+            val best = found.map { it.version }.fold(appVersion()) { acc, v -> if (isNewer(v, acc)) v else acc }
+            if (!isNewer(best, appVersion())) return@launch
+            newVersionUrls = found.filter { it.version == best }.map { it.url }
+            newVersion = best
         }
     }
 
@@ -1026,30 +1106,7 @@ class PamirActivity : AppCompatActivity() {
         updProgress = 0
         lifecycleScope.launch {
             val file = withContext(Dispatchers.IO) {
-                runCatching {
-                    val dir = java.io.File(cacheDir, "update").apply { mkdirs() }
-                    val f = java.io.File(dir, "pamir-vpn.apk")
-                    val c = URL(newVersionUrl).openConnection() as HttpURLConnection
-                    c.connectTimeout = 10000; c.readTimeout = 20000
-                    val total = c.contentLengthLong
-                    c.inputStream.use { input ->
-                        f.outputStream().use { out ->
-                            val buf = ByteArray(64 * 1024)
-                            var done = 0L
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n < 0) break
-                                out.write(buf, 0, n)
-                                done += n
-                                if (total > 0) {
-                                    val pr = (done * 100 / total).toInt()
-                                    withContext(Dispatchers.Main) { updProgress = pr }
-                                }
-                            }
-                        }
-                    }
-                    f
-                }.getOrNull()
+                newVersionUrls.firstNotNullOfOrNull { url -> downloadApk(url) }
             }
             updProgress = -1
             if (file == null) {
@@ -1067,6 +1124,34 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /** Downloads one source into the cache; null (and logged) when it fails or arrives incomplete. */
+    private suspend fun downloadApk(url: String): java.io.File? = runCatching {
+        withContext(Dispatchers.Main) { updProgress = 0 }
+        val dir = java.io.File(cacheDir, "update").apply { mkdirs() }
+        val f = java.io.File(dir, "pamir-vpn.apk")
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 10000; c.readTimeout = 20000
+        val total = c.contentLengthLong
+        var done = 0L
+        c.inputStream.use { input ->
+            f.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    done += n
+                    if (total > 0) {
+                        val pr = (done * 100 / total).toInt()
+                        withContext(Dispatchers.Main) { updProgress = pr }
+                    }
+                }
+            }
+        }
+        if (total > 0 && done != total) throw java.io.IOException("incomplete download: $done of $total")
+        f
+    }.onFailure { Log.w("Pamir", "update download failed: ${it.message}") }.getOrNull()
+
     private fun updateSubscription(silent: Boolean = false) {
         if (updating) return
         updating = true
@@ -1079,7 +1164,7 @@ class PamirActivity : AppCompatActivity() {
             reloadServers()
             if (!silent) {
                 if (res != null && res.successCount > 0) toast("Серверы обновлены")
-                else toast("Не удалось обновить. Проверьте интернет")
+                else toast("Не удалось обновить. Проверьте интернет", action = "Повторить") { updateSubscription() }
             }
         }
     }
@@ -1117,27 +1202,83 @@ class PamirActivity : AppCompatActivity() {
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     }
 
+    /**
+     * Messages of this screen. Shadows the Context.toast extension: while the screen is visible and no
+     * bottom sheet covers it, the message goes to the in-app snackbar (optionally with an action);
+     * otherwise a system toast is used, because a sheet window would hide the snackbar.
+     */
+    private fun toast(message: CharSequence, long: Boolean = false, action: String? = null, onAction: (() -> Unit)? = null) {
+        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen
+        if (sheetShown || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            applicationContext.toast(message, long)
+            return
+        }
+        lifecycleScope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val duration = when {
+                action != null -> SnackbarDuration.Long
+                long -> SnackbarDuration.Long
+                else -> SnackbarDuration.Short
+            }
+            val result = snackbar.showSnackbar(message.toString(), actionLabel = action, duration = duration)
+            if (result == SnackbarResult.ActionPerformed) onAction?.invoke()
+        }
+    }
+
+    private fun setTheme(mode: PamirThemeMode) {
+        themeMode = mode
+        MmkvManager.encodeSettings(PREF_THEME, mode.key)
+    }
+
+    private fun toggleFavorite(name: String) {
+        favorites = if (name in favorites) favorites - name else favorites + name
+        MmkvManager.encodeSettings(PREF_FAVORITES, favorites.toMutableSet())
+    }
+
     // ---------- UI ----------
+
+    private val navTabs = listOf(Tab.HOME, Tab.CABINET, Tab.SETTINGS)
+    private val navEntries = listOf(
+        NavEntry("VPN", PamirIcons.Shield),
+        NavEntry("Кабинет", PamirIcons.Person),
+        NavEntry("Настройки", PamirIcons.Settings),
+    )
 
     @Composable
     private fun Root() {
+        val c = Pamir.colors
+        val dark = c.isDark
+        // System bar icons follow the app theme, not the phone theme.
+        LaunchedEffect(dark) {
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark },
+                navigationBarStyle = SystemBarStyle.auto(NAV_SCRIM_LIGHT, NAV_SCRIM_DARK) { dark },
+            )
+        }
         BackHandler(enabled = tab != Tab.HOME) { tab = if (tab == Tab.APPS) Tab.SETTINGS else Tab.HOME }
         LaunchedEffect(tab) { if (tab != Tab.APPS) applyAppsIfChanged() }
         LaunchedEffect(tab, loggedIn) { if (tab == Tab.CABINET && loggedIn) loadCabinet(silent = true) }
         Box(
             Modifier
                 .fillMaxSize()
-                .background(BgColor)
+                .background(c.bg)
         ) {
+            val onHome = servers.isEmpty() || tab == Tab.HOME
+            val glow by animateFloatAsState(
+                when {
+                    !onHome -> 0.3f
+                    running -> 1f
+                    else -> 0.55f
+                },
+                tween(700), label = "bgGlow"
+            )
             Box(
                 Modifier
-                    .size(460.dp)
-                    .padding(0.dp)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(Mint.copy(alpha = if (running) 0.16f else 0.08f), Color.Transparent)
-                        )
-                    )
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(400.dp)
+                    .graphicsLayer { alpha = glow }
+                    .background(Brush.radialGradient(listOf(c.accent.copy(alpha = if (dark) 0.15f else 0.22f), Color.Transparent)))
             )
             if (servers.isEmpty()) {
                 Onboarding()
@@ -1149,7 +1290,13 @@ class PamirActivity : AppCompatActivity() {
                         .navigationBarsPadding()
                 ) {
                     Box(Modifier.weight(1f)) {
-                        AnimatedContent(targetState = tab, transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) }, label = "tab") { t ->
+                        AnimatedContent(
+                            targetState = tab,
+                            transitionSpec = {
+                                (fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 30 }) togetherWith fadeOut(tween(140))
+                            },
+                            label = "tab"
+                        ) { t ->
                             when (t) {
                                 Tab.HOME -> Home(onPick = { sheetOpen = true })
                                 Tab.SETTINGS -> Settings()
@@ -1158,9 +1305,17 @@ class PamirActivity : AppCompatActivity() {
                             }
                         }
                     }
-                    BottomNav(if (tab == Tab.APPS) Tab.SETTINGS else tab) { tab = it }
+                    val navTab = if (tab == Tab.APPS) Tab.SETTINGS else tab
+                    BottomNav(navEntries, selected = navTabs.indexOf(navTab), onSelect = { tab = navTabs[it] })
                 }
             }
+            PamirSnackbarHost(
+                snackbar,
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = if (servers.isEmpty()) 0.dp else 84.dp)
+            )
             if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
             if (renewOpen) RenewSheet(onDismiss = { renewOpen = false })
             if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
@@ -1169,8 +1324,11 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- onboarding ----------
+
     @Composable
     private fun Onboarding() {
+        val c = Pamir.colors
         LaunchedEffect(Unit) {
             while (true) { delay(1500); reloadServers() }
         }
@@ -1179,216 +1337,223 @@ class PamirActivity : AppCompatActivity() {
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 24.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Gap.xl),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(Modifier.weight(0.8f))
-            Image(painterResource(R.drawable.pamir_logo), null, Modifier.size(84.dp))
-            Spacer(Modifier.height(22.dp))
-            Text("Добро пожаловать\nв Pamir VPN", color = TextMain, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold, textAlign = TextAlign.Center, lineHeight = 28.sp)
-            Spacer(Modifier.height(10.dp))
-            Text("Подключите подписку — это займёт секунду", color = TextDim, fontSize = 13.sp, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(24.dp))
-            Feature("⚡", "Подключение в одно касание")
-            Feature("🌍", "Быстрые европейские серверы")
-            Feature("📶", "Работает даже в «белых списках»")
-            Spacer(Modifier.weight(1f))
-            if (updating || loginBusy) CircularProgressIndicator(color = Mint, modifier = Modifier.size(28.dp))
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(40.dp))
+            LogoHero()
+            Spacer(Modifier.height(Gap.l))
+            Text(
+                "Добро пожаловать\nв Pamir VPN", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(Modifier.height(Gap.s))
+            Text("Три шага — и интернет под защитой", style = PamirType.bodyRegular, color = c.textDim, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(Gap.xl))
+            OnboardingStep(1, "Войдите через Telegram", "или по почте и паролю от кабинета")
+            OnboardingStep(2, "Подписка подключится сама", "Серверы загрузятся автоматически")
+            OnboardingStep(3, "Нажмите большую кнопку", "Подключение в одно касание")
+            Spacer(Modifier.height(Gap.xl))
             if (loginBusy) {
-                Text("Подтвердите вход в Telegram и вернитесь сюда", color = TextDim, fontSize = 12.sp, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(8.dp))
+                Text("Подтвердите вход в Telegram и вернитесь сюда", style = PamirType.support, color = c.textDim, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(Gap.m))
                 SecondaryButton("Отменить") { cancelLogin() }
             } else {
-                PrimaryButton2("✈  Войти через Telegram", "Подписка подключится сама") { loginTelegram() }
+                PrimaryButton(
+                    "Войти через Telegram", subtitle = "Подписка подключится сама", icon = PamirIcons.Telegram,
+                    loading = updating
+                ) { loginTelegram() }
             }
-            Spacer(Modifier.height(10.dp))
-            SecondaryButton("Войти по почте и паролю") { emailLoginOpen = true }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Вставить ссылку подписки",
-                color = TextDim, fontSize = 12.5.sp,
-                modifier = Modifier.clickable { importFromClipboard() }.padding(10.dp)
-            )
-            Spacer(Modifier.height(10.dp))
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(Gap.m))
+            SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailLoginOpen = true }
+            Spacer(Modifier.height(Gap.xs))
+            TextAction("Вставить ссылку подписки", icon = PamirIcons.Link) { importFromClipboard() }
+            Spacer(Modifier.height(Gap.l))
         }
     }
 
     @Composable
-    private fun Feature(icon: String, text: String) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(14.dp))
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(icon, fontSize = 14.sp)
-            Spacer(Modifier.width(10.dp))
-            Text(text, color = TextMain, fontSize = 13.sp)
+    private fun LogoHero() {
+        val c = Pamir.colors
+        Box(Modifier.size(136.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.fillMaxSize()) {
+                val r = size.minDimension / 2
+                drawCircle(Brush.radialGradient(listOf(c.accent.copy(alpha = 0.28f), Color.Transparent), center, r), r)
+                drawCircle(c.accent.copy(alpha = 0.18f), r * 0.68f, style = Stroke(1.5.dp.toPx()))
+                drawCircle(c.surface, r * 0.58f)
+                drawCircle(c.accent.copy(alpha = 0.35f), r * 0.58f, style = Stroke(1.5.dp.toPx()))
+            }
+            Image(painterResource(R.drawable.pamir_logo), contentDescription = null, modifier = Modifier.size(64.dp))
         }
     }
 
     @Composable
-    private fun Header(title: String? = null) {
+    private fun OnboardingStep(n: Int, title: String, text: String) {
+        val c = Pamir.colors
         Row(
             Modifier
+                .padding(vertical = Gap.xs)
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 10.dp),
+                .clip(Radius.m)
+                .background(c.surface)
+                .border(1.dp, c.line, Radius.m)
+                .padding(horizontal = 14.dp, vertical = Gap.m),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (title == null) {
-                Image(painterResource(R.drawable.pamir_logo), null, Modifier.size(24.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Pamir VPN", color = TextMain, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
-            } else {
-                Text(title, color = TextMain, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(c.accentSoft),
+                contentAlignment = Alignment.Center
+            ) { Text("$n", style = PamirType.label, color = c.accentText) }
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(title, style = PamirType.body, color = c.text)
+                Text(text, style = PamirType.support, color = c.textDim)
             }
         }
     }
+
+    // ---------- home ----------
 
     @Composable
     private fun Home(onPick: () -> Unit) {
+        val c = Pamir.colors
         val current = servers.firstOrNull { it.guid == selected }
         val stubMode = servers.all { it.isStub }
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Gap.l),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Header()
-            StatusPill()
-            if (newVersion != null) UpdateCard()
+            HomeHeader()
+            HomeNotice()
             if (stubMode) {
+                Spacer(Modifier.height(Gap.l))
                 StubCard()
                 return@Column
             }
-            Spacer(Modifier.height(26.dp))
-            PowerButton()
-            Spacer(Modifier.height(14.dp))
-            val stateText = when {
-                connecting -> "Подключение…"
-                running -> "Защищено"
-                else -> "Не подключено"
+            val power = when {
+                connecting -> PowerState.CONNECTING
+                running -> PowerState.ON
+                else -> PowerState.OFF
             }
-            Text(stateText, color = if (running) Mint else TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.clickable { toggle() })
-            Spacer(Modifier.height(4.dp))
-            if (running) Timer() else Text("Нажмите, чтобы защитить соединение", color = TextDim, fontSize = 12.sp)
-            Spacer(Modifier.height(20.dp))
-            if (current != null) ServerCard(current, onPick)
+            val stateText = when (power) {
+                PowerState.CONNECTING -> "Подключение…"
+                PowerState.ON -> "Защищено"
+                PowerState.OFF -> "Не подключено"
+            }
+            PowerButton(
+                state = power,
+                label = if (running) "Отключить VPN" else "Подключить VPN",
+                stateLabel = stateText,
+                onClick = { toggle() }
+            )
+            AnimatedContent(targetState = stateText, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "state") { s ->
+                Text(
+                    s, style = PamirType.headline, color = if (s == "Защищено") c.accentText else c.text,
+                    modifier = Modifier
+                        .clip(Radius.s)
+                        .clickable(role = Role.Button) { toggle() }
+                        .padding(horizontal = Gap.m, vertical = Gap.xs)
+                )
+            }
             if (running) {
-                SpeedCard()
-            } else if (whitelist && current?.isLte != true) {
-                WhitelistCard()
-            } else if (current?.isLte != true && servers.any { it.isLte && !it.isStub }) {
-                LteHint(onPick)
+                Timer()
+            } else {
+                Text(
+                    if (connecting) "Устанавливаем защищённое соединение" else "Нажмите, чтобы защитить соединение",
+                    style = PamirType.support, color = c.textDim
+                )
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Gap.xl))
+            if (current != null) ServerCard(current, onPick)
+            AnimatedVisibility(visible = running, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+                SpeedCard()
+            }
+            if (!running) {
+                if (whitelist && current?.isLte != true) {
+                    Spacer(Modifier.height(Gap.m))
+                    WhitelistCard()
+                } else if (current?.isLte != true && servers.any { it.isLte && !it.isStub }) {
+                    Spacer(Modifier.height(Gap.m))
+                    Banner(PamirIcons.Signal, "Мобильный интернет не работает? Есть LTE Обход", "Выбрать", Tone.ACCENT, onPick)
+                }
+            }
+            Spacer(Modifier.height(Gap.l))
         }
     }
 
     @Composable
-    private fun StatusPill() {
-        val d = daysLeft
-        val warn = d != null && d <= 3
-        val amber = Color(0xFFF0B46A)
+    private fun HomeHeader() {
+        val c = Pamir.colors
         Row(
             Modifier
-                .padding(horizontal = 18.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(if (warn) Color(0xFF2A1F12) else Surface1)
-                .border(1.dp, if (warn) amber.copy(alpha = 0.45f) else Line, RoundedCornerShape(16.dp))
-                .clickable { openRenew() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
+                .padding(vertical = Gap.s),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(if (warn) amber else Mint))
-            Spacer(Modifier.width(10.dp))
-            val txt = when {
-                d == null -> "Подписка активна"
-                d <= 0 -> "Подписка заканчивается сегодня"
-                d == 1 -> "Подписка закончится завтра"
-                warn -> "Осталось ${d} ${plural(d, "день", "дня", "дней")} — продлите"
-                else -> "Активна · ещё ${d} ${plural(d, "день", "дня", "дней")}"
+            Image(painterResource(R.drawable.pamir_logo), contentDescription = null, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(Gap.s))
+            Text("Pamir VPN", style = PamirType.subtitle, color = c.text, modifier = Modifier.weight(1f))
+            val d = daysLeft
+            val tone = if (d != null && d <= 3) Tone.WARN else Tone.ACCENT
+            val left = when {
+                d == null -> "Подписка"
+                d <= 0 -> "Сегодня"
+                else -> "$d ${plural(d, "день", "дня", "дней")}"
             }
-            Text(txt, color = if (warn) Color(0xFFF5D3A6) else TextDim, fontSize = 12.sp, fontWeight = if (warn) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Text("Продлить ›", color = if (warn) amber else Mint, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+            Row(
+                Modifier
+                    .heightIn(min = 40.dp)
+                    .clip(CircleShape)
+                    .background(tone.soft())
+                    .clickable(role = Role.Button) { openRenew() }
+                    .padding(horizontal = Gap.m),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(tone.color()))
+                Spacer(Modifier.width(Gap.s))
+                Text("$left · Продлить", style = PamirType.label, color = tone.color(), maxLines = 1)
+            }
+        }
+    }
+
+    /** At most one notice on the home screen, the most important first. */
+    @Composable
+    private fun HomeNotice() {
+        val d = daysLeft
+        when {
+            newVersion != null -> Banner(
+                PamirIcons.Download, "Доступна версия $newVersion",
+                if (updProgress >= 0) "Загрузка $updProgress%" else "Обновить", Tone.ACCENT, { installUpdate() },
+                Modifier.padding(top = Gap.xs)
+            )
+            d != null && d <= 3 -> Banner(
+                PamirIcons.Clock,
+                when {
+                    d <= 0 -> "Подписка заканчивается сегодня"
+                    d == 1 -> "Подписка закончится завтра"
+                    else -> "Подписка закончится через $d ${plural(d, "день", "дня", "дней")}"
+                },
+                "Продлить", Tone.WARN, { openRenew() }, Modifier.padding(top = Gap.xs)
+            )
         }
     }
 
     @Composable
     private fun StubCard() {
-        Column(
-            Modifier
-                .padding(18.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .background(Surface1)
-                .border(1.dp, Danger.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
-                .padding(18.dp)
+        NoteCard(
+            PamirIcons.Warning, "Нет доступа к серверам",
+            servers.joinToString("\n") { "${it.flag} ${it.name}".trim() }, Tone.DANGER
         ) {
-            Text("Нет доступа к серверам", color = TextMain, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
-            Spacer(Modifier.height(8.dp))
-            servers.forEach {
-                Text("${it.flag} ${it.name}".trim(), color = TextDim, fontSize = 13.sp, modifier = Modifier.padding(vertical = 2.dp))
-            }
-            Spacer(Modifier.height(14.dp))
-            PrimaryButton("Открыть бота") { openUrl(BOT_URL) }
-            Spacer(Modifier.height(8.dp))
-            SecondaryButton(if (updating) "Обновляем…" else "Проверить снова") { updateSubscription() }
-        }
-    }
-
-    @Composable
-    private fun PowerButton() {
-        val pulse = rememberInfiniteTransition(label = "pulse")
-        val a by pulse.animateFloat(0.25f, 0.75f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "a")
-        val ringAlpha = when {
-            connecting -> a
-            running -> 0.75f
-            else -> 0.10f
-        }
-        Box(
-            Modifier
-                .size(148.dp)
-                .clip(CircleShape)
-                .clickable { toggle() },
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(Modifier.fillMaxSize()) {
-                val r = size.minDimension / 2
-                if (running || connecting) {
-                    drawCircle(Brush.radialGradient(listOf(Mint.copy(alpha = 0.28f * ringAlpha + 0.05f), Color.Transparent), center, r), r)
-                }
-                val inner = r * 0.86f
-                drawCircle(
-                    Brush.radialGradient(
-                        if (running) listOf(Color(0xFF1D5A4D), Color(0xFF0D2E28)) else listOf(Color(0xFF1B2A3F), Color(0xFF101A28)),
-                        center = Offset(center.x, center.y - inner * 0.3f), radius = inner * 1.2f
-                    ),
-                    inner
-                )
-                drawCircle(
-                    if (running || connecting) Mint.copy(alpha = ringAlpha) else Color.White.copy(alpha = 0.08f),
-                    inner, style = Stroke(width = 2.dp.toPx())
-                )
-                val ic = if (running) Mint else Color(0xFF9FB0C3)
-                val ir = inner * 0.30f
-                drawArc(
-                    ic, startAngle = -60f, sweepAngle = 300f, useCenter = false,
-                    topLeft = Offset(center.x - ir, center.y - ir + ir * 0.12f),
-                    size = androidx.compose.ui.geometry.Size(ir * 2, ir * 2),
-                    style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
-                )
-                drawLine(ic, Offset(center.x, center.y - ir * 1.15f), Offset(center.x, center.y - ir * 0.05f), strokeWidth = 5.dp.toPx(), cap = StrokeCap.Round)
-            }
+            PrimaryButton("Открыть бота", icon = PamirIcons.Telegram) { openUrl(BOT_URL) }
+            Spacer(Modifier.height(Gap.s))
+            SecondaryButton(if (updating) "Обновляем…" else "Проверить снова", icon = PamirIcons.Refresh, loading = updating) { updateSubscription() }
         }
     }
 
@@ -1400,335 +1565,345 @@ class PamirActivity : AppCompatActivity() {
         }
         val sec = if (connectedAt > 0) ((now - connectedAt) / 1000).coerceAtLeast(0) else 0
         val t = String.format("%02d:%02d:%02d", sec / 3600, (sec % 3600) / 60, sec % 60)
-        Text(if (ipInfo.isNotEmpty()) "$t · IP $ipInfo" else t, color = TextDim, fontSize = 12.sp)
+        Text(
+            "В защите $t", style = PamirType.support.copy(fontFeatureSettings = "tnum"), color = Pamir.colors.textDim,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.clearAndSetSemantics { contentDescription = "Подключено $t" }
+        )
+    }
+
+    @Composable
+    private fun FlagBadge(flag: String, size: Dp = 44.dp) {
+        Box(
+            Modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(Pamir.colors.surfaceHigh),
+            contentAlignment = Alignment.Center
+        ) { Text(flag, fontSize = (size.value * 0.5f).sp) }
     }
 
     @Composable
     private fun ServerCard(s: PServer, onPick: () -> Unit) {
-        Row(
-            Modifier
-                .padding(horizontal = 18.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(18.dp))
-                .clickable { onPick() }
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(s.flag, fontSize = 20.sp)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(s.name, color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val p = pings[s.guid]
-                val sub = when {
-                    MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false) -> "Выбран автоматически"
-                    s.isLte -> "Для мобильного интернета"
-                    p != null && p > 0 -> "$p мс"
-                    else -> "Нажмите, чтобы сменить"
+        val c = Pamir.colors
+        val auto = MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false)
+        val p = pings[s.guid]
+        PamirCard(onClick = onPick, contentPadding = 14.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FlagBadge(s.flag)
+                Spacer(Modifier.width(Gap.m))
+                Column(Modifier.weight(1f)) {
+                    Text(s.name, style = PamirType.body.copy(fontWeight = FontWeight.Bold), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val sub = when {
+                        auto -> "Выбран автоматически"
+                        s.isLte -> "Для мобильного интернета"
+                        p != null && p > 0 -> "Отклик $p мс"
+                        else -> "Нажмите, чтобы сменить"
+                    }
+                    Text(sub, style = PamirType.support, color = c.textDim, maxLines = 1)
                 }
-                Text(sub, color = TextDim, fontSize = 11.sp, maxLines = 1)
+                if (!s.isLte) {
+                    PingBars(pingQuality(p))
+                    Spacer(Modifier.width(Gap.m))
+                }
+                Chip("Сменить", Tone.ACCENT)
             }
-            Text("Сменить ›", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-
-    @Composable
-    private fun UpdateCard() {
-        Row(
-            Modifier
-                .padding(start = 18.dp, end = 18.dp, top = 8.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(Mint.copy(alpha = 0.08f))
-                .border(1.dp, Mint.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
-                .clickable { installUpdate() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("⬆", color = Mint, fontSize = 13.sp)
-            Spacer(Modifier.width(8.dp))
-            Text("Доступна версия $newVersion", color = TextMain, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text(if (updProgress >= 0) "Загрузка $updProgress%" else "Обновить ›", color = Mint, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
         }
     }
 
     @Composable
     private fun WhitelistCard() {
-        Column(
-            Modifier
-                .padding(horizontal = 18.dp, vertical = 10.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFF2A1D14))
-                .border(1.dp, Color(0x55F0B46A), RoundedCornerShape(16.dp))
-                .padding(12.dp)
+        NoteCard(
+            PamirIcons.Signal, "Похоже, включены «белые списки»",
+            "Обычные серверы сейчас недоступны. LTE Обход работает и в этом режиме.", Tone.WARN
         ) {
-            Text("📶  Похоже, включены «белые списки»", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(3.dp))
-            Text("Обычные серверы сейчас недоступны. LTE Обход работает и в этом режиме.", color = TextDim, fontSize = 11.5.sp)
-            Spacer(Modifier.height(9.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Brush.linearGradient(listOf(Mint, MintDeep)))
-                    .clickable {
-                        lteServer()?.let { useLte(it); if (!running) toggle() else LauncherManager.restartService(this@PamirActivity) }
-                    },
-                contentAlignment = Alignment.Center
-            ) { Text("Подключить LTE Обход", color = Color(0xFF05241D), fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
-        }
-    }
-
-    @Composable
-    private fun LteHint(onPick: () -> Unit) {
-        Row(
-            Modifier
-                .padding(horizontal = 18.dp, vertical = 10.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Mint.copy(alpha = 0.05f))
-                .border(1.dp, Mint.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-                .clickable { onPick() }
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("📶  Не работает мобильный интернет?", color = Color(0xFFBFEEE0), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Text("LTE Обход ›", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            PrimaryButton("Подключить LTE Обход", icon = PamirIcons.Bolt) {
+                lteServer()?.let { useLte(it); if (!running) toggle() else LauncherManager.restartService(this@PamirActivity) }
+            }
         }
     }
 
     @Composable
     private fun SpeedCard() {
+        val c = Pamir.colors
         LaunchedEffect(running) { if (running) speedLoop() }
-        Column(
-            Modifier
-                .padding(horizontal = 18.dp, vertical = 10.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(18.dp))
-        ) {
-            Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                SpeedValue("↓", "Загрузка", rxSpeed, Mint, Modifier.weight(1f))
-                Box(Modifier.width(1.dp).height(30.dp).background(Line))
-                Spacer(Modifier.width(14.dp))
-                SpeedValue("↑", "Отдача", txSpeed, Color(0xFF7FB8FF), Modifier.weight(1f))
-            }
-            Sparkline(
-                speedHist,
-                Modifier
-                    .fillMaxWidth()
-                    .height(34.dp)
-                    .padding(top = 6.dp)
-            )
+        PamirCard(Modifier.padding(top = Gap.m), contentPadding = 0.dp) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color(0x0DFFFFFF))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .padding(start = Gap.l, end = Gap.l, top = Gap.l),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("За сессию  ↓ ${fmtBytes(rxTotal)}  ↑ ${fmtBytes(txTotal)}", color = TextDim, fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1)
-                Text(
-                    if (MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) "РФ напрямую" else "Всё через VPN",
-                    color = TextDim, fontSize = 11.sp, maxLines = 1
-                )
+                SpeedValue(PamirIcons.ArrowDown, "Загрузка", rxSpeed, c.accentText, Modifier.weight(1f))
+                SpeedValue(PamirIcons.ArrowUp, "Отдача", txSpeed, c.info, Modifier.weight(1f))
             }
-        }
-    }
-
-    @Composable
-    private fun SpeedValue(arrow: String, label: String, bps: Long, color: Color, modifier: Modifier) {
-        Column(modifier) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(arrow, color = color, fontSize = 14.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.width(5.dp))
-                Text(fmtBytes(bps) + "/с", color = TextMain, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1)
-            }
-            Text(label, color = TextDim, fontSize = 10.5.sp)
-        }
-    }
-
-    @Composable
-    private fun Sparkline(values: List<Float>, modifier: Modifier) {
-        Canvas(modifier) {
-            if (values.size < 2) return@Canvas
-            val max = (values.maxOrNull() ?: 0f).coerceAtLeast(16f * 1024f)
-            val n = 40
-            val step = size.width / (n - 1)
-            val x0 = size.width - step * (values.size - 1)
-            val pts = values.mapIndexed { i, v ->
-                Offset(x0 + step * i, size.height - 2.dp.toPx() - (v / max) * (size.height - 6.dp.toPx()))
-            }
-            val line = Path().apply { moveTo(pts[0].x, pts[0].y); pts.drop(1).forEach { lineTo(it.x, it.y) } }
-            val fill = Path().apply {
-                addPath(line)
-                lineTo(pts.last().x, size.height); lineTo(pts[0].x, size.height); close()
-            }
-            drawPath(fill, Brush.verticalGradient(listOf(Mint.copy(alpha = 0.22f), Color.Transparent)))
-            drawPath(line, Mint, style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round))
-        }
-    }
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    private fun ServerSheet(onDismiss: () -> Unit) {
-        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        LaunchedEffect(Unit) { if (pings.isEmpty()) runPing() }
-        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
+            Sparkline(
+                speedHist, if (c.isDark) c.accent else c.accentDeep,
+                Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .padding(top = Gap.s)
+            )
             Column(
                 Modifier
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(rememberScrollState())
-                    .navigationBarsPadding()
+                    .fillMaxWidth()
+                    .background(c.surfaceHigh.copy(alpha = if (c.isDark) 0.55f else 0.7f))
+                    .padding(horizontal = Gap.l, vertical = Gap.m)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Выбор сервера", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+                    Icon(PamirIcons.Globe, contentDescription = null, modifier = Modifier.size(16.dp), tint = c.textDim)
+                    Spacer(Modifier.width(Gap.s))
                     Text(
-                        if (pingBusy) "Проверяем…" else "↻ Проверить",
-                        color = Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable { lifecycleScope.launch { runPing() } }.padding(8.dp)
+                        if (ipInfo.isNotEmpty()) "IP $ipInfo" else "Определяем IP…",
+                        style = PamirType.support, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(Modifier.height(8.dp))
-                SheetItem("⚡", "Лучший автоматически", "авто", MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false), false) {
-                    pickBest(); onDismiss()
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "За сессию ↓ ${fmtBytes(rxTotal)}  ↑ ${fmtBytes(txTotal)}",
+                        style = PamirType.caption, color = c.textDim, maxLines = 1, modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        if (MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) "РФ напрямую" else "Всё через VPN",
+                        style = PamirType.caption.copy(fontWeight = FontWeight.SemiBold), color = c.textDim, maxLines = 1
+                    )
                 }
-                val normal = servers.filter { !it.isLte && !it.isStub }
-                val lte = servers.filter { it.isLte && !it.isStub }
-                if (normal.isNotEmpty()) GroupLabel("Серверы")
-                normal.forEach { s ->
-                    SheetItem(s.flag, s.name, pingText(s), s.guid == selected && !MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false), true) {
-                        selectServer(s.guid); onDismiss()
-                    }
-                }
-                if (lte.isNotEmpty()) GroupLabel("Для мобильного интернета с ограничениями")
-                lte.forEach { s ->
-                    SheetItem(s.flag, s.name, "—", s.guid == selected, false) { selectServer(s.guid); onDismiss() }
-                }
-                Spacer(Modifier.height(20.dp))
             }
+        }
+    }
+
+    @Composable
+    private fun SpeedValue(icon: ImageVector, label: String, bps: Long, color: Color, modifier: Modifier) {
+        val c = Pamir.colors
+        Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(icon, tint = color, background = color.copy(alpha = 0.14f), size = 36.dp, iconSize = 18.dp, shape = CircleShape)
+            Spacer(Modifier.width(Gap.s + 2.dp))
+            Column {
+                Text(
+                    fmtBytes(bps) + "/с", style = PamirType.number.copy(fontSize = 19.sp, fontFeatureSettings = "tnum"),
+                    color = c.text, maxLines = 1
+                )
+                Text(label, style = PamirType.caption, color = c.textDim)
+            }
+        }
+    }
+
+    // ---------- server picker ----------
+
+    @Composable
+    private fun ServerSheet(onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        LaunchedEffect(Unit) { if (realPinged.isEmpty()) runPing() }
+        val auto = MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false)
+        PamirSheet(
+            onDismiss = onDismiss,
+            title = "Выбор сервера",
+            subtitle = if (pingBusy) "Проверяем скорость серверов…" else "Чем больше делений, тем быстрее отклик",
+            headerAction = {
+                if (pingBusy) {
+                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = c.accentText, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                    }
+                } else {
+                    IconAction(PamirIcons.Refresh, "Проверить серверы", { lifecycleScope.launch { runPing() } }, tint = c.accentText)
+                }
+            }
+        ) {
+            SheetRow(
+                selected = auto,
+                leading = { IconBadge(PamirIcons.Bolt, size = 40.dp) },
+                title = "Лучший автоматически",
+                detail = "Подключим самый быстрый сервер",
+                onClick = { pickBest(); onDismiss() }
+            )
+            // Reachable servers by response time; unknown and silent ones keep subscription order at the end.
+            val normal = servers.filter { !it.isLte && !it.isStub }.sortedBy { s ->
+                val p = pings[s.guid]
+                when {
+                    p == null -> Int.MAX_VALUE - 1
+                    p <= 0 -> Int.MAX_VALUE
+                    else -> p
+                }
+            }
+            val favs = normal.filter { it.name in favorites }
+            val rest = normal.filter { it.name !in favorites }
+            val lte = servers.filter { it.isLte && !it.isStub }
+            if (favs.isNotEmpty()) {
+                SectionHeader("Избранное")
+                favs.forEach { s -> ServerItem(s, s.guid == selected && !auto, onDismiss) }
+            }
+            if (rest.isNotEmpty()) {
+                SectionHeader(if (favs.isEmpty()) "Серверы" else "Остальные")
+                rest.forEach { s -> ServerItem(s, s.guid == selected && !auto, onDismiss) }
+            }
+            if (lte.isNotEmpty()) {
+                SectionHeader("Для мобильного интернета с ограничениями")
+                lte.forEach { s -> ServerItem(s, s.guid == selected, onDismiss) }
+            }
+        }
+    }
+
+    @Composable
+    private fun ServerItem(s: PServer, sel: Boolean, onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        val fav = s.name in favorites
+        val p = pings[s.guid]
+        val q = pingQuality(p)
+        SheetRow(
+            selected = sel,
+            leading = { FlagBadge(s.flag, 40.dp) },
+            title = s.name,
+            detail = if (s.isLte) "Для «белых списков»" else pingText(s).ifEmpty { "Нажмите, чтобы подключить" },
+            detailColor = if (s.isLte || p == null) c.textDim else q.color(),
+            onClick = { selectServer(s.guid); onDismiss() }
+        ) {
+            if (!s.isLte) PingBars(q)
+            IconAction(
+                if (fav) PamirIcons.Star else PamirIcons.StarOutline,
+                if (fav) "Убрать ${s.name} из избранного" else "Добавить ${s.name} в избранное",
+                { toggleFavorite(s.name) },
+                tint = if (fav) c.warn else c.textDim
+            )
         }
     }
 
     private fun pingText(s: PServer): String {
-        val p = pings[s.guid] ?: return if (pingBusy) "…" else ""
+        val p = pings[s.guid] ?: return if (pingBusy) "Проверяем…" else ""
         return if (p > 0) "$p мс" else "нет связи"
     }
 
     @Composable
-    private fun GroupLabel(text: String) {
-        Text(
-            text.uppercase(), color = TextDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
-            letterSpacing = 1.sp, modifier = Modifier.padding(start = 4.dp, top = 14.dp, bottom = 7.dp)
-        )
-    }
-
-    @Composable
-    private fun SheetItem(flag: String, name: String, right: String, sel: Boolean, pingColored: Boolean, onClick: () -> Unit) {
+    private fun SheetRow(
+        selected: Boolean,
+        leading: @Composable () -> Unit,
+        title: String,
+        detail: String?,
+        onClick: () -> Unit,
+        detailColor: Color = Pamir.colors.textDim,
+        trailing: @Composable RowScope.() -> Unit = {},
+    ) {
+        val c = Pamir.colors
+        val border by animateColorAsState(if (selected) c.accentText.copy(alpha = 0.7f) else c.line, tween(200), label = "rowBorder")
         Row(
             Modifier
-                .padding(vertical = 3.dp)
+                .padding(vertical = Gap.xs)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(13.dp))
-                .background(if (sel) Color(0xFF0F2A29) else Surface1)
-                .border(1.dp, if (sel) Mint.copy(alpha = 0.6f) else Line, RoundedCornerShape(13.dp))
-                .clickable { onClick() }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
+                .heightIn(min = 64.dp)
+                .clip(Radius.m)
+                .background(c.surface)
+                .background(if (selected) c.accentSoft else Color.Transparent)
+                .border(1.dp, border, Radius.m)
+                .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+                .padding(start = Gap.m, end = Gap.m, top = Gap.s, bottom = Gap.s),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(flag, fontSize = 18.sp)
-            Spacer(Modifier.width(12.dp))
-            Text(name, color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val rc = when {
-                !pingColored -> TextDim
-                right == "нет связи" -> Danger
-                right.endsWith("мс") -> Mint
-                else -> TextDim
+            leading()
+            Spacer(Modifier.width(Gap.m))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = PamirType.body, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (!detail.isNullOrEmpty()) Text(detail, style = PamirType.support, color = detailColor, maxLines = 1)
             }
-            Text(right, color = rc, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(10.dp))
+            trailing()
+            Spacer(Modifier.width(Gap.xs))
             Box(
                 Modifier
-                    .size(16.dp)
+                    .size(22.dp)
                     .clip(CircleShape)
-                    .border(2.dp, if (sel) Mint else Color(0xFF3A4A5E), CircleShape)
-                    .padding(4.dp)
+                    .border(2.dp, if (selected) c.accentText else c.track, CircleShape)
+                    .padding(5.dp)
                     .clip(CircleShape)
-                    .background(if (sel) Mint else Color.Transparent)
+                    .background(if (selected) c.accentText else Color.Transparent)
             )
         }
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
+    // ---------- renewal ----------
+
     @Composable
     private fun RenewSheet(onDismiss: () -> Unit) {
-        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
-            Column(
-                Modifier
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(rememberScrollState())
-                    .navigationBarsPadding()
-            ) {
-                Text(if (renewKeys.isEmpty() && loggedIn && !renewLoading) "Оформить подписку" else "Продление подписки",
-                    color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.height(10.dp))
-                when {
-                    payState == "paid" -> NoteCard("✅", "Оплата прошла", if (payBuy) "Подписка оформлена и уже подключается." else "Новый срок применён — VPN работает без перерыва.", Mint) {
-                        PrimaryButton("Отлично") { payState = null; onDismiss() }
-                    }
-                    payState == "waiting" -> NoteCard("⏳", "Ожидаем оплату", "Оплатите в открывшемся окне и вернитесь сюда — срок обновится сам.", Color(0xFFF0B46A)) {
-                        SecondaryButton("Открыть оплату ещё раз") { openUrl(payUrl) }
-                        Spacer(Modifier.height(6.dp))
-                        Text("Отменить", color = TextDim, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).clickable { payState = null; payJob?.cancel() }.padding(8.dp))
-                    }
-                    payState == "failed" -> NoteCard("⚠", "Оплата не прошла", "Деньги не списаны. Попробуйте ещё раз или выберите другой способ.", Danger) {
-                        SecondaryButton("Выбрать тариф") { payState = null }
-                    }
-                    !loggedIn -> NoteCard("✈", "Войдите через Telegram", "Так вы сможете продлевать подписку прямо здесь — в пару касаний, через СБП, карту или с баланса.", Mint) {
-                        if (loginBusy) {
-                            Text("Подтвердите вход в Telegram и вернитесь сюда", color = TextDim, fontSize = 12.sp)
-                            Spacer(Modifier.height(6.dp))
-                            SecondaryButton("Отменить") { cancelLogin() }
-                        } else PrimaryButton("Войти через Telegram") { loginTelegram() }
-                        Spacer(Modifier.height(8.dp))
-                        SecondaryButton("Войти по почте и паролю") { emailLoginOpen = true }
-                        Spacer(Modifier.height(4.dp))
-                        Text("Продлить в личном кабинете", color = TextDim, fontSize = 12.sp,
-                            modifier = Modifier.align(Alignment.CenterHorizontally).clickable { openUrl(CABINET_URL) }.padding(8.dp))
-                    }
-                    renewLoading -> Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Mint, modifier = Modifier.size(26.dp))
-                    }
-                    else -> RenewContent()
+        PamirSheet(
+            onDismiss = onDismiss,
+            title = if (renewKeys.isEmpty() && loggedIn && !renewLoading) "Оформить подписку" else "Продление подписки"
+        ) {
+            when {
+                payState == "paid" -> NoteCard(
+                    PamirIcons.Check, "Оплата прошла",
+                    if (payBuy) "Подписка оформлена и уже подключается." else "Новый срок применён — VPN работает без перерыва.", Tone.ACCENT
+                ) {
+                    PrimaryButton("Отлично") { payState = null; onDismiss() }
                 }
-                Spacer(Modifier.height(18.dp))
+                payState == "waiting" -> NoteCard(
+                    PamirIcons.Clock, "Ожидаем оплату",
+                    "Оплатите в открывшемся окне и вернитесь сюда — срок обновится сам.", Tone.WARN
+                ) {
+                    SecondaryButton("Открыть оплату ещё раз") { openUrl(payUrl) }
+                    TextAction("Отменить", Modifier.align(Alignment.CenterHorizontally)) { payState = null; payJob?.cancel() }
+                }
+                payState == "failed" -> NoteCard(
+                    PamirIcons.Warning, "Оплата не прошла",
+                    "Деньги не списаны. Попробуйте ещё раз или выберите другой способ.", Tone.DANGER
+                ) {
+                    SecondaryButton("Выбрать тариф") { payState = null }
+                }
+                !loggedIn -> NoteCard(
+                    PamirIcons.Telegram, "Войдите через Telegram",
+                    "Так вы сможете продлевать подписку прямо здесь — в пару касаний, через СБП, карту или с баланса.", Tone.ACCENT
+                ) {
+                    LoginButtons()
+                    TextAction("Продлить в личном кабинете", Modifier.align(Alignment.CenterHorizontally)) { openUrl(CABINET_URL) }
+                }
+                renewLoading -> {
+                    SkeletonCard("Загружаем тарифы")
+                    Spacer(Modifier.height(Gap.m))
+                    SkeletonCard("Загружаем тарифы")
+                }
+                else -> RenewContent()
             }
         }
     }
 
+    /** Telegram login (or its progress) plus the e-mail alternative. */
+    @Composable
+    private fun LoginButtons() {
+        if (loginBusy) {
+            Text("Подтвердите вход в Telegram и вернитесь сюда", style = PamirType.support, color = Pamir.colors.textDim)
+            Spacer(Modifier.height(Gap.s))
+            SecondaryButton("Отменить") { cancelLogin() }
+        } else {
+            PrimaryButton("Войти через Telegram", icon = PamirIcons.Telegram) { loginTelegram() }
+        }
+        Spacer(Modifier.height(Gap.s))
+        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailLoginOpen = true }
+    }
+
     @Composable
     private fun ColumnScope.RenewContent() {
+        val c = Pamir.colors
         if (renewKeys.size > 1) {
-            GroupLabel("Ключ")
+            SectionHeader("Ключ", Modifier.padding(top = 0.dp))
             renewKeys.forEach { k ->
                 val id = k.optInt("id")
-                SheetItem("🔑", k.optString("display_name").ifBlank { "Ключ #$id" }, keyExpiry(k), id == renewKeyId, false) { renewKeyId = id }
+                SheetRow(
+                    selected = id == renewKeyId,
+                    leading = { IconBadge(PamirIcons.Key, size = 40.dp) },
+                    title = k.optString("display_name").ifBlank { "Ключ #$id" },
+                    detail = keyExpiry(k),
+                    onClick = { renewKeyId = id }
+                )
             }
         } else if (renewKeys.size == 1) {
-            Text("${renewKeys[0].optString("display_name").ifBlank { "Ваш ключ" }} · ${keyExpiry(renewKeys[0])}", color = TextDim, fontSize = 12.sp)
+            Text(
+                "${renewKeys[0].optString("display_name").ifBlank { "Ваш ключ" }} · ${keyExpiry(renewKeys[0])}",
+                style = PamirType.support, color = c.textDim
+            )
         }
         val key = renewKeys.firstOrNull { it.optInt("id") == renewKeyId }
         val group = key?.optInt("tariff_group_id", 0) ?: 0
         val list = tariffs.filter { group == 0 || it.optInt("group_id", 0) == 0 || it.optInt("group_id") == group }.ifEmpty { tariffs }
-        GroupLabel("Тариф")
+        SectionHeader("Тариф")
         if (list.isEmpty()) {
-            Text("Тарифы сейчас недоступны. Попробуйте позже или продлите в кабинете.", color = TextDim, fontSize = 12.sp)
-            Spacer(Modifier.height(8.dp))
+            Text("Тарифы сейчас недоступны. Попробуйте позже или продлите в кабинете.", style = PamirType.support, color = c.textDim)
+            Spacer(Modifier.height(Gap.m))
             SecondaryButton("Открыть кабинет") { openUrl(CABINET_URL) }
             return
         }
@@ -1736,53 +1911,27 @@ class PamirActivity : AppCompatActivity() {
             val id = t.optInt("id")
             val price = t.optLong("price_minor")
             val days = t.optInt("duration_days")
-            Column(
-                Modifier
-                    .padding(vertical = 4.dp)
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(15.dp))
-                    .background(Surface1)
-                    .border(1.dp, Line, RoundedCornerShape(15.dp))
-                    .padding(12.dp)
-            ) {
+            PamirCard(Modifier.padding(vertical = Gap.xs), contentPadding = 14.dp) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(t.optString("name"), color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        if (days > 0) Text("$days ${plural(days, "день", "дня", "дней")}", color = TextDim, fontSize = 11.sp)
+                        Text(t.optString("name"), style = PamirType.body.copy(fontWeight = FontWeight.Bold), color = c.text)
+                        if (days > 0) Text("$days ${plural(days, "день", "дня", "дней")}", style = PamirType.support, color = c.textDim)
                     }
-                    Text(rub(price), color = Mint, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
+                    Text(rub(price), style = PamirType.number.copy(fontSize = 20.sp), color = c.accentText)
                 }
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val busyQr = payBusy == "$id:yookassa_qr"
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Brush.linearGradient(listOf(Mint, MintDeep)))
-                            .clickable { pay(id, "yookassa_qr") },
-                        contentAlignment = Alignment.Center
-                    ) { Text(if (busyQr) "Создаём…" else "СБП / Карта", color = Color(0xFF05241D), fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
+                Spacer(Modifier.height(Gap.m))
+                Row(horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
+                    PrimaryButton("СБП / Карта", Modifier.weight(1f), loading = payBusy == "$id:yookassa_qr") { pay(id, "yookassa_qr") }
                     val bal = balanceMinor
                     if (bal != null && bal >= price) {
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Surface2)
-                                .border(1.dp, Line, RoundedCornerShape(12.dp))
-                                .clickable { pay(id, "balance") },
-                            contentAlignment = Alignment.Center
-                        ) { Text(if (payBusy == "$id:balance") "Оплачиваем…" else "С баланса", color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                        SecondaryButton("С баланса", Modifier.weight(1f), loading = payBusy == "$id:balance") { pay(id, "balance") }
                     }
                 }
             }
         }
         balanceMinor?.let {
-            Spacer(Modifier.height(6.dp))
-            Text("На балансе: ${rub(it)}", color = TextDim, fontSize = 11.5.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+            Spacer(Modifier.height(Gap.s))
+            Text("На балансе: ${rub(it)}", style = PamirType.support, color = c.textDim, modifier = Modifier.align(Alignment.CenterHorizontally))
         }
     }
 
@@ -1794,449 +1943,419 @@ class PamirActivity : AppCompatActivity() {
         return if (date.size == 3) "до ${date[2]}.${date[1]}.${date[0]}" else "активна"
     }
 
-    @Composable
-    private fun NoteCard(icon: String, title: String, text: String, accent: Color, actions: @Composable ColumnScope.() -> Unit) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Surface1)
-                .border(1.dp, accent.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
-                .padding(16.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(accent.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                    Text(icon, color = accent, fontSize = 15.sp)
-                }
-                Spacer(Modifier.width(12.dp))
-                Text(title, color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(text, color = TextDim, fontSize = 12.5.sp, lineHeight = 17.sp)
-            Spacer(Modifier.height(14.dp))
-            actions()
-        }
-    }
+    // ---------- report ----------
 
-    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun ReportSheet(onDismiss: () -> Unit) {
-        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val c = Pamir.colors
         var text by remember { mutableStateOf("") }
         var withLog by remember { mutableStateOf(true) }
-        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
-            Column(
-                Modifier
-                    .padding(horizontal = 16.dp)
-                    .navigationBarsPadding()
-                    .padding(bottom = 18.dp)
-            ) {
-                Text("Сообщить о проблеме", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.height(4.dp))
-                Text("Опишите, что случилось: что нажимали, какой сервер, мобильный интернет или Wi-Fi.", color = TextDim, fontSize = 12.sp, lineHeight = 16.sp)
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = text, onValueChange = { if (it.length <= 1500) text = it },
-                    modifier = Modifier.fillMaxWidth().height(130.dp),
-                    placeholder = { Text("Например: не подключается Испания 1 на мобильном интернете", color = TextDim.copy(alpha = 0.7f), fontSize = 13.sp) },
-                    textStyle = androidx.compose.ui.text.TextStyle(color = TextMain, fontSize = 14.sp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647),
-                        cursorColor = Mint, focusedContainerColor = Surface1, unfocusedContainerColor = Surface1
-                    )
-                )
-                Spacer(Modifier.height(4.dp))
-                ToggleRow("📎", "Приложить журнал", "Технические записи — без паролей и ссылок", withLog) { withLog = it }
-                Spacer(Modifier.height(8.dp))
-                if (reportBusy) Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(24.dp))
-                } else PrimaryButton("Отправить") {
-                    if (text.isBlank()) toast("Опишите проблему хотя бы парой слов") else sendReport(text.trim(), withLog)
-                }
-                Spacer(Modifier.height(6.dp))
-                Text("Если вы вошли через Telegram, мы сможем написать вам", color = TextDim, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+        PamirSheet(
+            onDismiss = onDismiss,
+            title = "Сообщить о проблеме",
+            subtitle = "Опишите, что случилось: что нажимали, какой сервер, мобильный интернет или Wi-Fi."
+        ) {
+            OutlinedTextField(
+                value = text, onValueChange = { if (it.length <= 1500) text = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 140.dp),
+                placeholder = { Text("Например: не подключается Испания 1 на мобильном интернете", style = PamirType.support) },
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                shape = Radius.m,
+                colors = pamirFieldColors()
+            )
+            Spacer(Modifier.height(Gap.m))
+            RowGroup {
+                ToggleRow(PamirIcons.Attach, "Приложить журнал", "Технические записи — без паролей и ссылок", withLog) { withLog = it }
             }
+            Spacer(Modifier.height(Gap.l))
+            PrimaryButton("Отправить", loading = reportBusy) {
+                if (text.isBlank()) toast("Опишите проблему хотя бы парой слов") else sendReport(text.trim(), withLog)
+            }
+            Spacer(Modifier.height(Gap.s))
+            Text(
+                "Если вы вошли через Telegram, мы сможем написать вам", style = PamirType.caption, color = c.textDim,
+                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 
-
-    @Composable
-    private fun CabCard(content: @Composable ColumnScope.() -> Unit) {
-        Column(
-            Modifier
-                .padding(horizontal = 16.dp, vertical = 5.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(18.dp))
-                .padding(14.dp),
-            content = content
-        )
-    }
+    // ---------- cabinet ----------
 
     @Composable
     private fun CabinetScreen() {
+        val c = Pamir.colors
         Column(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 16.dp)
+                .padding(horizontal = Gap.l)
+                .padding(bottom = Gap.l)
         ) {
-            Text("Кабинет", color = TextMain, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 4.dp))
+            ScreenTitle("Кабинет")
+            Spacer(Modifier.height(Gap.m))
             if (!loggedIn) {
-                CabCard {
-                    Text("Войдите в аккаунт", color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Подписка, баланс, устройства, платежи и поддержка — всё здесь, без перехода на сайт.", color = TextDim, fontSize = 12.sp, lineHeight = 17.sp)
-                    Spacer(Modifier.height(12.dp))
-                    if (loginBusy) {
-                        Text("Подтвердите вход в Telegram и вернитесь сюда", color = TextDim, fontSize = 12.sp)
-                        Spacer(Modifier.height(6.dp))
-                        SecondaryButton("Отменить") { cancelLogin() }
-                    } else PrimaryButton("✈  Войти через Telegram") { loginTelegram() }
-                    Spacer(Modifier.height(8.dp))
-                    SecondaryButton("Войти по почте и паролю") { emailLoginOpen = true }
-                }
+                NoteCard(
+                    PamirIcons.Person, "Войдите в аккаунт",
+                    "Подписка, баланс, устройства, платежи и поддержка — всё здесь, без перехода на сайт.", Tone.ACCENT
+                ) { LoginButtons() }
                 return@Column
             }
-            // balance
-            CabCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("БАЛАНС", color = TextDim, fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp)
-                        Text(balanceMinor?.let { rub(it) } ?: "—", color = TextMain, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-                    }
-                    Box(
-                        Modifier
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Brush.linearGradient(listOf(Mint, MintDeep)))
-                            .clickable { cabTopupOpen = true }
-                            .padding(horizontal = 16.dp),
-                        contentAlignment = Alignment.Center
-                    ) { Text("Пополнить", color = Color(0xFF05241D), fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
-                }
-            }
+            BalanceCard()
             if (cabLoading && !cabLoaded) {
-                Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(26.dp))
-                }
+                Spacer(Modifier.height(Gap.m))
+                SkeletonCard("Загружаем кабинет")
+                Spacer(Modifier.height(Gap.m))
+                SkeletonCard("Загружаем кабинет")
+                return@Column
             }
-            // subscriptions
-            Section("Подписка")
+            SectionHeader("Подписка")
             if (renewKeys.isEmpty() && cabLoaded) {
-                CabCard {
-                    Text("Подписки пока нет", color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Выберите тариф — подключится за минуту.", color = TextDim, fontSize = 12.sp)
-                    Spacer(Modifier.height(10.dp))
+                NoteCard(PamirIcons.Key, "Подписки пока нет", "Выберите тариф — подключится за минуту.", Tone.ACCENT) {
                     PrimaryButton("Выбрать тариф") { openRenew() }
                 }
             }
-            renewKeys.forEach { k ->
-                val id = k.optInt("id")
-                val active = k.optBoolean("is_active")
-                val left = if (active) daysUntil(k.optString("expires_at").takeIf { it != "null" }) else null
-                val used = k.optLong("traffic_used")
-                val limit = k.optLong("traffic_limit")
-                CabCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(k.optString("display_name").ifBlank { "Ключ #$id" }, color = TextMain, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
-                            val tn = k.optString("tariff_name").takeIf { it.isNotBlank() && it != "null" }
-                            if (tn != null) Text(tn, color = TextDim, fontSize = 11.5.sp)
-                        }
-                        val (txt, col) = when {
-                            !active -> "Закончилась" to Danger
-                            left != null && left <= 3 -> "Осталось ${maxOf(left, 0)} ${plural(maxOf(left, 0), "день", "дня", "дней")}" to Color(0xFFF0B46A)
-                            else -> "Активна" to Mint
-                        }
-                        Text(txt, color = col, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(col.copy(alpha = 0.12f)).padding(horizontal = 9.dp, vertical = 4.dp))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(keyExpiry(k).replaceFirstChar { it.uppercase() }, color = TextDim, fontSize = 12.sp)
-                    if (limit > 0) {
-                        Spacer(Modifier.height(8.dp))
-                        val frac = (used.toFloat() / limit.toFloat()).coerceIn(0f, 1f)
-                        Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFF1E2B3C))) {
-                            Box(Modifier.fillMaxWidth(frac).height(6.dp).clip(RoundedCornerShape(3.dp)).background(if (frac > 0.9f) Danger else Mint))
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text("Трафик: ${fmtBytes(used)} из ${fmtBytes(limit)}", color = TextDim, fontSize = 11.sp)
-                    } else if (used > 0) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Трафик: ${fmtBytes(used)} · без лимита", color = TextDim, fontSize = 11.sp)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    PrimaryButton(if (active) "Продлить" else "Возобновить") { openRenew(id) }
-                }
+            renewKeys.forEachIndexed { i, k ->
+                if (i > 0) Spacer(Modifier.height(Gap.m))
+                KeyCard(k)
             }
-            // devices
             val devKeys = renewKeys.filter { cabDevices.containsKey(it.optInt("id")) }
             if (devKeys.isNotEmpty()) {
-                Section("Устройства")
-                devKeys.forEach { k ->
-                    val id = k.optInt("id")
-                    val (list, limit) = cabDevices[id] ?: return@forEach
-                    CabCard {
-                        Text(
-                            (if (renewKeys.size > 1) "${k.optString("display_name").ifBlank { "Ключ #$id" }} · " else "") +
-                                "${list.size}" + (if (limit > 0) " из $limit" else "") + " ${plural(list.size, "устройство", "устройства", "устройств")}",
-                            color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold
-                        )
-                        if (list.isEmpty()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text("Пока ни одного — устройства появятся после первого подключения.", color = TextDim, fontSize = 12.sp)
-                        }
-                        list.forEach { d ->
-                            val devId = d.optInt("id")
-                            val name = listOf(d.optString("device_model"), d.optString("device_os")).filter { it.isNotBlank() && it != "null" }.joinToString(" · ")
-                                .ifBlank { "Устройство" }
-                            Spacer(Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RowIcon("📱")
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(name, color = TextMain, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    val seen = fmtDate(d.optString("last_seen").takeIf { it != "null" })
-                                    if (seen.isNotEmpty()) Text("был в сети $seen", color = TextDim, fontSize = 10.5.sp)
-                                }
-                                Text(if (cabBusy == "dev$devId") "…" else "Отключить", color = Danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.clickable { removeDevice(id, devId) }.padding(8.dp))
-                            }
-                        }
-                    }
+                SectionHeader("Устройства")
+                devKeys.forEachIndexed { i, k ->
+                    if (i > 0) Spacer(Modifier.height(Gap.m))
+                    DevicesCard(k)
                 }
             }
-            // referral
             cabReferral?.takeIf { it.optString("link").isNotBlank() }?.let { r ->
-                Section("Пригласить друзей")
-                CabCard {
-                    Text("Делитесь ссылкой — получайте бонусы на баланс", color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Приглашено: ${r.optInt("referrals_count")} · заработано ${rub(r.optLong("total_reward_minor"))}", color = TextDim, fontSize = 12.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(r.optString("link"), color = Mint, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.weight(1f)) { SecondaryButton("Скопировать") { copyText("ref", r.optString("link")) } }
-                        Box(Modifier.weight(1f)) {
-                            SecondaryButton("Поделиться") {
-                                runCatching {
-                                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                                        .putExtra(Intent.EXTRA_TEXT, "Pamir VPN — работает даже при белых списках: " + r.optString("link")), null))
-                                }
-                            }
-                        }
-                    }
-                }
+                SectionHeader("Пригласить друзей")
+                ReferralCard(r)
             }
-            // payments
-            Section("История платежей")
-            CabCard {
-                val shown = cabPayments.filter { it.optString("status") == "paid" }.take(8)
-                if (shown.isEmpty()) {
-                    Text(if (cabLoaded) "Платежей пока нет" else "Загружаем…", color = TextDim, fontSize = 12.sp)
-                }
-                shown.forEachIndexed { i, pmt ->
-                    if (i > 0) Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(pmt.optString("description").takeIf { it.isNotBlank() && it != "null" } ?: "Платёж", color = TextMain, fontSize = 12.5.sp,
-                                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(fmtDate(pmt.optString("paid_at").takeIf { it != "null" && it.isNotBlank() } ?: pmt.optString("created_at")), color = TextDim, fontSize = 10.5.sp)
-                        }
-                        Text(rub(pmt.optLong("payable_amount_minor")), color = Mint, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
-                    }
-                }
-            }
-            // support
-            Section("Поддержка")
+            SectionHeader("История платежей")
+            PaymentsCard()
+            SectionHeader("Поддержка")
             SupportCard()
-            Spacer(Modifier.height(8.dp))
-            Text("Выйти из аккаунта", color = TextDim, fontSize = 12.sp,
-                modifier = Modifier.align(Alignment.CenterHorizontally).clickable { logout(); cabLoaded = false; toast("Вы вышли из аккаунта") }.padding(12.dp))
+            Spacer(Modifier.height(Gap.m))
+            TextAction("Выйти из аккаунта", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Logout) {
+                logout(); cabLoaded = false; toast("Вы вышли из аккаунта")
+            }
+        }
+    }
+
+    @Composable
+    private fun BalanceCard() {
+        val c = Pamir.colors
+        PamirCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(PamirIcons.Wallet, size = 44.dp, iconSize = 24.dp)
+                Spacer(Modifier.width(Gap.m))
+                Column(Modifier.weight(1f)) {
+                    Text("Баланс", style = PamirType.support, color = c.textDim)
+                    Text(balanceMinor?.let { rub(it) } ?: "—", style = PamirType.number, color = c.text)
+                }
+                PrimaryButton("Пополнить", Modifier, icon = PamirIcons.Add) { cabTopupOpen = true }
+            }
+        }
+    }
+
+    @Composable
+    private fun KeyCard(k: JSONObject) {
+        val c = Pamir.colors
+        val id = k.optInt("id")
+        val active = k.optBoolean("is_active")
+        val left = if (active) daysUntil(k.optString("expires_at").takeIf { it != "null" }) else null
+        val used = k.optLong("traffic_used")
+        val limit = k.optLong("traffic_limit")
+        val (status, tone) = when {
+            !active -> "Закончилась" to Tone.DANGER
+            left != null && left <= 3 -> "Осталось ${maxOf(left, 0)} ${plural(maxOf(left, 0), "день", "дня", "дней")}" to Tone.WARN
+            else -> "Активна" to Tone.ACCENT
+        }
+        PamirCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(k.optString("display_name").ifBlank { "Ключ #$id" }, style = PamirType.subtitle, color = c.text)
+                    val tn = k.optString("tariff_name").takeIf { it.isNotBlank() && it != "null" }
+                    if (tn != null) Text(tn, style = PamirType.support, color = c.textDim)
+                }
+                Chip(status, tone)
+            }
+            Spacer(Modifier.height(Gap.m))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (active && left != null) {
+                    val d = maxOf(left, 0)
+                    DaysRing(d, plural(d, "день", "дня", "дней"), tone)
+                    Spacer(Modifier.width(Gap.l))
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(keyExpiry(k).replaceFirstChar { it.uppercase() }, style = PamirType.body, color = c.text)
+                    if (limit > 0) {
+                        val frac = (used.toFloat() / limit.toFloat()).coerceIn(0f, 1f)
+                        Spacer(Modifier.height(Gap.s))
+                        ProgressLine(frac, if (frac > 0.9f) c.danger else c.accentDeep)
+                        Spacer(Modifier.height(Gap.xs))
+                        Text("Трафик: ${fmtBytes(used)} из ${fmtBytes(limit)}", style = PamirType.caption, color = c.textDim)
+                    } else if (used > 0) {
+                        Spacer(Modifier.height(Gap.xs))
+                        Text("Трафик: ${fmtBytes(used)} · без лимита", style = PamirType.caption, color = c.textDim)
+                    }
+                }
+            }
+            Spacer(Modifier.height(Gap.l))
+            PrimaryButton(if (active) "Продлить" else "Возобновить") { openRenew(id) }
+        }
+    }
+
+    @Composable
+    private fun DevicesCard(k: JSONObject) {
+        val c = Pamir.colors
+        val id = k.optInt("id")
+        val (list, limit) = cabDevices[id] ?: return
+        PamirCard {
+            Text(
+                (if (renewKeys.size > 1) "${k.optString("display_name").ifBlank { "Ключ #$id" }} · " else "") +
+                    "${list.size}" + (if (limit > 0) " из $limit" else "") + " ${plural(list.size, "устройство", "устройства", "устройств")}",
+                style = PamirType.body, color = c.text
+            )
+            if (list.isEmpty()) {
+                Spacer(Modifier.height(Gap.xs))
+                Text("Пока ни одного — устройства появятся после первого подключения.", style = PamirType.support, color = c.textDim)
+            }
+            list.forEach { d ->
+                val devId = d.optInt("id")
+                val name = listOf(d.optString("device_model"), d.optString("device_os")).filter { it.isNotBlank() && it != "null" }.joinToString(" · ")
+                    .ifBlank { "Устройство" }
+                Spacer(Modifier.height(Gap.s))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(PamirIcons.Phone, tint = c.textDim, background = c.surfaceHigh)
+                    Spacer(Modifier.width(Gap.m))
+                    Column(Modifier.weight(1f)) {
+                        Text(name, style = PamirType.body.copy(fontSize = 14.sp), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val seen = fmtDate(d.optString("last_seen").takeIf { it != "null" })
+                        if (seen.isNotEmpty()) Text("был в сети $seen", style = PamirType.caption, color = c.textDim)
+                    }
+                    TextAction(if (cabBusy == "dev$devId") "Отключаем…" else "Отключить", color = c.danger) { removeDevice(id, devId) }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ReferralCard(r: JSONObject) {
+        val c = Pamir.colors
+        PamirCard {
+            Text("Делитесь ссылкой — получайте бонусы на баланс", style = PamirType.body, color = c.text)
+            Spacer(Modifier.height(Gap.xs))
+            Text("Приглашено: ${r.optInt("referrals_count")} · заработано ${rub(r.optLong("total_reward_minor"))}", style = PamirType.support, color = c.textDim)
+            Spacer(Modifier.height(Gap.m))
+            Text(
+                r.optString("link"), style = PamirType.support.copy(fontWeight = FontWeight.SemiBold), color = c.accentText,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(Radius.s)
+                    .background(c.surfaceHigh)
+                    .padding(horizontal = Gap.m, vertical = Gap.m)
+            )
+            Spacer(Modifier.height(Gap.m))
+            Row(horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
+                SecondaryButton("Скопировать", Modifier.weight(1f), icon = PamirIcons.Copy) { copyText("ref", r.optString("link")) }
+                SecondaryButton("Поделиться", Modifier.weight(1f), icon = PamirIcons.Share) {
+                    runCatching {
+                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, "Pamir VPN — работает даже при белых списках: " + r.optString("link")), null))
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun PaymentsCard() {
+        val c = Pamir.colors
+        PamirCard {
+            val shown = cabPayments.filter { it.optString("status") == "paid" }.take(8)
+            if (shown.isEmpty()) {
+                Text(if (cabLoaded) "Платежей пока нет" else "Загружаем…", style = PamirType.support, color = c.textDim)
+            }
+            shown.forEachIndexed { i, pmt ->
+                if (i > 0) Spacer(Modifier.height(Gap.m))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(PamirIcons.Receipt, tint = c.textDim, background = c.surfaceHigh, size = 32.dp, iconSize = 18.dp)
+                    Spacer(Modifier.width(Gap.m))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            pmt.optString("description").takeIf { it.isNotBlank() && it != "null" } ?: "Платёж",
+                            style = PamirType.body.copy(fontSize = 14.sp), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            fmtDate(pmt.optString("paid_at").takeIf { it != "null" && it.isNotBlank() } ?: pmt.optString("created_at")),
+                            style = PamirType.caption, color = c.textDim
+                        )
+                    }
+                    Text(rub(pmt.optLong("payable_amount_minor")), style = PamirType.label.copy(fontSize = 14.sp), color = c.accentText)
+                }
+            }
         }
     }
 
     @Composable
     private fun SupportCard() {
+        val c = Pamir.colors
         var text by remember { mutableStateOf("") }
-        val fieldColors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647), cursorColor = Mint,
-            focusedContainerColor = Surface2, unfocusedContainerColor = Surface2,
-            focusedTextColor = TextMain, unfocusedTextColor = TextMain
-        )
-        CabCard {
+        PamirCard {
             val msgs = cabSupport.takeLast(6)
             if (msgs.isEmpty()) {
-                Text("Напишите нам — отвечаем быстро. Ответ появится здесь и придёт в Telegram.", color = TextDim, fontSize = 12.sp, lineHeight = 17.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(PamirIcons.Chat)
+                    Spacer(Modifier.width(Gap.m))
+                    Text("Напишите нам — отвечаем быстро. Ответ появится здесь и придёт в Telegram.", style = PamirType.support, color = c.textDim)
+                }
             }
             msgs.forEach { m ->
                 val mine = m.optString("sender_type") == "user"
                 val body = runCatching { Html.fromHtml(m.optString("text"), Html.FROM_HTML_MODE_COMPACT).toString().trim() }.getOrDefault(m.optString("text"))
-                    .ifBlank { if (m.optString("media_type") == "photo") "📷 Фото" else "" }
+                    .ifBlank { if (m.optString("media_type") == "photo") "Фото" else "" }
                 if (body.isBlank()) return@forEach
-                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
-                    Text(body, color = if (mine) Color(0xFF05241D) else TextMain, fontSize = 12.5.sp, lineHeight = 17.sp,
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 3.dp),
+                    horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start
+                ) {
+                    Text(
+                        body, style = PamirType.support, color = if (mine) c.onAccent else c.text,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(if (mine) Mint else Surface2)
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .fillMaxWidth(0.85f)
+                            .wrapContentWidth(if (mine) Alignment.End else Alignment.Start)
+                            .clip(RoundedCornerShape(16.dp, 16.dp, if (mine) 4.dp else 16.dp, if (mine) 16.dp else 4.dp))
+                            .background(if (mine) c.accent else c.surfaceHigh)
+                            .padding(horizontal = Gap.m, vertical = Gap.s)
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Gap.m))
             OutlinedTextField(
                 value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Ваше сообщение", color = TextDim.copy(alpha = 0.7f), fontSize = 13.sp) },
-                shape = RoundedCornerShape(14.dp), colors = fieldColors, maxLines = 4
+                placeholder = { Text("Ваше сообщение", style = PamirType.support) },
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                shape = Radius.m, colors = pamirFieldColors(), maxLines = 4
             )
-            Spacer(Modifier.height(8.dp))
-            if (cabBusy == "support") Box(Modifier.fillMaxWidth().height(46.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Mint, modifier = Modifier.size(22.dp))
-            } else PrimaryButton("Отправить") { if (text.isBlank()) toast("Введите сообщение") else { sendSupport(text); text = "" } }
-        }
-    }
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    private fun TopupSheet(onDismiss: () -> Unit) {
-        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        var custom by remember { mutableStateOf("") }
-        val fieldColors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647), cursorColor = Mint,
-            focusedContainerColor = Surface1, unfocusedContainerColor = Surface1,
-            focusedTextColor = TextMain, unfocusedTextColor = TextMain
-        )
-        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
-            Column(Modifier.padding(horizontal = 16.dp).navigationBarsPadding().padding(bottom = 18.dp)) {
-                Text("Пополнение баланса", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.height(4.dp))
-                Text("Оплата через СБП или карту. Деньги придут на баланс за пару секунд.", color = TextDim, fontSize = 12.sp)
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(100, 300, 500, 1000).forEach { a ->
-                        Box(
-                            Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(13.dp)).background(Surface1)
-                                .border(1.dp, Line, RoundedCornerShape(13.dp)).clickable { topUp(a) },
-                            contentAlignment = Alignment.Center
-                        ) { Text("$a ₽", color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold) }
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = custom, onValueChange = { custom = it.filter { c -> c.isDigit() }.take(5) }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Другая сумма, от 100 ₽", color = TextDim.copy(alpha = 0.7f), fontSize = 14.sp) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    shape = RoundedCornerShape(14.dp), colors = fieldColors
-                )
-                Spacer(Modifier.height(10.dp))
-                if (cabBusy == "topup") Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(24.dp))
-                } else PrimaryButton("Пополнить") {
-                    val v = custom.toIntOrNull() ?: 0
-                    if (v < 100) toast("Минимальная сумма — 100 ₽") else topUp(v)
-                }
+            Spacer(Modifier.height(Gap.m))
+            PrimaryButton("Отправить", loading = cabBusy == "support") {
+                if (text.isBlank()) toast("Введите сообщение") else { sendSupport(text); text = "" }
             }
         }
     }
 
     @Composable
+    private fun TopupSheet(onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        var custom by remember { mutableStateOf("") }
+        PamirSheet(
+            onDismiss = onDismiss,
+            title = "Пополнение баланса",
+            subtitle = "Оплата через СБП или карту. Деньги придут на баланс за пару секунд."
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
+                listOf(100, 300, 500, 1000).forEach { a ->
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(52.dp)
+                            .clip(Radius.m)
+                            .background(c.surface)
+                            .border(1.dp, c.line, Radius.m)
+                            .clickable(enabled = cabBusy == null, role = Role.Button) { topUp(a) },
+                        contentAlignment = Alignment.Center
+                    ) { Text("$a ₽", style = PamirType.label.copy(fontSize = 15.sp), color = c.text) }
+                }
+            }
+            Spacer(Modifier.height(Gap.m))
+            OutlinedTextField(
+                value = custom, onValueChange = { custom = it.filter { ch -> ch.isDigit() }.take(5) }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Другая сумма, от 100 ₽", style = PamirType.bodyRegular) },
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                shape = Radius.m, colors = pamirFieldColors()
+            )
+            Spacer(Modifier.height(Gap.m))
+            PrimaryButton("Пополнить", loading = cabBusy == "topup") {
+                val v = custom.toIntOrNull() ?: 0
+                if (v < 100) toast("Минимальная сумма — 100 ₽") else topUp(v)
+            }
+        }
+    }
+
+    // ---------- apps without VPN ----------
+
+    @Composable
     private fun AppsScreen() {
+        val c = Pamir.colors
         val list = appList
         Column(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 16.dp)
+                .padding(horizontal = Gap.l)
+                .padding(bottom = Gap.l)
         ) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(top = Gap.s),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("‹", color = TextMain, fontSize = 26.sp, modifier = Modifier.clip(CircleShape).clickable { tab = Tab.SETTINGS }.padding(horizontal = 12.dp, vertical = 2.dp))
-                Text("Приложения без VPN", color = TextMain, fontSize = 19.sp, fontWeight = FontWeight.ExtraBold)
+                IconAction(PamirIcons.Back, "Назад", { tab = Tab.SETTINGS }, Modifier.padding(end = Gap.xs))
+                Text("Приложения без VPN", style = PamirType.headline, color = c.text, modifier = Modifier.semantics { heading() })
             }
             Text(
                 "Некоторые банки и госсервисы не работают, когда включён VPN. Отметьте их — они будут ходить в интернет напрямую, а всё остальное останется защищённым.",
-                color = TextDim, fontSize = 12.sp, lineHeight = 17.sp,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 6.dp)
+                style = PamirType.support, color = c.textDim,
+                modifier = Modifier.padding(start = Gap.xs, end = Gap.xs, top = Gap.xs, bottom = Gap.s)
             )
             when {
-                list == null -> Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(26.dp))
+                list == null -> {
+                    Spacer(Modifier.height(Gap.m))
+                    SkeletonCard("Ищем приложения")
                 }
-                list.isEmpty() -> Column(
-                    Modifier
-                        .padding(16.dp)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Surface1)
-                        .border(1.dp, Line, RoundedCornerShape(18.dp))
-                        .padding(16.dp)
-                ) {
-                    Text("Популярных банков и сервисов не нашли", color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Нужное приложение можно выбрать из полного списка ниже.", color = TextDim, fontSize = 12.sp)
+                list.isEmpty() -> {
+                    Spacer(Modifier.height(Gap.m))
+                    NoteCard(PamirIcons.Apps, "Популярных банков и сервисов не нашли", "Нужное приложение можно выбрать из полного списка ниже.", Tone.NEUTRAL) {}
                 }
                 else -> {
                     val rec = list.filter { it.group == "Банки" || it.group == "Госуслуги и налоги" }.map { it.pkg }
                     if (rec.isNotEmpty() && rec.any { bypassSel[it] != true }) {
-                        Box(
-                            Modifier
-                                .padding(horizontal = 16.dp, vertical = 6.dp)
-                                .fillMaxWidth()
-                                .height(40.dp)
-                                .clip(RoundedCornerShape(13.dp))
-                                .background(Mint.copy(alpha = 0.10f))
-                                .border(1.dp, Mint.copy(alpha = 0.35f), RoundedCornerShape(13.dp))
-                                .clickable { setBypass(rec, true) },
-                            contentAlignment = Alignment.Center
-                        ) { Text("Отметить все банки и Госуслуги", color = Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                        Spacer(Modifier.height(Gap.s))
+                        SecondaryButton("Отметить все банки и Госуслуги", icon = PamirIcons.Check) { setBypass(rec, true) }
                     }
                     list.groupBy { it.group }.forEach { (group, apps) ->
-                        Section(group)
-                        Group {
-                            apps.forEach { a ->
+                        SectionHeader(group)
+                        RowGroup {
+                            apps.forEachIndexed { i, a ->
+                                if (i > 0) RowDivider()
                                 val on = bypassSel[a.pkg] == true
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { setBypass(listOf(a.pkg), !on) }
-                                        .padding(horizontal = 12.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (a.icon != null) Image(a.icon, null, Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)))
-                                    else RowIcon("▦")
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(a.label, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(if (on) "Напрямую, без VPN" else "Через VPN", color = if (on) Mint else TextDim, fontSize = 11.sp)
-                                    }
-                                    Switch(modifier = Modifier.scale(0.8f),
-                                        checked = on, onCheckedChange = { setBypass(listOf(a.pkg), it) },
-                                        colors = SwitchDefaults.colors(
-                                            checkedTrackColor = MintDeep, checkedThumbColor = Color.White,
-                                            uncheckedTrackColor = Color(0xFF2A3647), uncheckedThumbColor = Color(0xFFB8C4D2),
-                                            uncheckedBorderColor = Color.Transparent
-                                        )
-                                    )
-                                }
+                                ToggleRow(
+                                    leading = {
+                                        if (a.icon != null) Image(a.icon, contentDescription = null, modifier = Modifier.size(36.dp).clip(Radius.s))
+                                        else IconBadge(PamirIcons.Apps)
+                                    },
+                                    title = a.label,
+                                    subtitle = if (on) "Напрямую, без VPN" else "Через VPN",
+                                    checked = on,
+                                    onCheckedChange = { setBypass(listOf(a.pkg), it) },
+                                    subtitleColor = if (on) c.accentText else c.textDim
+                                )
                             }
                         }
                     }
                 }
             }
-            Section("Другие")
-            Group {
-                LinkRow("☰", "Все приложения", "Выбрать любое приложение из списка") {
+            SectionHeader("Другие")
+            RowGroup {
+                LinkRow(PamirIcons.Apps, "Все приложения", "Выбрать любое приложение из списка") {
                     appsChanged = true
                     startActivity(Intent(this@PamirActivity, PerAppProxyActivity::class.java))
                 }
@@ -2244,65 +2363,96 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    // ---------- settings ----------
+
     @Composable
     private fun Settings() {
         var ru by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) }
         var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
         var smart by remember { mutableStateOf(smartLte()) }
+        var autoSwitch by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_AUTO_SWITCH, true)) }
+        val c = Pamir.colors
         Column(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 16.dp)
+                .padding(horizontal = Gap.l)
+                .padding(bottom = Gap.l)
         ) {
-            Header("Настройки")
-            Section("Подключение")
-            Group {
-                ToggleRow("🇷🇺", "Сайты РФ напрямую", "Госуслуги, банки — без VPN", ru) { ru = it; setRuDirect(it) }
-                ToggleRow("📶", "Умный LTE-режим", "Сам включит LTE Обход при «белых списках»", smart) {
+            ScreenTitle("Настройки")
+            SectionHeader("Подключение")
+            RowGroup {
+                ToggleRow(PamirIcons.Split, "Сайты РФ напрямую", "Госуслуги, банки — без VPN", ru) { ru = it; setRuDirect(it) }
+                RowDivider()
+                ToggleRow(PamirIcons.Refresh, "Автосмена сервера", "Если сервер перестал отвечать, подключим другой", autoSwitch) {
+                    autoSwitch = it; MmkvManager.encodeSettings(PamirWatch.K_AUTO_SWITCH, it)
+                }
+                RowDivider()
+                ToggleRow(PamirIcons.Signal, "Умный LTE-режим", "Сам включит LTE Обход при «белых списках»", smart) {
                     smart = it; MmkvManager.encodeSettings(PREF_SMART_LTE, it)
                 }
-                ToggleRow("⟳", "Автоподключение", "При включении телефона", boot) { boot = it; MmkvManager.encodeStartOnBoot(it) }
+                RowDivider()
+                ToggleRow(PamirIcons.Power, "Автоподключение", "При включении телефона", boot) { boot = it; MmkvManager.encodeStartOnBoot(it) }
+                RowDivider()
                 val bc = remember { bypassCount() }
-                LinkRow("▦", "Приложения без VPN", if (bc > 0) "Без VPN: $bc ${plural(bc, "приложение", "приложения", "приложений")}" else "Банки, Госуслуги и др.") {
+                LinkRow(PamirIcons.Apps, "Приложения без VPN", if (bc > 0) "Без VPN: $bc ${plural(bc, "приложение", "приложения", "приложений")}" else "Банки, Госуслуги и др.") {
                     loadApps(); tab = Tab.APPS
                 }
             }
-            Section("Аккаунт")
-            Group {
-                if (loggedIn) {
-                    LinkRow("✈", "Вы вошли в аккаунт", balanceMinor?.let { "Баланс: ${rub(it)} · продление в приложении" } ?: "Продление прямо в приложении") { openRenew() }
-                    LinkRow("↩", "Выйти из аккаунта", "VPN продолжит работать") { logout(); toast("Вы вышли из аккаунта") }
-                } else {
-                    LinkRow("✈", if (loginBusy) "Ждём подтверждения…" else "Войти через Telegram", "Продление и оплата прямо в приложении") {
-                        if (loginBusy) cancelLogin() else loginTelegram()
+            SectionHeader("Оформление")
+            RowGroup {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = Gap.m)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconBadge(PamirIcons.Theme)
+                        Spacer(Modifier.width(14.dp))
+                        Column {
+                            Text("Тема", style = PamirType.body, color = c.text)
+                            Text("«Авто» — как в настройках телефона", style = PamirType.support, color = c.textDim)
+                        }
                     }
-                    LinkRow("✉", "Войти по почте", "Если привязали почту в кабинете") { emailLoginOpen = true }
+                    Spacer(Modifier.height(Gap.m))
+                    SegmentedControl(
+                        PamirThemeMode.entries.map { it.label },
+                        selected = themeMode.ordinal,
+                        onSelect = { setTheme(PamirThemeMode.entries[it]) }
+                    )
                 }
             }
-            Section("Подписка")
-            Group {
-                val upd = if (lastUpdate > 0) "Обновлено ${agoText(lastUpdate)}" else "Ещё не обновлялись"
-                LinkRow("↻", if (updating) "Обновляем…" else "Обновить серверы", upd) { updateSubscription() }
-                LinkRow("👤", "Личный кабинет", "Подписка, устройства, платежи") { tab = Tab.CABINET }
+            SectionHeader("Аккаунт")
+            RowGroup {
+                if (loggedIn) {
+                    LinkRow(PamirIcons.Person, "Вы вошли в аккаунт", balanceMinor?.let { "Баланс: ${rub(it)} · продление в приложении" } ?: "Продление прямо в приложении") { openRenew() }
+                    RowDivider()
+                    LinkRow(PamirIcons.Logout, "Выйти из аккаунта", "VPN продолжит работать", tone = Tone.DANGER) { logout(); toast("Вы вышли из аккаунта") }
+                } else {
+                    LinkRow(PamirIcons.Telegram, if (loginBusy) "Ждём подтверждения…" else "Войти через Telegram", "Продление и оплата прямо в приложении", loading = loginBusy) {
+                        if (loginBusy) cancelLogin() else loginTelegram()
+                    }
+                    RowDivider()
+                    LinkRow(PamirIcons.Mail, "Войти по почте", "Если привязали почту в кабинете") { emailLoginOpen = true }
+                }
             }
-            Section("Помощь")
-            Group {
-                LinkRow("✈", "Поддержка", "Ответим в Telegram") { openUrl(BOT_URL) }
-                LinkRow("🆘", "Сообщить о проблеме", "Отправим описание и журнал разработчикам") { reportOpen = true }
-                LinkRow("ⓘ", "О приложении", if (newVersion != null) "Версия ${appVersion()} · доступна $newVersion" else "Версия ${appVersion()} · актуальная") {
+            SectionHeader("Подписка")
+            RowGroup {
+                val upd = if (lastUpdate > 0) "Обновлено ${agoText(lastUpdate)}" else "Ещё не обновлялись"
+                LinkRow(PamirIcons.Refresh, if (updating) "Обновляем…" else "Обновить серверы", upd, loading = updating) { updateSubscription() }
+                RowDivider()
+                LinkRow(PamirIcons.Person, "Личный кабинет", "Подписка, устройства, платежи") { tab = Tab.CABINET }
+            }
+            SectionHeader("Помощь")
+            RowGroup {
+                LinkRow(PamirIcons.Chat, "Поддержка", "Ответим в Telegram") { openUrl(BOT_URL) }
+                RowDivider()
+                LinkRow(PamirIcons.Report, "Сообщить о проблеме", "Отправим описание и журнал разработчикам") { reportOpen = true }
+                RowDivider()
+                LinkRow(PamirIcons.Info, "О приложении", if (newVersion != null) "Версия ${appVersion()} · доступна $newVersion" else "Версия ${appVersion()} · актуальная") {
                     if (newVersion != null) installUpdate() else { toast("Проверяем обновления…"); checkAppUpdate() }
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            Text(
-                "Расширенные настройки",
-                color = TextDim.copy(alpha = 0.7f), fontSize = 12.sp,
-                modifier = Modifier
-                    .align(Alignment.CenterHorizontally)
-                    .clickable { startActivity(Intent(this@PamirActivity, MainActivity::class.java)) }
-                    .padding(10.dp)
-            )
+            Spacer(Modifier.height(Gap.m))
+            TextAction("Расширенные настройки", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Settings) {
+                startActivity(Intent(this@PamirActivity, MainActivity::class.java))
+            }
         }
     }
 
@@ -2329,221 +2479,45 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    @Composable
-    private fun Section(text: String) {
-        Text(
-            text.uppercase(), color = TextDim, fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp,
-            modifier = Modifier.padding(start = 22.dp, top = 14.dp, bottom = 6.dp)
-        )
-    }
+    // ---------- e-mail login ----------
 
-    @Composable
-    private fun Group(content: @Composable () -> Unit) {
-        Column(
-            Modifier
-                .padding(horizontal = 16.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(18.dp))
-        ) { content() }
-    }
-
-    @Composable
-    private fun RowIcon(icon: String) {
-        Box(
-            Modifier
-                .size(28.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(Mint.copy(alpha = 0.10f)),
-            contentAlignment = Alignment.Center
-        ) { Text(icon, color = Mint, fontSize = 13.sp) }
-    }
-
-    @Composable
-    private fun ToggleRow(icon: String, title: String, sub: String, value: Boolean, onChange: (Boolean) -> Unit) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { onChange(!value) }
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            RowIcon(icon)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(sub, color = TextDim, fontSize = 11.sp)
-            }
-            Switch(modifier = Modifier.scale(0.8f),
-                checked = value, onCheckedChange = onChange,
-                colors = SwitchDefaults.colors(
-                    checkedTrackColor = MintDeep, checkedThumbColor = Color.White,
-                    uncheckedTrackColor = Color(0xFF2A3647), uncheckedThumbColor = Color(0xFFB8C4D2),
-                    uncheckedBorderColor = Color.Transparent
-                )
-            )
-        }
-    }
-
-    @Composable
-    private fun LinkRow(icon: String, title: String, sub: String, onClick: () -> Unit) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { onClick() }
-                .padding(horizontal = 12.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            RowIcon(icon)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(sub, color = TextDim, fontSize = 11.sp)
-            }
-            Text("›", color = TextDim, fontSize = 18.sp)
-        }
-    }
-
-    @Composable
-    private fun BottomNav(tab: Tab, onTab: (Tab) -> Unit) {
-        Row(
-            Modifier
-                .padding(horizontal = 14.dp, vertical = 8.dp)
-                .fillMaxWidth()
-                .height(54.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Surface2.copy(alpha = 0.95f))
-                .border(1.dp, Line, RoundedCornerShape(18.dp)),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            NavItem(R.drawable.ic_lock_24dp, "VPN", tab == Tab.HOME, Modifier.weight(1f)) { onTab(Tab.HOME) }
-            NavItem(R.drawable.ic_subscriptions_24dp, "Кабинет", tab == Tab.CABINET, Modifier.weight(1f)) { onTab(Tab.CABINET) }
-            NavItem(R.drawable.ic_settings_24dp, "Настройки", tab == Tab.SETTINGS, Modifier.weight(1f)) { onTab(Tab.SETTINGS) }
-        }
-    }
-
-    @Composable
-    private fun NavItem(icon: Int, label: String, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
-        Column(
-            modifier
-                .fillMaxSize()
-                .clickable { onClick() },
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            val c = if (active) Mint else TextDim
-            Image(painterResource(icon), null, Modifier.size(19.dp), colorFilter = ColorFilter.tint(c))
-            Spacer(Modifier.height(2.dp))
-            Text(label, color = c, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        }
-    }
-
-    @Composable
-    private fun PrimaryButton(text: String, onClick: () -> Unit) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(Brush.linearGradient(listOf(Mint, MintDeep)))
-                .clickable { onClick() },
-            contentAlignment = Alignment.Center
-        ) { Text(text, color = Color(0xFF05241D), fontSize = 15.sp, fontWeight = FontWeight.ExtraBold) }
-    }
-
-    @Composable
-    private fun PrimaryButton2(title: String, subtitle: String, onClick: () -> Unit) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Brush.linearGradient(listOf(Mint, MintDeep)))
-                .clickable { onClick() },
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(title, color = Color(0xFF05241D), fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
-            Text(subtitle, color = Color(0xFF05241D).copy(alpha = 0.72f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        }
-    }
-
-    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     private fun EmailLoginSheet(onDismiss: () -> Unit) {
-        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val c = Pamir.colors
         var email by remember { mutableStateOf("") }
         var pass by remember { mutableStateOf("") }
-        val fieldColors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647), cursorColor = Mint,
-            focusedContainerColor = Surface1, unfocusedContainerColor = Surface1,
-            focusedTextColor = TextMain, unfocusedTextColor = TextMain
-        )
-        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
-            Column(
-                Modifier
-                    .padding(horizontal = 16.dp)
-                    .navigationBarsPadding()
-                    .padding(bottom = 18.dp)
-            ) {
-                Text("Вход по почте", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.height(4.dp))
-                Text("Почта и пароль от личного кабинета Pamir VPN", color = TextDim, fontSize = 12.sp)
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = email, onValueChange = { email = it.trim() }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Почта", color = TextDim.copy(alpha = 0.7f), fontSize = 14.sp) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    shape = RoundedCornerShape(14.dp), colors = fieldColors
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = pass, onValueChange = { pass = it }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Пароль", color = TextDim.copy(alpha = 0.7f), fontSize = 14.sp) },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    shape = RoundedCornerShape(14.dp), colors = fieldColors
-                )
-                Spacer(Modifier.height(14.dp))
-                if (emailBusy) Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(24.dp))
-                } else PrimaryButton("Войти") { loginEmail(email, pass) }
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Забыли пароль?", color = Mint, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable { forgotPassword(email) }.padding(vertical = 10.dp, horizontal = 4.dp))
-                    Text("Регистрация", color = TextDim, fontSize = 12.5.sp,
-                        modifier = Modifier.clickable { openUrl(CABINET_URL) }.padding(vertical = 10.dp, horizontal = 4.dp))
-                }
+        PamirSheet(
+            onDismiss = onDismiss,
+            title = "Вход по почте",
+            subtitle = "Почта и пароль от личного кабинета Pamir VPN"
+        ) {
+            OutlinedTextField(
+                value = email, onValueChange = { email = it.trim() }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Почта", style = PamirType.bodyRegular) },
+                leadingIcon = { Icon(PamirIcons.Mail, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                shape = Radius.m, colors = pamirFieldColors()
+            )
+            Spacer(Modifier.height(Gap.s))
+            OutlinedTextField(
+                value = pass, onValueChange = { pass = it }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Пароль", style = PamirType.bodyRegular) },
+                leadingIcon = { Icon(PamirIcons.Lock, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { loginEmail(email, pass) }),
+                shape = Radius.m, colors = pamirFieldColors()
+            )
+            Spacer(Modifier.height(Gap.l))
+            PrimaryButton("Войти", loading = emailBusy) { loginEmail(email, pass) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                TextAction("Забыли пароль?", color = c.accentText) { forgotPassword(email) }
+                TextAction("Регистрация") { openUrl(CABINET_URL) }
             }
         }
     }
-
-    @Composable
-    private fun SecondaryButton(text: String, onClick: () -> Unit) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(46.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(16.dp))
-                .clickable { onClick() },
-            contentAlignment = Alignment.Center
-        ) { Text(text, color = Color(0xFFD8E2EA), fontSize = 13.5.sp, fontWeight = FontWeight.Bold) }
-    }
-}
-
-@Composable
-private fun PamirTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Mint, onPrimary = Color(0xFF05241D), background = BgColor, surface = BgColor,
-            onBackground = TextMain, onSurface = TextMain, surfaceVariant = Surface1
-        ),
-        content = content
-    )
 }

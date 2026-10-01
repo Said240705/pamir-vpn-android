@@ -7,6 +7,10 @@ on:
         description: 'versionName (digits and dots, e.g. 1.0.0)'
         required: true
         default: '1.0.0'
+      prerelease:
+        description: 'Test build: publish as pre-release, users do not get it as an update'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -87,10 +91,23 @@ jobs:
           -Pandroid.injected.signing.key.password=${{ secrets.APP_KEY_PASSWORD }}
         ls -la app/build/outputs/apk/*/release/
 
+    - name: Fixed-name copies
+      # Stable names for releases/latest/download/<name> links, the site mirror and the in-app updater.
+      run: |
+        mkdir -p ${{ github.workspace }}/fixed
+        cp V2rayNG/app/build/outputs/apk/*/release/*_arm64-v8a.apk ${{ github.workspace }}/fixed/pamir-vpn.apk
+        cp V2rayNG/app/build/outputs/apk/*/release/*_universal.apk ${{ github.workspace }}/fixed/pamir-vpn-universal.apk
+        ls -la ${{ github.workspace }}/fixed
+
     - name: Publish release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ inputs.version }}
-        name: Pamir VPN ${{ inputs.version }}
+        name: Pamir VPN ${{ inputs.version }}${{ inputs.prerelease && ' (тест)' || '' }}
+        target_commitish: ${{ github.sha }}
+        prerelease: ${{ inputs.prerelease }}
+        make_latest: ${{ inputs.prerelease && 'false' || 'true' }}
         body: 'Pamir VPN для Android. Для большинства телефонов подходит файл *_universal.apk.'
-        files: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*.apk
+        files: |
+          ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*.apk
+          ${{ github.workspace }}/fixed/*.apk

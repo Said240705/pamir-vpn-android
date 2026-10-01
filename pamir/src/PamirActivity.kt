@@ -142,6 +142,8 @@ private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
 private const val PREF_PREFERRED = "pamir_preferred"
 private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
 private const val DOWNLOAD_BASE = "https://app.pamirlink.ru/download/"
+/** Latest non-prerelease build; AppConfig.APP_URL is github.com/<owner>/pamir-vpn-android after branding. */
+private val GITHUB_LATEST = AppConfig.APP_URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest"
 private const val PREF_THEME = "pamir_theme"
 /** Favorite servers by display name: subscription updates recreate server GUIDs, names stay. */
 private const val PREF_FAVORITES = "pamir_favorites"
@@ -203,7 +205,8 @@ class PamirActivity : AppCompatActivity() {
     private var autoSwitched = false
     private var lastPrecheck = 0L
     private var newVersion by mutableStateOf<String?>(null)
-    private var newVersionUrl = ""
+    /** Download URLs of [newVersion], tried in order: GitHub first, the site as a fallback. */
+    private var newVersionUrls = emptyList<String>()
     private var updProgress by mutableStateOf(-1)
     private var assetsJob: kotlinx.coroutines.Job? = null
     private var sheetOpen by mutableStateOf(false)
@@ -991,26 +994,51 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /** A published app build: version and where its APK for this device can be downloaded. */
+    private class UpdateSource(val version: String, val url: String)
+
+    private fun httpGet(url: String, accept: String? = null): String {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 6000; c.readTimeout = 6000
+        c.setRequestProperty("Cache-Control", "no-cache")
+        if (accept != null) c.setRequestProperty("Accept", accept)
+        return c.inputStream.bufferedReader().use { it.readText() }
+    }
+
+    private fun prefersArm64() = android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a")
+
+    /** GitHub releases: fixed-name copies (pamir-vpn.apk, pamir-vpn-universal.apk) or the versioned APKs. */
+    private fun updateFromGithub(): UpdateSource? {
+        val o = JSONObject(httpGet(GITHUB_LATEST, "application/vnd.github+json"))
+        val v = o.optString("tag_name").removePrefix("v")
+        val assets = o.optJSONArray("assets") ?: return null
+        val urls = (0 until assets.length()).associate { assets.getJSONObject(it).let { a -> a.optString("name") to a.optString("browser_download_url") } }
+        fun pick(fixed: String, suffix: String) = urls[fixed] ?: urls.entries.firstOrNull { it.key.endsWith(suffix) }?.value
+        val url = (if (prefersArm64()) pick("pamir-vpn.apk", "_arm64-v8a.apk") else null) ?: pick("pamir-vpn-universal.apk", "_universal.apk")
+        return if (v.isNotBlank() && url != null) UpdateSource(v, url) else null
+    }
+
+    /** The site mirror (download/android.json), kept for when GitHub is slow or blocked. */
+    private fun updateFromSite(): UpdateSource? {
+        val o = JSONObject(httpGet(UPDATE_JSON))
+        val v = o.optString("version")
+        val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
+        val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
+        return if (v.isNotBlank()) UpdateSource(v, DOWNLOAD_BASE + file) else null
+    }
+
+    /** Asks GitHub and the site in parallel; offers the newest version and every source that has it. */
     private fun checkAppUpdate() {
         lifecycleScope.launch {
-            val json = withContext(Dispatchers.IO) {
-                runCatching {
-                    val c = URL(UPDATE_JSON).openConnection() as HttpURLConnection
-                    c.connectTimeout = 6000; c.readTimeout = 6000
-                    c.setRequestProperty("Cache-Control", "no-cache")
-                    c.inputStream.bufferedReader().use { it.readText() }
-                }.getOrNull()
-            } ?: return@launch
-            runCatching {
-                val o = org.json.JSONObject(json)
-                val v = o.optString("version")
-                if (v.isNotBlank() && isNewer(v, appVersion())) {
-                    val abi = if (android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a") && o.has("arm64-v8a")) "arm64-v8a" else "universal"
-                    val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
-                    newVersionUrl = DOWNLOAD_BASE + file
-                    newVersion = v
-                }
+            val found = withContext(Dispatchers.IO) {
+                val gh = async { runCatching { updateFromGithub() }.onFailure { Log.w("Pamir", "update github: ${it.message}") }.getOrNull() }
+                val site = async { runCatching { updateFromSite() }.onFailure { Log.w("Pamir", "update site: ${it.message}") }.getOrNull() }
+                listOfNotNull(gh.await(), site.await())
             }
+            val best = found.map { it.version }.fold(appVersion()) { acc, v -> if (isNewer(v, acc)) v else acc }
+            if (!isNewer(best, appVersion())) return@launch
+            newVersionUrls = found.filter { it.version == best }.map { it.url }
+            newVersion = best
         }
     }
 
@@ -1036,30 +1064,7 @@ class PamirActivity : AppCompatActivity() {
         updProgress = 0
         lifecycleScope.launch {
             val file = withContext(Dispatchers.IO) {
-                runCatching {
-                    val dir = java.io.File(cacheDir, "update").apply { mkdirs() }
-                    val f = java.io.File(dir, "pamir-vpn.apk")
-                    val c = URL(newVersionUrl).openConnection() as HttpURLConnection
-                    c.connectTimeout = 10000; c.readTimeout = 20000
-                    val total = c.contentLengthLong
-                    c.inputStream.use { input ->
-                        f.outputStream().use { out ->
-                            val buf = ByteArray(64 * 1024)
-                            var done = 0L
-                            while (true) {
-                                val n = input.read(buf)
-                                if (n < 0) break
-                                out.write(buf, 0, n)
-                                done += n
-                                if (total > 0) {
-                                    val pr = (done * 100 / total).toInt()
-                                    withContext(Dispatchers.Main) { updProgress = pr }
-                                }
-                            }
-                        }
-                    }
-                    f
-                }.getOrNull()
+                newVersionUrls.firstNotNullOfOrNull { url -> downloadApk(url) }
             }
             updProgress = -1
             if (file == null) {
@@ -1076,6 +1081,34 @@ class PamirActivity : AppCompatActivity() {
             }.onFailure { toast("Не удалось открыть установщик") }
         }
     }
+
+    /** Downloads one source into the cache; null (and logged) when it fails or arrives incomplete. */
+    private suspend fun downloadApk(url: String): java.io.File? = runCatching {
+        withContext(Dispatchers.Main) { updProgress = 0 }
+        val dir = java.io.File(cacheDir, "update").apply { mkdirs() }
+        val f = java.io.File(dir, "pamir-vpn.apk")
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 10000; c.readTimeout = 20000
+        val total = c.contentLengthLong
+        var done = 0L
+        c.inputStream.use { input ->
+            f.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    done += n
+                    if (total > 0) {
+                        val pr = (done * 100 / total).toInt()
+                        withContext(Dispatchers.Main) { updProgress = pr }
+                    }
+                }
+            }
+        }
+        if (total > 0 && done != total) throw java.io.IOException("incomplete download: $done of $total")
+        f
+    }.onFailure { Log.w("Pamir", "update download failed: ${it.message}") }.getOrNull()
 
     private fun updateSubscription(silent: Boolean = false) {
         if (updating) return

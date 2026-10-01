@@ -83,6 +83,10 @@ adb shell input keyevent KEYCODE_BACK; sleep 1; shot report_sheet
 tap_text '^Отправить$'; sleep 6; shot report_sent
 adb shell input swipe 160 150 160 560 400; sleep 1
 
+log "== кабинет"
+tap_text '^Кабинет$'; sleep 3; shot cabinet_logged_out
+tap_text '^VPN$'; sleep 2
+
 log "== отключение"
 tap_text '^VPN$'; sleep 2
 tap_text '^Защищено$|^Подключение'; sleep 6; vpn_state; shot disconnected

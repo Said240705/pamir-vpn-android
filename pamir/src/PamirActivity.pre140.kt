@@ -1,11 +1,9 @@
 package com.v2ray.ang.pamir
 
 import android.content.BroadcastReceiver
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.text.Html
 import android.content.IntentFilter
 import android.net.TrafficStats
 import android.net.Uri
@@ -178,7 +176,7 @@ data class PServer(
     val rawRemarks: String,
 )
 
-private enum class Tab { HOME, SETTINGS, APPS, CABINET }
+private enum class Tab { HOME, SETTINGS, APPS }
 
 class PamirActivity : AppCompatActivity() {
 
@@ -229,15 +227,6 @@ class PamirActivity : AppCompatActivity() {
     private var payBuy = false
     private var payJob: kotlinx.coroutines.Job? = null
     private var reportOpen by mutableStateOf(false)
-    // in-app cabinet
-    private var cabLoading by mutableStateOf(false)
-    private var cabLoaded by mutableStateOf(false)
-    private var cabDevices by mutableStateOf<Map<Int, Pair<List<JSONObject>, Int>>>(emptyMap())
-    private var cabReferral by mutableStateOf<JSONObject?>(null)
-    private var cabPayments by mutableStateOf<List<JSONObject>>(emptyList())
-    private var cabSupport by mutableStateOf<List<JSONObject>>(emptyList())
-    private var cabTopupOpen by mutableStateOf(false)
-    private var cabBusy by mutableStateOf<String?>(null)
     private var emailLoginOpen by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
     private var reportBusy by mutableStateOf(false)
@@ -525,7 +514,7 @@ class PamirActivity : AppCompatActivity() {
         runCatching { MmkvManager.decodeSubscriptions().map { it.subscription.url }.toSet() }.getOrDefault(emptySet())
 
     /** Renewal inside the app (tariffs + payment); without login — offer to log in. */
-    private fun openRenew(forceKeyId: Int? = null) {
+    private fun openRenew() {
         renewOpen = true
         if (payState == "paid" || payState == "failed") payState = null
         if (!loggedIn) return
@@ -540,7 +529,7 @@ class PamirActivity : AppCompatActivity() {
             val list = if (ka == null) emptyList() else (0 until ka.length()).map { ka.getJSONObject(it) }
             renewKeys = list
             val mine = mySubUrls()
-            renewKeyId = forceKeyId ?: (list.firstOrNull { it.optString("subscription_url") in mine }
+            renewKeyId = (list.firstOrNull { it.optString("subscription_url") in mine }
                 ?: list.firstOrNull { it.optBoolean("is_active") } ?: list.firstOrNull())?.optInt("id")
             val ta = tarJ?.optJSONArray("tariffs")
             tariffs = if (ta == null) emptyList() else (0 until ta.length()).map { ta.getJSONObject(it) }
@@ -621,109 +610,6 @@ class PamirActivity : AppCompatActivity() {
             }
         }
     }
-
-
-    // ---------- in-app cabinet ----------
-
-    private fun loadCabinet(silent: Boolean = false) {
-        if (!loggedIn || cabLoading) return
-        cabLoading = !silent || !cabLoaded
-        lifecycleScope.launch {
-            val me = api(quiet = true) { p -> PamirApi.call("/auth/me", proxyPort = p) }
-            if (me != null) balanceMinor = if (me.isNull("balance")) null else me.optLong("balance")
-            val keysJ = api(quiet = true) { p -> PamirApi.call("/auth/keys", proxyPort = p) }
-            keysJ?.optJSONArray("keys")?.let { ka -> renewKeys = (0 until ka.length()).map { ka.getJSONObject(it) } }
-            val dev = mutableMapOf<Int, Pair<List<JSONObject>, Int>>()
-            renewKeys.filter { it.optBoolean("is_active") }.take(4).forEach { k ->
-                val id = k.optInt("id")
-                val d = api(quiet = true) { p -> PamirApi.call("/topup/devices?key_id=$id", proxyPort = p) }
-                val arr = d?.optJSONArray("devices")
-                if (d != null) dev[id] = Pair(if (arr == null) emptyList() else (0 until arr.length()).map { arr.getJSONObject(it) }, d.optInt("limit"))
-            }
-            cabDevices = dev
-            cabReferral = api(quiet = true) { p -> PamirApi.call("/topup/referral", proxyPort = p) }
-            val from = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(System.currentTimeMillis() - 365L * 86_400_000))
-            val pj = api(quiet = true) { p -> PamirApi.call("/topup/payments?date_from=$from", proxyPort = p) }
-            pj?.optJSONArray("payments")?.let { a -> cabPayments = (0 until a.length()).map { a.getJSONObject(it) } }
-            loadSupport()
-            cabLoading = false
-            cabLoaded = true
-        }
-    }
-
-    private suspend fun loadSupport() {
-        val sj = api(quiet = true) { p -> PamirApi.call("/topup/support/messages", proxyPort = p) } ?: return
-        sj.optJSONArray("messages")?.let { a -> cabSupport = (0 until a.length()).map { a.getJSONObject(it) } }
-    }
-
-    private fun removeDevice(keyId: Int, deviceId: Int) {
-        if (cabBusy != null) return
-        cabBusy = "dev$deviceId"
-        lifecycleScope.launch {
-            val r = api { p -> PamirApi.call("/topup/device-remove", "POST", JSONObject().put("key_id", keyId).put("device_id", deviceId), proxyPort = p) }
-            cabBusy = null
-            if (r != null) {
-                toast("Устройство отключено")
-                loadCabinet(silent = true)
-            }
-        }
-    }
-
-    private fun topUp(amount: Int) {
-        if (cabBusy != null) return
-        cabBusy = "topup"
-        lifecycleScope.launch {
-            val before = balanceMinor ?: 0L
-            val r = api { p -> PamirApi.call("/topup", "POST", JSONObject().put("amount", amount), proxyPort = p) }
-            cabBusy = null
-            val url = r?.optString("payment_url").orEmpty()
-            if (!url.startsWith("http")) return@launch
-            cabTopupOpen = false
-            openUrl(url)
-            toast("Оплатите в открывшемся окне — баланс обновится сам", true)
-            payJob?.cancel()
-            payJob = lifecycleScope.launch {
-                repeat(60) {
-                    delay(5000)
-                    refreshAccount()
-                    delay(300)
-                    if ((balanceMinor ?: 0L) > before) {
-                        toast("Баланс пополнен: ${rub(balanceMinor ?: 0L)}", true)
-                        loadCabinet(silent = true)
-                        return@launch
-                    }
-                }
-            }
-        }
-    }
-
-    private fun sendSupport(text: String) {
-        val t = text.trim()
-        if (t.isEmpty() || cabBusy != null) return
-        cabBusy = "support"
-        lifecycleScope.launch {
-            val r = api { p -> PamirApi.call("/topup/support/send", "POST", JSONObject().put("text", t), proxyPort = p) }
-            cabBusy = null
-            if (r != null) { loadSupport(); toast("Отправлено. Ответ придёт сюда и в Telegram") }
-        }
-    }
-
-    private fun copyText(label: String, text: String) {
-        runCatching {
-            (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, text))
-            toast("Скопировано")
-        }
-    }
-
-    private fun fmtDate(raw: String?): String {
-        val d = (raw ?: "").take(10).split("-")
-        return if (d.size == 3) "${d[2]}.${d[1]}.${d[0]}" else ""
-    }
-
-    private fun daysUntil(raw: String?): Int? = runCatching {
-        val d = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse((raw ?: "").take(10)) ?: return null
-        Math.ceil((d.time - System.currentTimeMillis()) / 86_400_000.0).toInt()
-    }.getOrNull()
 
     private fun rub(minor: Long): String {
         val v = minor / 100.0
@@ -1123,7 +1009,6 @@ class PamirActivity : AppCompatActivity() {
     private fun Root() {
         BackHandler(enabled = tab != Tab.HOME) { tab = if (tab == Tab.APPS) Tab.SETTINGS else Tab.HOME }
         LaunchedEffect(tab) { if (tab != Tab.APPS) applyAppsIfChanged() }
-        LaunchedEffect(tab, loggedIn) { if (tab == Tab.CABINET && loggedIn) loadCabinet(silent = true) }
         Box(
             Modifier
                 .fillMaxSize()
@@ -1154,7 +1039,6 @@ class PamirActivity : AppCompatActivity() {
                                 Tab.HOME -> Home(onPick = { sheetOpen = true })
                                 Tab.SETTINGS -> Settings()
                                 Tab.APPS -> AppsScreen()
-                                Tab.CABINET -> CabinetScreen()
                             }
                         }
                     }
@@ -1164,7 +1048,6 @@ class PamirActivity : AppCompatActivity() {
             if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
             if (renewOpen) RenewSheet(onDismiss = { renewOpen = false })
             if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
-            if (cabTopupOpen) TopupSheet(onDismiss = { cabTopupOpen = false })
             if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
         }
     }
@@ -1860,291 +1743,6 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-
-    @Composable
-    private fun CabCard(content: @Composable ColumnScope.() -> Unit) {
-        Column(
-            Modifier
-                .padding(horizontal = 16.dp, vertical = 5.dp)
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(Surface1)
-                .border(1.dp, Line, RoundedCornerShape(18.dp))
-                .padding(14.dp),
-            content = content
-        )
-    }
-
-    @Composable
-    private fun CabinetScreen() {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(bottom = 16.dp)
-        ) {
-            Text("Кабинет", color = TextMain, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 4.dp))
-            if (!loggedIn) {
-                CabCard {
-                    Text("Войдите в аккаунт", color = TextMain, fontSize = 15.sp, fontWeight = FontWeight.ExtraBold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Подписка, баланс, устройства, платежи и поддержка — всё здесь, без перехода на сайт.", color = TextDim, fontSize = 12.sp, lineHeight = 17.sp)
-                    Spacer(Modifier.height(12.dp))
-                    if (loginBusy) {
-                        Text("Подтвердите вход в Telegram и вернитесь сюда", color = TextDim, fontSize = 12.sp)
-                        Spacer(Modifier.height(6.dp))
-                        SecondaryButton("Отменить") { cancelLogin() }
-                    } else PrimaryButton("✈  Войти через Telegram") { loginTelegram() }
-                    Spacer(Modifier.height(8.dp))
-                    SecondaryButton("Войти по почте и паролю") { emailLoginOpen = true }
-                }
-                return@Column
-            }
-            // balance
-            CabCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("БАЛАНС", color = TextDim, fontSize = 10.5.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp)
-                        Text(balanceMinor?.let { rub(it) } ?: "—", color = TextMain, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-                    }
-                    Box(
-                        Modifier
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Brush.linearGradient(listOf(Mint, MintDeep)))
-                            .clickable { cabTopupOpen = true }
-                            .padding(horizontal = 16.dp),
-                        contentAlignment = Alignment.Center
-                    ) { Text("Пополнить", color = Color(0xFF05241D), fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
-                }
-            }
-            if (cabLoading && !cabLoaded) {
-                Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(26.dp))
-                }
-            }
-            // subscriptions
-            Section("Подписка")
-            if (renewKeys.isEmpty() && cabLoaded) {
-                CabCard {
-                    Text("Подписки пока нет", color = TextMain, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Выберите тариф — подключится за минуту.", color = TextDim, fontSize = 12.sp)
-                    Spacer(Modifier.height(10.dp))
-                    PrimaryButton("Выбрать тариф") { openRenew() }
-                }
-            }
-            renewKeys.forEach { k ->
-                val id = k.optInt("id")
-                val active = k.optBoolean("is_active")
-                val left = if (active) daysUntil(k.optString("expires_at").takeIf { it != "null" }) else null
-                val used = k.optLong("traffic_used")
-                val limit = k.optLong("traffic_limit")
-                CabCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(k.optString("display_name").ifBlank { "Ключ #$id" }, color = TextMain, fontSize = 14.5.sp, fontWeight = FontWeight.ExtraBold)
-                            val tn = k.optString("tariff_name").takeIf { it.isNotBlank() && it != "null" }
-                            if (tn != null) Text(tn, color = TextDim, fontSize = 11.5.sp)
-                        }
-                        val (txt, col) = when {
-                            !active -> "Закончилась" to Danger
-                            left != null && left <= 3 -> "Осталось ${maxOf(left, 0)} ${plural(maxOf(left, 0), "день", "дня", "дней")}" to Color(0xFFF0B46A)
-                            else -> "Активна" to Mint
-                        }
-                        Text(txt, color = col, fontSize = 11.5.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(col.copy(alpha = 0.12f)).padding(horizontal = 9.dp, vertical = 4.dp))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(keyExpiry(k).replaceFirstChar { it.uppercase() }, color = TextDim, fontSize = 12.sp)
-                    if (limit > 0) {
-                        Spacer(Modifier.height(8.dp))
-                        val frac = (used.toFloat() / limit.toFloat()).coerceIn(0f, 1f)
-                        Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFF1E2B3C))) {
-                            Box(Modifier.fillMaxWidth(frac).height(6.dp).clip(RoundedCornerShape(3.dp)).background(if (frac > 0.9f) Danger else Mint))
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text("Трафик: ${fmtBytes(used)} из ${fmtBytes(limit)}", color = TextDim, fontSize = 11.sp)
-                    } else if (used > 0) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Трафик: ${fmtBytes(used)} · без лимита", color = TextDim, fontSize = 11.sp)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    PrimaryButton(if (active) "Продлить" else "Возобновить") { openRenew(id) }
-                }
-            }
-            // devices
-            val devKeys = renewKeys.filter { cabDevices.containsKey(it.optInt("id")) }
-            if (devKeys.isNotEmpty()) {
-                Section("Устройства")
-                devKeys.forEach { k ->
-                    val id = k.optInt("id")
-                    val (list, limit) = cabDevices[id] ?: return@forEach
-                    CabCard {
-                        Text(
-                            (if (renewKeys.size > 1) "${k.optString("display_name").ifBlank { "Ключ #$id" }} · " else "") +
-                                "${list.size}" + (if (limit > 0) " из $limit" else "") + " ${plural(list.size, "устройство", "устройства", "устройств")}",
-                            color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold
-                        )
-                        if (list.isEmpty()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text("Пока ни одного — устройства появятся после первого подключения.", color = TextDim, fontSize = 12.sp)
-                        }
-                        list.forEach { d ->
-                            val devId = d.optInt("id")
-                            val name = listOf(d.optString("device_model"), d.optString("device_os")).filter { it.isNotBlank() && it != "null" }.joinToString(" · ")
-                                .ifBlank { "Устройство" }
-                            Spacer(Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RowIcon("📱")
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(name, color = TextMain, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    val seen = fmtDate(d.optString("last_seen").takeIf { it != "null" })
-                                    if (seen.isNotEmpty()) Text("был в сети $seen", color = TextDim, fontSize = 10.5.sp)
-                                }
-                                Text(if (cabBusy == "dev$devId") "…" else "Отключить", color = Danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.clickable { removeDevice(id, devId) }.padding(8.dp))
-                            }
-                        }
-                    }
-                }
-            }
-            // referral
-            cabReferral?.takeIf { it.optString("link").isNotBlank() }?.let { r ->
-                Section("Пригласить друзей")
-                CabCard {
-                    Text("Делитесь ссылкой — получайте бонусы на баланс", color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Приглашено: ${r.optInt("referrals_count")} · заработано ${rub(r.optLong("total_reward_minor"))}", color = TextDim, fontSize = 12.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(r.optString("link"), color = Mint, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Box(Modifier.weight(1f)) { SecondaryButton("Скопировать") { copyText("ref", r.optString("link")) } }
-                        Box(Modifier.weight(1f)) {
-                            SecondaryButton("Поделиться") {
-                                runCatching {
-                                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                                        .putExtra(Intent.EXTRA_TEXT, "Pamir VPN — работает даже при белых списках: " + r.optString("link")), null))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            // payments
-            Section("История платежей")
-            CabCard {
-                val shown = cabPayments.filter { it.optString("status") == "paid" }.take(8)
-                if (shown.isEmpty()) {
-                    Text(if (cabLoaded) "Платежей пока нет" else "Загружаем…", color = TextDim, fontSize = 12.sp)
-                }
-                shown.forEachIndexed { i, pmt ->
-                    if (i > 0) Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(pmt.optString("description").takeIf { it.isNotBlank() && it != "null" } ?: "Платёж", color = TextMain, fontSize = 12.5.sp,
-                                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(fmtDate(pmt.optString("paid_at").takeIf { it != "null" && it.isNotBlank() } ?: pmt.optString("created_at")), color = TextDim, fontSize = 10.5.sp)
-                        }
-                        Text(rub(pmt.optLong("payable_amount_minor")), color = Mint, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
-                    }
-                }
-            }
-            // support
-            Section("Поддержка")
-            SupportCard()
-            Spacer(Modifier.height(8.dp))
-            Text("Выйти из аккаунта", color = TextDim, fontSize = 12.sp,
-                modifier = Modifier.align(Alignment.CenterHorizontally).clickable { logout(); cabLoaded = false; toast("Вы вышли из аккаунта") }.padding(12.dp))
-        }
-    }
-
-    @Composable
-    private fun SupportCard() {
-        var text by remember { mutableStateOf("") }
-        val fieldColors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647), cursorColor = Mint,
-            focusedContainerColor = Surface2, unfocusedContainerColor = Surface2,
-            focusedTextColor = TextMain, unfocusedTextColor = TextMain
-        )
-        CabCard {
-            val msgs = cabSupport.takeLast(6)
-            if (msgs.isEmpty()) {
-                Text("Напишите нам — отвечаем быстро. Ответ появится здесь и придёт в Telegram.", color = TextDim, fontSize = 12.sp, lineHeight = 17.sp)
-            }
-            msgs.forEach { m ->
-                val mine = m.optString("sender_type") == "user"
-                val body = runCatching { Html.fromHtml(m.optString("text"), Html.FROM_HTML_MODE_COMPACT).toString().trim() }.getOrDefault(m.optString("text"))
-                    .ifBlank { if (m.optString("media_type") == "photo") "📷 Фото" else "" }
-                if (body.isBlank()) return@forEach
-                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
-                    Text(body, color = if (mine) Color(0xFF05241D) else TextMain, fontSize = 12.5.sp, lineHeight = 17.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(if (mine) Mint else Surface2)
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Ваше сообщение", color = TextDim.copy(alpha = 0.7f), fontSize = 13.sp) },
-                shape = RoundedCornerShape(14.dp), colors = fieldColors, maxLines = 4
-            )
-            Spacer(Modifier.height(8.dp))
-            if (cabBusy == "support") Box(Modifier.fillMaxWidth().height(46.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Mint, modifier = Modifier.size(22.dp))
-            } else PrimaryButton("Отправить") { if (text.isBlank()) toast("Введите сообщение") else { sendSupport(text); text = "" } }
-        }
-    }
-
-    @Composable
-    private fun TopupSheet(onDismiss: () -> Unit) {
-        val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        var custom by remember { mutableStateOf("") }
-        val fieldColors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Mint, unfocusedBorderColor = Color(0xFF2A3647), cursorColor = Mint,
-            focusedContainerColor = Surface1, unfocusedContainerColor = Surface1,
-            focusedTextColor = TextMain, unfocusedTextColor = TextMain
-        )
-        ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state, containerColor = Color(0xFF0F1926)) {
-            Column(Modifier.padding(horizontal = 16.dp).navigationBarsPadding().padding(bottom = 18.dp)) {
-                Text("Пополнение баланса", color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.ExtraBold)
-                Spacer(Modifier.height(4.dp))
-                Text("Оплата через СБП или карту. Деньги придут на баланс за пару секунд.", color = TextDim, fontSize = 12.sp)
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(100, 300, 500, 1000).forEach { a ->
-                        Box(
-                            Modifier.weight(1f).height(44.dp).clip(RoundedCornerShape(13.dp)).background(Surface1)
-                                .border(1.dp, Line, RoundedCornerShape(13.dp)).clickable { topUp(a) },
-                            contentAlignment = Alignment.Center
-                        ) { Text("$a ₽", color = TextMain, fontSize = 13.5.sp, fontWeight = FontWeight.Bold) }
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = custom, onValueChange = { custom = it.filter { c -> c.isDigit() }.take(5) }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Другая сумма, от 100 ₽", color = TextDim.copy(alpha = 0.7f), fontSize = 14.sp) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    shape = RoundedCornerShape(14.dp), colors = fieldColors
-                )
-                Spacer(Modifier.height(10.dp))
-                if (cabBusy == "topup") Box(Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Mint, modifier = Modifier.size(24.dp))
-                } else PrimaryButton("Пополнить") {
-                    val v = custom.toIntOrNull() ?: 0
-                    if (v < 100) toast("Минимальная сумма — 100 ₽") else topUp(v)
-                }
-            }
-        }
-    }
-
     @Composable
     private fun AppsScreen() {
         val list = appList
@@ -2283,7 +1881,7 @@ class PamirActivity : AppCompatActivity() {
             Group {
                 val upd = if (lastUpdate > 0) "Обновлено ${agoText(lastUpdate)}" else "Ещё не обновлялись"
                 LinkRow("↻", if (updating) "Обновляем…" else "Обновить серверы", upd) { updateSubscription() }
-                LinkRow("👤", "Личный кабинет", "Подписка, устройства, платежи") { tab = Tab.CABINET }
+                LinkRow("👤", "Личный кабинет", "Продление и устройства") { openUrl(CABINET_URL) }
             }
             Section("Помощь")
             Group {
@@ -2417,7 +2015,7 @@ class PamirActivity : AppCompatActivity() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             NavItem(R.drawable.ic_lock_24dp, "VPN", tab == Tab.HOME, Modifier.weight(1f)) { onTab(Tab.HOME) }
-            NavItem(R.drawable.ic_subscriptions_24dp, "Кабинет", tab == Tab.CABINET, Modifier.weight(1f)) { onTab(Tab.CABINET) }
+            NavItem(R.drawable.ic_subscriptions_24dp, "Кабинет", false, Modifier.weight(1f)) { openUrl(CABINET_URL) }
             NavItem(R.drawable.ic_settings_24dp, "Настройки", tab == Tab.SETTINGS, Modifier.weight(1f)) { onTab(Tab.SETTINGS) }
         }
     }

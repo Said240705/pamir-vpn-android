@@ -196,10 +196,13 @@ object PamirWatch {
         val candidates = MmkvManager.decodeAllServerList().mapNotNull { g ->
             MmkvManager.decodeServerConfig(g)?.takeIf { g !in leftServers && !isLte(it) && !isStub(it) }?.let { g to it }
         }
+        // locations the status page reports as down go last: try them only when nothing else answers
+        val (healthy, down) = candidates.partition { !PamirLocations.isDown(it.second.remarks) }
         if (candidates.isEmpty()) return false
-        val best = coroutineScope {
-            candidates.map { (g, p) -> async { g to tcpConnectMs(p) } }.awaitAll()
-        }.filter { it.second >= 0 }.minByOrNull { it.second } ?: return false
+        suspend fun fastest(list: List<Pair<String, ProfileItem>>) = coroutineScope {
+            list.map { (g, p) -> async { g to tcpConnectMs(p) } }.awaitAll()
+        }.filter { it.second >= 0 }.minByOrNull { it.second }
+        val best = (if (healthy.isNotEmpty()) fastest(healthy) else null) ?: fastest(down) ?: return false
         val next = MmkvManager.decodeServerConfig(best.first) ?: return false
         Log.w(TAG, "watchdog: switching server (${best.second} ms)")
         lastSwitchAt = now

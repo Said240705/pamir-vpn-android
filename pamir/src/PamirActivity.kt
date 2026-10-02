@@ -95,6 +95,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -195,6 +196,16 @@ data class PServer(
 
 private enum class Tab { HOME, SETTINGS, APPS, CABINET }
 
+/** Reasons the server gives for a rejected promo code (same texts as the web cabinet). */
+private val PROMO_ERRORS = mapOf(
+    "not_found" to "Такого промокода не существует",
+    "inactive" to "Этот промокод сейчас не активен",
+    "expired" to "Срок действия промокода истёк",
+    "exhausted" to "Промокод уже использован максимальное количество раз",
+    "already_used" to "Вы уже использовали этот промокод",
+    "already_reserved" to "Этот промокод закреплён за другим аккаунтом",
+)
+
 class PamirActivity : AppCompatActivity() {
 
     private var running by mutableStateOf(false)
@@ -268,6 +279,12 @@ class PamirActivity : AppCompatActivity() {
     private var trialOffer by mutableStateOf<JSONObject?>(null)
     private var trialBusy by mutableStateOf(false)
     private var renameTarget by mutableStateOf<JSONObject?>(null)
+    private var promoBusy by mutableStateOf(false)
+    /** Result of the last promo code: true to message on success, false to the reason otherwise. */
+    private var promoResult by mutableStateOf<Pair<Boolean, String>?>(null)
+    /** Bumped after the location status is refreshed so the server list recomposes. */
+    private var locTick by mutableStateOf(0)
+    private var locLoadedAt = 0L
     private var reportBusy by mutableStateOf(false)
     // look and feel
     private var themeMode by mutableStateOf(PamirThemeMode.from(MmkvManager.decodeSettingsString(PREF_THEME, PamirThemeMode.DARK.key)))
@@ -373,6 +390,7 @@ class PamirActivity : AppCompatActivity() {
         if (tab == Tab.APPS) loadApps()
         if (payState == "waiting") lifecycleScope.launch { checkPayment() }
         lifecycleScope.launch { delay(1200); precheck() }
+        lifecycleScope.launch { loadLocations() }
     }
 
     override fun onDestroy() {
@@ -685,13 +703,47 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /** Same promo codes as in the web cabinet: the discount applies to the next payment. */
+    private fun applyPromo(code: String) {
+        val value = code.trim()
+        if (value.isEmpty() || promoBusy) return
+        promoBusy = true
+        promoResult = null
+        lifecycleScope.launch {
+            val port = proxyPort()
+            val r = withContext(Dispatchers.IO) {
+                runCatching { PamirApi.call("/topup/promo", "POST", JSONObject().put("code", value), proxyPort = port) }
+            }
+            promoBusy = false
+            r.onSuccess {
+                promoResult = true to it.optString("message").ifBlank { "Промокод применён — скидка учтётся при следующей оплате" }
+            }.onFailure { e ->
+                Log.w("Pamir", "promo: ${e.message}")
+                if (e is PamirApi.ApiError && e.code == 401) {
+                    logout(); toast("Войдите заново через Telegram", true)
+                    return@onFailure
+                }
+                promoResult = false to (PROMO_ERRORS[e.message] ?: e.message ?: "Не удалось применить промокод")
+            }
+        }
+    }
+
+    /** Location status for the server list and auto switch (public, no login). At most once a minute. */
+    private suspend fun loadLocations(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - locLoadedAt < 60_000L) return
+        locLoadedAt = now
+        val r = api(quiet = true) { p -> PamirApi.call("/topup/public/server-status", auth = false, proxyPort = p) } ?: return
+        r.optJSONArray("servers")?.let { PamirLocations.save(it); locTick++ }
+    }
+
     /** Message for WhatsApp/Telegram: how to install the app and connect this key on another phone. */
     private fun shareKey(k: JSONObject) {
+        // open-app.html opens Pamir VPN with the key on Android and offers Incy/Happ on iPhone
+        val link = "https://app.pamirlink.ru/open-app.html?url=" + Uri.encode(k.optString("subscription_url"))
         val text = "Pamir VPN — ключ «${keyName(k)}»\n\n" +
-            "1. Установите приложение: ${DOWNLOAD_BASE}pamir-vpn-universal.apk\n" +
-            "2. Скопируйте ссылку ниже, откройте Pamir VPN и нажмите «Вставить ссылку подписки»:\n" +
-            k.optString("subscription_url") + "\n\n" +
-            "На iPhone ссылку можно вставить в приложение Happ или Streisand."
+            "Откройте ссылку на телефоне — VPN подключится в один клик:\n$link\n\n" +
+            "Если приложения ещё нет, ссылка предложит его скачать."
         runCatching {
             startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "Отправить ключ"))
         }
@@ -1060,7 +1112,7 @@ class PamirActivity : AppCompatActivity() {
     private fun pickBest() {
         lifecycleScope.launch {
             runPing()
-            val best = servers.filter { !it.isStub && !it.isLte && (pings[it.guid] ?: -1) > 0 }
+            val best = servers.filter { !it.isStub && !it.isLte && (pings[it.guid] ?: -1) > 0 && !PamirLocations.isDown(it.rawRemarks) }
                 .minByOrNull { pings[it.guid] ?: Int.MAX_VALUE }
             if (best != null) {
                 selectServer(best.guid)
@@ -1743,6 +1795,7 @@ class PamirActivity : AppCompatActivity() {
                 Column(Modifier.weight(1f)) {
                     Text(s.name, style = PamirType.body.copy(fontWeight = FontWeight.Bold), color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     val sub = when {
+                        locTick.let { PamirLocations.isDown(s.rawRemarks) } -> "Перебои — смените сервер"
                         auto -> "Выбран автоматически"
                         s.isLte -> "Для мобильного интернета"
                         p != null && p > 0 -> "Отклик $p мс"
@@ -1843,6 +1896,7 @@ class PamirActivity : AppCompatActivity() {
     private fun ServerSheet(onDismiss: () -> Unit) {
         val c = Pamir.colors
         LaunchedEffect(Unit) { if (realPinged.isEmpty()) runPing() }
+        LaunchedEffect(Unit) { loadLocations(force = true) }
         val auto = MmkvManager.decodeSettingsBool(PREF_AUTO_BEST, false)
         PamirSheet(
             onDismiss = onDismiss,
@@ -1866,14 +1920,15 @@ class PamirActivity : AppCompatActivity() {
                 onClick = { pickBest(); onDismiss() }
             )
             // Reachable servers by response time; unknown and silent ones keep subscription order at the end.
-            val normal = servers.filter { !it.isLte && !it.isStub }.sortedBy { s ->
+            locTick // recompose when the location status is refreshed
+            val normal = servers.filter { !it.isLte && !it.isStub }.sortedWith(compareBy<PServer> { PamirLocations.isDown(it.rawRemarks) }.thenBy { s ->
                 val p = pings[s.guid]
                 when {
                     p == null -> Int.MAX_VALUE - 1
                     p <= 0 -> Int.MAX_VALUE
                     else -> p
                 }
-            }
+            })
             val favs = normal.filter { it.name in favorites }
             val rest = normal.filter { it.name !in favorites }
             val lte = servers.filter { it.isLte && !it.isStub }
@@ -1898,12 +1953,21 @@ class PamirActivity : AppCompatActivity() {
         val fav = s.name in favorites
         val p = pings[s.guid]
         val q = pingQuality(p)
+        val down = locTick.let { PamirLocations.isDown(s.rawRemarks) }
         SheetRow(
             selected = sel,
             leading = { FlagBadge(s.flag, 40.dp) },
             title = s.name,
-            detail = if (s.isLte) "Для «белых списков»" else pingText(s).ifEmpty { "Нажмите, чтобы подключить" },
-            detailColor = if (s.isLte || p == null) c.textDim else q.color(),
+            detail = when {
+                down -> "Перебои на сервере"
+                s.isLte -> "Для «белых списков»"
+                else -> pingText(s).ifEmpty { "Нажмите, чтобы подключить" }
+            },
+            detailColor = when {
+                down -> c.danger
+                s.isLte || p == null -> c.textDim
+                else -> q.color()
+            },
             onClick = { selectServer(s.guid); onDismiss() }
         ) {
             if (!s.isLte) PingBars(q)
@@ -2202,6 +2266,8 @@ class PamirActivity : AppCompatActivity() {
                 SectionHeader("Пригласить друзей")
                 ReferralCard(r)
             }
+            SectionHeader("Промокод")
+            PromoCard()
             SectionHeader("История платежей")
             PaymentsCard()
             SectionHeader("Поддержка")
@@ -2358,6 +2424,32 @@ class PamirActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+    }
+
+    @Composable
+    private fun PromoCard() {
+        val c = Pamir.colors
+        var code by remember { mutableStateOf("") }
+        PamirCard {
+            Text("Есть промокод? Скидка учтётся при следующей оплате.", style = PamirType.support, color = c.textDim)
+            Spacer(Modifier.height(Gap.m))
+            OutlinedTextField(
+                value = code, onValueChange = { code = it.take(40); promoResult = null }, singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Введите код", style = PamirType.bodyRegular) },
+                leadingIcon = { Icon(PamirIcons.Star, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { applyPromo(code) }),
+                shape = Radius.m, colors = pamirFieldColors()
+            )
+            promoResult?.let { (ok, msg) ->
+                Spacer(Modifier.height(Gap.s))
+                Text(msg, style = PamirType.support, color = if (ok) c.accentText else c.danger)
+            }
+            Spacer(Modifier.height(Gap.m))
+            PrimaryButton("Применить", loading = promoBusy) { applyPromo(code) }
         }
     }
 

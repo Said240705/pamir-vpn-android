@@ -8,7 +8,7 @@ on:
         type: boolean
         default: false
       tag:
-        description: 'Release tag to test (empty = latest release; set it to test a pre-release)'
+        description: 'Version to test, e.g. 1.5.5 (empty = latest release; set it to test a pre-release)'
         required: false
         default: ''
 
@@ -30,6 +30,8 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         TAG: ${{ inputs.tag }}
       run: |
+        # "1.5.5" and "v1.5.5" both mean release v1.5.5; empty = latest release
+        [ -n "$TAG" ] && TAG="v${TAG#v}"
         gh release download $TAG -R ${{ github.repository }} --pattern '*_universal.apk' -O app.apk
         ls -la app.apk
 
@@ -55,9 +57,9 @@ jobs:
         for c in ${TG_CHATS//,/ }; do
           curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id=$c --data-urlencode "text=🤖 Тест Pamir VPN (${{ inputs.tv && 'Android TV' || 'Android' }}-эмулятор) #${{ github.run_number }}"
           for f in shots/*.png; do
-            [ -f "$f" ] && curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendPhoto" -F chat_id=$c -F photo=@"$f" -F caption="$(basename "$f" .png)"
+            [ -f "$f" ] && curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendPhoto" -F chat_id=$c -F photo=@"$f" -F caption="$(basename "$f" .png)" || true
           done
           for f in shots/report.txt shots/logcat.txt; do
-            [ -s "$f" ] && curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendDocument" -F chat_id=$c -F document=@"$f"
+            [ -s "$f" ] && curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendDocument" -F chat_id=$c -F document=@"$f" || true
           done
         done

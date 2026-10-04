@@ -266,6 +266,8 @@ class PamirActivity : AppCompatActivity() {
     private var payState by mutableStateOf<String?>(null)   // waiting | paid | failed
     private var payUrl = ""
     private var payOrder: String? = null
+    /** Payment page shown inside the app (see PamirPay); null = closed. */
+    private var payWebUrl by mutableStateOf<String?>(null)
     private var payBuy = false
     private var payJob: kotlinx.coroutines.Job? = null
     private var reportOpen by mutableStateOf(false)
@@ -279,6 +281,8 @@ class PamirActivity : AppCompatActivity() {
     private var cabTopupOpen by mutableStateOf(false)
     private var cabBusy by mutableStateOf<String?>(null)
     private var emailLoginOpen by mutableStateOf(false)
+    /** The e-mail sheet opens on registration instead of sign-in. */
+    private var emailRegister by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
     // which key of the account this phone uses
     private var deviceKeyId by mutableStateOf(MmkvManager.decodeSettingsString(PREF_DEVICE_KEY, "")?.toIntOrNull())
@@ -551,6 +555,32 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /** New account by e-mail right in the app (the same /auth/email/register as the site); then like a sign-in. */
+    private fun registerEmail(email: String, password: String, repeat: String) {
+        if (emailBusy) return
+        val e = email.trim()
+        when {
+            !Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$").matches(e) -> { toast("Проверьте почту — например, name@mail.ru"); return }
+            password.length < 6 -> { toast("Пароль — не короче 6 символов"); return }
+            password != repeat -> { toast("Пароли не совпадают"); return }
+        }
+        emailBusy = true
+        lifecycleScope.launch {
+            val r = api { p ->
+                PamirApi.call("/auth/email/register", "POST", JSONObject().put("email", e).put("password", password), auth = false, proxyPort = p)
+            }
+            emailBusy = false
+            val t = r?.optString("access_token").orEmpty()
+            if (t.isBlank()) return@launch
+            PamirApi.token = t
+            loggedIn = true
+            emailLoginOpen = false
+            Log.w("Pamir", "email register ok")
+            toast("Аккаунт создан")
+            onLoggedIn()
+        }
+    }
+
     private fun forgotPassword(email: String) {
         if (!email.contains("@")) { toast("Сначала введите почту"); return }
         lifecycleScope.launch {
@@ -805,7 +835,7 @@ class PamirActivity : AppCompatActivity() {
                     payUrl = r.optString("payment_url")
                     payOrder = r.optString("order_id").takeIf { it.isNotBlank() }
                     payState = "waiting"
-                    openUrl(payUrl, "Оплата", "Отсканируйте код телефоном и оплатите — подписка продлится сама")
+                    openPayment(payUrl, "Оплата", "Отсканируйте код телефоном и оплатите — подписка продлится сама")
                     watchPayment()
                 }
                 r.optBoolean("completed") || r.optBoolean("ok") -> onPaid()
@@ -820,7 +850,23 @@ class PamirActivity : AppCompatActivity() {
                 delay(4000)
                 if (checkPayment()) return@launch
             }
+            // ~13 minutes without an answer: stop the spinner instead of waiting forever.
+            if (payState == "waiting") {
+                payState = null
+                toast("Не дождались подтверждения оплаты. Если деньги списались — напишите в поддержку", true)
+            }
         }
+    }
+
+    /** Payment page: inside the app on a phone, as a QR code on a TV. */
+    private fun openPayment(url: String, title: String, text: String) {
+        if (tv) openUrl(url, title, text) else payWebUrl = url
+    }
+
+    /** The payment page closed (by the user or after the provider's return): check right away. */
+    private fun onPaymentPageClosed() {
+        payWebUrl = null
+        if (payState == "waiting") lifecycleScope.launch { checkPayment() }
     }
 
     /** true = finished (paid or failed). */
@@ -838,6 +884,7 @@ class PamirActivity : AppCompatActivity() {
 
     private fun onPaid() {
         payState = "paid"
+        payWebUrl = null
         if (qrLink?.url == payUrl) qrLink = null
         payJob?.cancel()
         Log.w("Pamir", "payment ok buy=$payBuy")
@@ -922,8 +969,7 @@ class PamirActivity : AppCompatActivity() {
             val url = r?.optString("payment_url").orEmpty()
             if (!url.startsWith("http")) return@launch
             cabTopupOpen = false
-            openUrl(url, "Пополнение баланса", "Отсканируйте код телефоном и оплатите — баланс обновится сам")
-            if (!tv) toast("Оплатите в открывшемся окне — баланс обновится сам", true)
+            openPayment(url, "Пополнение баланса", "Отсканируйте код телефоном и оплатите — баланс обновится сам")
             payJob?.cancel()
             payJob = lifecycleScope.launch {
                 repeat(60) {
@@ -932,6 +978,7 @@ class PamirActivity : AppCompatActivity() {
                     delay(300)
                     if ((balanceMinor ?: 0L) > before) {
                         if (qrLink?.url == url) qrLink = null
+                        if (payWebUrl == url) payWebUrl = null
                         toast("Баланс пополнен: ${rub(balanceMinor ?: 0L)}", true)
                         loadCabinet(silent = true)
                         return@launch
@@ -1430,7 +1477,7 @@ class PamirActivity : AppCompatActivity() {
      * otherwise a system toast is used, because a sheet window would hide the snackbar.
      */
     private fun toast(message: CharSequence, long: Boolean = false, action: String? = null, onAction: (() -> Unit)? = null) {
-        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen || renameTarget != null || qrLink != null
+        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen || renameTarget != null || qrLink != null || payWebUrl != null
         if (sheetShown || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             applicationContext.toast(message, long)
             return
@@ -1555,6 +1602,12 @@ class PamirActivity : AppCompatActivity() {
                 if (keyPickerOpen) KeyPickerSheet(onDismiss = { keyPickerOpen = false })
                 renameTarget?.let { RenameKeySheet(it, onDismiss = { renameTarget = null }) }
                 qrLink?.let { q -> QrSheet(q, onDismiss = { qrLink = null; q.onClose?.invoke() }) }
+                payWebUrl?.let { u ->
+                    PayWebDialog(
+                        u, onReturn = { onPaymentPageClosed() }, onClose = { onPaymentPageClosed() },
+                        onBrowser = { payWebUrl = null; openUrl(u) }
+                    )
+                }
             }
         }
     }
@@ -1637,8 +1690,9 @@ class PamirActivity : AppCompatActivity() {
             ) { loginTelegram() }
         }
         Spacer(Modifier.height(Gap.m))
-        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailLoginOpen = true }
+        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailRegister = false; emailLoginOpen = true }
         Spacer(Modifier.height(Gap.xs))
+        TextAction("Нет аккаунта? Зарегистрироваться", color = c.accentText) { emailRegister = true; emailLoginOpen = true }
         if (!tv) TextAction("Вставить ссылку подписки", icon = PamirIcons.Link) { importFromClipboard() }
         Spacer(Modifier.height(Gap.l))
     }
@@ -2143,10 +2197,10 @@ class PamirActivity : AppCompatActivity() {
                     PrimaryButton("Отлично") { payState = null; onDismiss() }
                 }
                 payState == "waiting" -> NoteCard(
-                    PamirIcons.Clock, "Ожидаем оплату",
-                    "Оплатите в открывшемся окне и вернитесь сюда — срок обновится сам.", Tone.WARN
+                    PamirIcons.Clock, "Проверяем оплату",
+                    "Как только платёж пройдёт, срок обновится сам — обычно это меньше минуты.", Tone.WARN
                 ) {
-                    SecondaryButton("Открыть оплату ещё раз") { openUrl(payUrl) }
+                    SecondaryButton("Открыть оплату ещё раз") { openPayment(payUrl, "Оплата", "Отсканируйте код телефоном и оплатите — подписка продлится сама") }
                     TextAction("Отменить", Modifier.align(Alignment.CenterHorizontally)) { payState = null; payJob?.cancel() }
                 }
                 payState == "failed" -> NoteCard(
@@ -2183,7 +2237,7 @@ class PamirActivity : AppCompatActivity() {
             PrimaryButton("Войти через Telegram", icon = PamirIcons.Telegram) { loginTelegram() }
         }
         Spacer(Modifier.height(Gap.s))
-        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailLoginOpen = true }
+        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailRegister = false; emailLoginOpen = true }
     }
 
     @Composable
@@ -2811,7 +2865,7 @@ class PamirActivity : AppCompatActivity() {
                         if (loginBusy) cancelLogin() else loginTelegram()
                     }
                     RowDivider()
-                    LinkRow(PamirIcons.Mail, "Войти по почте", "Если привязали почту в кабинете") { emailLoginOpen = true }
+                    LinkRow(PamirIcons.Mail, "Войти по почте", "Если привязали почту в кабинете") { emailRegister = false; emailLoginOpen = true }
                 }
             }
             SectionHeader("Подписка")
@@ -2923,10 +2977,14 @@ class PamirActivity : AppCompatActivity() {
         val c = Pamir.colors
         var email by remember { mutableStateOf("") }
         var pass by remember { mutableStateOf("") }
+        var pass2 by remember { mutableStateOf("") }
+        val reg = emailRegister
+        val submit = { if (reg) registerEmail(email, pass, pass2) else loginEmail(email, pass) }
         PamirSheet(
             onDismiss = onDismiss,
-            title = "Вход по почте",
-            subtitle = "Почта и пароль от личного кабинета Pamir VPN"
+            title = if (reg) "Регистрация" else "Вход по почте",
+            subtitle = if (reg) "Создайте аккаунт Pamir VPN — подписку оформите сразу после этого"
+            else "Почта и пароль от личного кабинета Pamir VPN"
         ) {
             OutlinedTextField(
                 value = email, onValueChange = { email = it.trim() }, singleLine = true,
@@ -2941,19 +2999,37 @@ class PamirActivity : AppCompatActivity() {
             OutlinedTextField(
                 value = pass, onValueChange = { pass = it }, singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Пароль", style = PamirType.bodyRegular) },
+                placeholder = { Text(if (reg) "Придумайте пароль" else "Пароль", style = PamirType.bodyRegular) },
                 leadingIcon = { Icon(PamirIcons.Lock, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
                 textStyle = PamirType.bodyRegular.copy(color = c.text),
                 visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { loginEmail(email, pass) }),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = if (reg) ImeAction.Next else ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
                 shape = Radius.m, colors = pamirFieldColors()
             )
+            if (reg) {
+                Spacer(Modifier.height(Gap.s))
+                OutlinedTextField(
+                    value = pass2, onValueChange = { pass2 = it }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Повторите пароль", style = PamirType.bodyRegular) },
+                    leadingIcon = { Icon(PamirIcons.Lock, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
+                    textStyle = PamirType.bodyRegular.copy(color = c.text),
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    shape = Radius.m, colors = pamirFieldColors()
+                )
+            }
             Spacer(Modifier.height(Gap.l))
-            PrimaryButton("Войти", loading = emailBusy) { loginEmail(email, pass) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextAction("Забыли пароль?", color = c.accentText) { forgotPassword(email) }
-                TextAction("Регистрация") { openUrl(CABINET_URL) }
+            PrimaryButton(if (reg) "Создать аккаунт" else "Войти", loading = emailBusy) { submit() }
+            if (reg) {
+                TextAction("У меня уже есть аккаунт", Modifier.align(Alignment.CenterHorizontally), color = c.accentText) { emailRegister = false }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextAction("Забыли пароль?", color = c.accentText) { forgotPassword(email) }
+                    TextAction("Регистрация") { emailRegister = true }
+                }
             }
         }
     }

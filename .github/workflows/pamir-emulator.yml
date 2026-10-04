@@ -2,6 +2,15 @@ name: Pamir VPN emulator test
 
 on:
   workflow_dispatch:
+    inputs:
+      tv:
+        description: 'Android TV: test on a TV emulator with the remote (D-pad)'
+        type: boolean
+        default: false
+      tag:
+        description: 'Release tag to test (empty = latest release; set it to test a pre-release)'
+        required: false
+        default: ''
 
 jobs:
   emulator:
@@ -19,8 +28,9 @@ jobs:
     - name: Download latest APK
       env:
         GH_TOKEN: ${{ github.token }}
+        TAG: ${{ inputs.tag }}
       run: |
-        gh release download -R ${{ github.repository }} --pattern '*_universal.apk' -O app.apk
+        gh release download $TAG -R ${{ github.repository }} --pattern '*_universal.apk' -O app.apk
         ls -la app.apk
 
     - name: Run emulator test
@@ -29,11 +39,11 @@ jobs:
         SUB_URL: ${{ secrets.TEST_SUB_URL }}
       with:
         api-level: 34
-        target: google_apis
-        arch: x86_64
+        target: ${{ inputs.tv && 'android-tv' || 'google_apis' }}
+        arch: ${{ inputs.tv && 'x86' || 'x86_64' }}
         disable-animations: true
         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-        script: bash pamir/emu_test.sh
+        script: bash pamir/${{ inputs.tv && 'emu_tv_test.sh' || 'emu_test.sh' }}
 
     - name: Send to Telegram
       if: always()
@@ -43,7 +53,7 @@ jobs:
       run: |
         [ -z "$TG_TOKEN" ] && exit 0
         for c in ${TG_CHATS//,/ }; do
-          curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id=$c --data-urlencode "text=🤖 Тест Pamir VPN (Android-эмулятор) #${{ github.run_number }}"
+          curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id=$c --data-urlencode "text=🤖 Тест Pamir VPN (${{ inputs.tv && 'Android TV' || 'Android' }}-эмулятор) #${{ github.run_number }}"
           for f in shots/*.png; do
             [ -f "$f" ] && curl -s -o /dev/null "https://api.telegram.org/bot$TG_TOKEN/sendPhoto" -F chat_id=$c -F photo=@"$f" -F caption="$(basename "$f" .png)"
           done

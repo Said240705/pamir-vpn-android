@@ -44,6 +44,8 @@ jobs:
         api-level: ${{ inputs.tv && 30 || 34 }}
         target: ${{ inputs.tv && 'android-tv' || 'google_apis' }}
         arch: ${{ inputs.tv && 'x86' || 'x86_64' }}
+        # without a TV profile the TV image runs on a portrait phone-sized screen
+        profile: ${{ inputs.tv && 'tv_1080p' || '' }}
         disable-animations: true
         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
         script: bash pamir/${{ inputs.tv && 'emu_tv_test.sh' || 'emu_test.sh' }}

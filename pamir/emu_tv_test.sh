@@ -59,15 +59,14 @@ key DPAD_CENTER; sleep 4; shot server_sheet
 key DPAD_DOWN DPAD_DOWN; shot server_sheet_focus
 key BACK; sleep 2
 
-log "== настройки и кабинет пультом"
-key DPAD_DOWN DPAD_DOWN DPAD_DOWN; shot focus_nav
-key DPAD_RIGHT DPAD_RIGHT DPAD_CENTER; sleep 3; shot settings
-key DPAD_DOWN DPAD_DOWN; shot settings_focus
+log "== автозапуск и поддержка пультом (вкладок на ТВ нет)"
+key DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_DOWN; shot focus_footer
+key DPAD_CENTER; sleep 2; shot autostart_toggled
+key DPAD_RIGHT DPAD_CENTER; sleep 4; shot support_qr
 key BACK; sleep 2
-key DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_DOWN DPAD_LEFT DPAD_CENTER; sleep 4; shot cabinet
 
 log "== отключение"
-key BACK; sleep 2; shot home_again
+key DPAD_UP DPAD_UP DPAD_UP DPAD_UP DPAD_UP DPAD_UP; shot home_again
 key DPAD_CENTER; sleep 6; vpn_state; shot disconnected
 
 adb logcat -d | grep -iE 'Pamir|pamirlink|LauncherManager|StartCore|FATAL|AndroidRuntime' | grep -vE 'I/chatty|systemui|SystemUI' | tail -150 > shots/logcat.txt

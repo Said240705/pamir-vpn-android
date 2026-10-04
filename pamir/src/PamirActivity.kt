@@ -149,6 +149,7 @@ private const val PREF_AUTO_BEST = "pamir_auto_best"
 private const val PREF_LAST_SUB_UPDATE = "pamir_last_sub_update"
 private const val PREF_USER_CHOSE = "pamir_user_chose"
 private const val PREF_SMART_LTE = "pamir_smart_lte"
+private const val PREF_TV_BOOT_INIT = "pamir_tv_boot_init"
 private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
 private const val PREF_PREFERRED = "pamir_preferred"
 private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
@@ -343,7 +344,9 @@ class PamirActivity : AppCompatActivity() {
         }
         initRouting()
         reloadServers()
-        setContent { PamirTheme(themeMode) { Root() } }
+        if (tv) enableTvBootOnce()
+        // TV: always dark — a light screen glares in a dark room, and the theme switch is not shown there.
+        setContent { PamirTheme(if (tv) PamirThemeMode.DARK else themeMode) { Root() } }
         if (servers.isNotEmpty() && System.currentTimeMillis() - lastUpdate > 60 * 60 * 1000L) {
             updateSubscription(silent = true)
         }
@@ -1209,7 +1212,8 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    private fun smartLte() = MmkvManager.decodeSettingsBool(PREF_SMART_LTE, true)
+    /** Not on TV: it is on Wi-Fi or cable, and the LTE settings are not shown there. */
+    private fun smartLte() = !tv && MmkvManager.decodeSettingsBool(PREF_SMART_LTE, true)
 
     private fun lteServer(): PServer? = servers.firstOrNull { it.isLte && !it.isStub }
 
@@ -1529,8 +1533,11 @@ class PamirActivity : AppCompatActivity() {
                                 }
                             }
                         }
-                        val navTab = if (tab == Tab.APPS) Tab.SETTINGS else tab
-                        BottomNav(navEntries, selected = navTabs.indexOf(navTab), onSelect = { tab = navTabs[it] })
+                        // TV has one screen (power, server, subscription, autostart, support) — no tabs.
+                        if (!tv) {
+                            val navTab = if (tab == Tab.APPS) Tab.SETTINGS else tab
+                            BottomNav(navEntries, selected = navTabs.indexOf(navTab), onSelect = { tab = navTabs[it] })
+                        }
                     }
                 }
                 PamirSnackbarHost(
@@ -1741,7 +1748,7 @@ class PamirActivity : AppCompatActivity() {
             AnimatedVisibility(visible = running, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                 SpeedCard()
             }
-            if (!running) {
+            if (!running && !tv) {
                 if (whitelist && current?.isLte != true) {
                     Spacer(Modifier.height(Gap.m))
                     WhitelistCard()
@@ -1750,8 +1757,33 @@ class PamirActivity : AppCompatActivity() {
                     Banner(PamirIcons.Signal, "Мобильный интернет не работает? Есть LTE Обход", "Выбрать", Tone.ACCENT, onPick)
                 }
             }
+            if (tv) TvFooter()
             Spacer(Modifier.height(Gap.l))
         }
+    }
+
+    /** TV instead of the Settings tab: autostart with the TV and support (as a QR code). */
+    @Composable
+    private fun TvFooter() {
+        var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
+        Spacer(Modifier.height(Gap.m))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
+            SecondaryButton(if (boot) "Автозапуск: вкл" else "Автозапуск: выкл", Modifier.weight(1f), icon = PamirIcons.Power) {
+                boot = !boot
+                MmkvManager.encodeStartOnBoot(boot)
+                toast(if (boot) "VPN включится сам при включении телевизора" else "Автозапуск выключен")
+            }
+            SecondaryButton("Поддержка", Modifier.weight(1f), icon = PamirIcons.Chat) {
+                openUrl(BOT_URL, "Поддержка", "Отсканируйте код телефоном — ответим в Telegram")
+            }
+        }
+    }
+
+    /** On TV the VPN should come back after the TV is unplugged: autostart is on by default (once, user can turn it off). */
+    private fun enableTvBootOnce() {
+        if (MmkvManager.decodeSettingsBool(PREF_TV_BOOT_INIT, false)) return
+        MmkvManager.encodeSettings(PREF_TV_BOOT_INIT, true)
+        MmkvManager.encodeStartOnBoot(true)
     }
 
     @Composable

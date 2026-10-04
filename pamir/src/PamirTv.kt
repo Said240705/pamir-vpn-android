@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +56,9 @@ object PamirTv {
             context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
     }
 }
+
+/** True inside the UI on Android TV; provided once by the activity. */
+val LocalTv = staticCompositionLocalOf { false }
 
 /** A link to open on the phone: shown on TV as a QR code; [onClose] runs when the user closes it. */
 class QrLink(val title: String, val text: String, val url: String, val onClose: (() -> Unit)? = null)

@@ -1483,7 +1483,7 @@ class PamirActivity : AppCompatActivity() {
         val indication = if (tv) remember(c.accent, c.text) { TvFocusIndication(c.accent, c.text) } else LocalIndication.current
         // On a TV the phone layout stays a centered column instead of stretching across the screen.
         val tvColumn = if (tv) Modifier.widthIn(max = 600.dp) else Modifier
-        CompositionLocalProvider(LocalIndication provides indication) {
+        CompositionLocalProvider(LocalIndication provides indication, LocalTv provides tv) {
             Box(
                 Modifier
                     .fillMaxSize()

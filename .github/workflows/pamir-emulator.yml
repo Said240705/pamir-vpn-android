@@ -7,6 +7,10 @@ on:
         description: 'Android TV: test on a TV emulator with the remote (D-pad)'
         type: boolean
         default: false
+      register:
+        description: 'Phone: also test in-app registration (creates a new test account) and opening the payment page'
+        type: boolean
+        default: false
       tag:
         description: 'Version to test, e.g. 1.5.5 (empty = latest release; set it to test a pre-release)'
         required: false
@@ -39,6 +43,7 @@ jobs:
       uses: reactivecircus/android-emulator-runner@v2
       env:
         SUB_URL: ${{ secrets.TEST_SUB_URL }}
+        REG_TEST: ${{ inputs.register && '1' || '0' }}
       with:
         # Android TV 14 (API 34) image crash-loops SystemUI on CI (black screenshots); TV 11 is stable
         api-level: ${{ inputs.tv && 30 || 34 }}

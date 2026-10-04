@@ -25,12 +25,14 @@ adb shell cmd locale set-app-locales $P --locales ru-RU >/dev/null 2>&1
 adb shell appops set $P ACTIVATE_VPN allow
 
 log "== приложение в меню телевизора"
-adb shell cmd package query-activities -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER \
+adb shell cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER \
   | grep -q "$P/" && log "есть в меню ТВ (LEANBACK_LAUNCHER)" || log "!!! НЕТ в меню ТВ"
 key HOME; sleep 3; shot launcher
 
 log "== запуск с пульта"
-adb shell monkey -p $P -c android.intent.category.LEANBACK_LAUNCHER 1 >/dev/null 2>&1; sleep 10; shot onboarding
+adb shell monkey -p $P -c android.intent.category.LEANBACK_LAUNCHER 1 2>&1 | grep -iE "Events injected|No activities|error" | tee -a $R
+sleep 10; log "на экране: $(adb shell dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity' | sed 's/^ *//')"
+shot onboarding
 
 log "== вход через Telegram: QR-код"
 key DPAD_CENTER; sleep 5; shot login_qr
@@ -68,7 +70,7 @@ log "== отключение"
 key BACK; sleep 2; shot home_again
 key DPAD_CENTER; sleep 6; vpn_state; shot disconnected
 
-adb logcat -d | grep -iE 'Pamir|LauncherManager|StartCore|FATAL|AndroidRuntime: (FATAL|java)' | grep -v 'I/chatty' | tail -150 > shots/logcat.txt
+adb logcat -d | grep -iE 'Pamir|pamirlink|LauncherManager|StartCore|FATAL|AndroidRuntime' | grep -vE 'I/chatty|systemui|SystemUI' | tail -150 > shots/logcat.txt
 python3 - <<'PY'
 import os,urllib.parse
 u=os.environ.get('SUB_URL','')

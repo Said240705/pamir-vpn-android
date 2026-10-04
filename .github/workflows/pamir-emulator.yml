@@ -40,7 +40,8 @@ jobs:
       env:
         SUB_URL: ${{ secrets.TEST_SUB_URL }}
       with:
-        api-level: 34
+        # Android TV 14 (API 34) image crash-loops SystemUI on CI (black screenshots); TV 11 is stable
+        api-level: ${{ inputs.tv && 30 || 34 }}
         target: ${{ inputs.tv && 'android-tv' || 'google_apis' }}
         arch: ${{ inputs.tv && 'x86' || 'x86_64' }}
         disable-animations: true

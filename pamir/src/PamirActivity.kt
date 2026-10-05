@@ -2612,15 +2612,13 @@ class PamirActivity : AppCompatActivity() {
                     .padding(horizontal = Gap.m, vertical = Gap.m)
             )
             Spacer(Modifier.height(Gap.m))
-            Row(horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
-                SecondaryButton("Скопировать", Modifier.weight(1f), icon = PamirIcons.Copy) { copyText("ref", r.optString("link")) }
-                SecondaryButton("Поделиться", Modifier.weight(1f), icon = PamirIcons.Share) {
-                    runCatching {
-                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                            .putExtra(Intent.EXTRA_TEXT, "Подключайся к Pamir VPN по моей ссылке — после оформления подписки получишь +7 дней в подарок: " + r.optString("link")), null))
-                    }
+            PrimaryButton("Поделиться ссылкой", icon = PamirIcons.Share) {
+                runCatching {
+                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, "Подключайся к Pamir VPN по моей ссылке — после оформления подписки получишь +7 дней в подарок: " + r.optString("link")), null))
                 }
             }
+            TextAction("Скопировать ссылку", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Copy) { copyText("ref", r.optString("link")) }
         }
     }
 

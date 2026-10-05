@@ -283,6 +283,15 @@ class PamirActivity : AppCompatActivity() {
     private var emailLoginOpen by mutableStateOf(false)
     private var news by mutableStateOf(PamirNews.cached())
     private var newsOpen by mutableStateOf(false)
+    /** GET /topup/payment-method: has_card, card_type, card_last4 (card for auto-renewal). */
+    private var cardInfo by mutableStateOf<JSONObject?>(null)
+    private var cardBusy by mutableStateOf(false)
+    private var cardUnlinkOpen by mutableStateOf(false)
+    /** The card offer after a payment was answered in this session ("Не сейчас"). */
+    private var cardPromptSkipped by mutableStateOf(false)
+    /** Comeback discount for an expired subscription (GET /topup/last-chance-offer). */
+    private var lastChance by mutableStateOf<JSONObject?>(null)
+    private var activePromo by mutableStateOf(PamirOffers.activePromoPercent())
     /** The e-mail sheet opens on registration instead of sign-in. */
     private var emailRegister by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
@@ -383,6 +392,10 @@ class PamirActivity : AppCompatActivity() {
             PamirWatch.cancelAlert(this)
             sheetOpen = true
         }
+        if (i.getBooleanExtra(PamirOffers.EXTRA_OFFER, false)) {
+            i.removeExtra(PamirOffers.EXTRA_OFFER)
+            lifecycleScope.launch { loadLastChance(); if (lastChance != null) applyLastChance() else openRenew() }
+        }
         if (i.getBooleanExtra(PamirNews.EXTRA_NEWS, false)) {
             i.removeExtra(PamirNews.EXTRA_NEWS)
             openNews()
@@ -413,11 +426,94 @@ class PamirActivity : AppCompatActivity() {
         lifecycleScope.launch { delay(1200); precheck() }
         lifecycleScope.launch { loadLocations() }
         lifecycleScope.launch { loadNews() }
+        if (loggedIn) lifecycleScope.launch { loadLastChance(); if (cardInfo == null) loadPaymentMethod() }
     }
 
     private suspend fun loadNews() {
         val port = proxyPort()
         withContext(Dispatchers.IO) { PamirNews.fetch(port) }?.let { news = it }
+    }
+
+    private suspend fun loadPaymentMethod() {
+        if (!loggedIn) return
+        api(quiet = true) { p -> PamirApi.call("/topup/payment-method", proxyPort = p) }?.let { cardInfo = it }
+    }
+
+    private suspend fun loadLastChance() {
+        if (!loggedIn) return
+        val port = proxyPort()
+        lastChance = withContext(Dispatchers.IO) { PamirOffers.fetch(port) }
+    }
+
+    private fun hasCard() = cardInfo?.optBoolean("has_card") == true
+
+    /** Card for auto-renewal: 1 ₽ check payment (returned at once), then the card renews keys by itself. */
+    private fun bindCard() {
+        if (cardBusy) return
+        cardBusy = true
+        lifecycleScope.launch {
+            val r = api { p -> PamirApi.call("/topup/card-bind/start", "POST", proxyPort = p) }
+            if (r == null) { cardBusy = false; return@launch }
+            if (r.optBoolean("already_has_card")) {
+                cardBusy = false; toast("Карта уже привязана"); loadPaymentMethod(); return@launch
+            }
+            val url = r.optString("payment_url"); val order = r.optString("order_id")
+            if (!url.startsWith("http") || order.isBlank()) { cardBusy = false; toast("Не удалось начать привязку карты"); return@launch }
+            openPayment(url, "Привязка карты", "Отсканируйте код телефоном: спишем 1 ₽ для проверки и сразу вернём")
+            repeat(60) {
+                delay(3000)
+                val c = api(quiet = true) { p -> PamirApi.call("/topup/card-bind/check", "POST", JSONObject().put("order_id", order), proxyPort = p) }
+                if (c?.optBoolean("has_card") == true) {
+                    cardBusy = false
+                    if (payWebUrl == url) payWebUrl = null
+                    if (qrLink?.url == url) qrLink = null
+                    cardPromptSkipped = true
+                    toast("Карта привязана — подписка будет продлеваться сама", true)
+                    loadPaymentMethod(); loadCabinet(silent = true)
+                    return@launch
+                }
+                if (c != null && !c.optBoolean("ok") && !c.optBoolean("pending")) {
+                    cardBusy = false
+                    if (c.optString("reason") != "canceled") toast("Не удалось привязать карту, попробуйте ещё раз")
+                    return@launch
+                }
+            }
+            cardBusy = false
+        }
+    }
+
+    private fun unlinkCard() {
+        lifecycleScope.launch {
+            if (api { p -> PamirApi.call("/topup/payment-method/unlink", "POST", proxyPort = p) } != null) {
+                cardUnlinkOpen = false
+                toast("Карта отвязана, автопродление выключено")
+                loadPaymentMethod(); loadCabinet(silent = true)
+            }
+        }
+    }
+
+    private fun toggleAutoRenew(k: JSONObject, enabled: Boolean) {
+        val id = k.optInt("id")
+        renewKeys = renewKeys.map { if (it.optInt("id") == id) JSONObject(it.toString()).put("auto_renew", enabled) else it }
+        lifecycleScope.launch {
+            val r = api { p -> PamirApi.call("/topup/keys/auto-renew", "POST", JSONObject().put("key_id", id).put("enabled", enabled), proxyPort = p) }
+            if (r == null) loadCabinet(silent = true) else toast(if (enabled) "Автопродление включено" else "Автопродление выключено")
+        }
+    }
+
+    /** Comeback offer: apply its code and open renewal with the discounted prices. */
+    private fun applyLastChance() {
+        val o = lastChance ?: return
+        lifecycleScope.launch {
+            val r = api { p -> PamirApi.call("/topup/promo", "POST", JSONObject().put("code", o.optString("code")), proxyPort = p) } ?: return@launch
+            val pct = o.optInt("discount_percent").takeIf { it > 0 } ?: 10
+            val until = PamirOffers.parseUtc(o.optString("expires_at")).takeIf { it > 0 } ?: (System.currentTimeMillis() + 86_400_000L)
+            PamirOffers.rememberPromo(pct, until)
+            activePromo = pct
+            lastChance = null
+            toast(r.optString("message").ifBlank { "Скидка $pct% применится при оплате" })
+            openRenew()
+        }
     }
 
     private fun openNews() {
@@ -902,6 +998,8 @@ class PamirActivity : AppCompatActivity() {
     private fun onPaid() {
         payState = "paid"
         payWebUrl = null
+        PamirOffers.clearPromo(); activePromo = null
+        lifecycleScope.launch { loadPaymentMethod() }
         if (qrLink?.url == payUrl) qrLink = null
         payJob?.cancel()
         Log.w("Pamir", "payment ok buy=$payBuy")
@@ -948,6 +1046,8 @@ class PamirActivity : AppCompatActivity() {
             }
             cabDevices = dev
             cabReferral = api(quiet = true) { p -> PamirApi.call("/topup/referral", proxyPort = p) }
+            loadPaymentMethod()
+            loadLastChance()
             loadTrialOffer()
             val from = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(System.currentTimeMillis() - 365L * 86_400_000))
             val pj = api(quiet = true) { p -> PamirApi.call("/topup/payments?date_from=$from", proxyPort = p) }
@@ -1494,7 +1594,7 @@ class PamirActivity : AppCompatActivity() {
      * otherwise a system toast is used, because a sheet window would hide the snackbar.
      */
     private fun toast(message: CharSequence, long: Boolean = false, action: String? = null, onAction: (() -> Unit)? = null) {
-        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || newsOpen || keyPickerOpen || renameTarget != null || qrLink != null || payWebUrl != null
+        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || newsOpen || cardUnlinkOpen || keyPickerOpen || renameTarget != null || qrLink != null || payWebUrl != null
         if (sheetShown || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             applicationContext.toast(message, long)
             return
@@ -1617,6 +1717,7 @@ class PamirActivity : AppCompatActivity() {
                 if (cabTopupOpen) TopupSheet(onDismiss = { cabTopupOpen = false })
                 if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
                 if (newsOpen) NewsSheet(onDismiss = { newsOpen = false })
+                if (cardUnlinkOpen) CardUnlinkSheet(onDismiss = { cardUnlinkOpen = false })
                 if (keyPickerOpen) KeyPickerSheet(onDismiss = { keyPickerOpen = false })
                 renameTarget?.let { RenameKeySheet(it, onDismiss = { renameTarget = null }) }
                 qrLink?.let { q -> QrSheet(q, onDismiss = { qrLink = null; q.onClose?.invoke() }) }
@@ -1903,6 +2004,10 @@ class PamirActivity : AppCompatActivity() {
                 if (updProgress >= 0) "Загрузка $updProgress%" else "Обновить", Tone.ACCENT, { installUpdate() },
                 Modifier.padding(top = Gap.xs)
             )
+            lastChance != null && activePromo == null -> Banner(
+                PamirIcons.Star, "Скидка ${lastChance?.optInt("discount_percent")}% на продление — только сейчас",
+                "Забрать", Tone.WARN, { applyLastChance() }, Modifier.padding(top = Gap.xs)
+            )
             d != null && d <= 3 -> Banner(
                 PamirIcons.Clock,
                 when {
@@ -1918,6 +2023,80 @@ class PamirActivity : AppCompatActivity() {
                     "Читать", Tone.ACCENT, { openNews() }, Modifier.padding(top = Gap.xs)
                 )
             }
+        }
+    }
+
+    /** Cabinet: the card for auto-renewal, or the offer to add one. */
+    @Composable
+    private fun AutopayCard() {
+        val c = Pamir.colors
+        val info = cardInfo ?: return
+        if (info.optBoolean("has_card")) {
+            PamirCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconBadge(PamirIcons.Wallet, size = 44.dp, iconSize = 24.dp)
+                    Spacer(Modifier.width(Gap.m))
+                    Column(Modifier.weight(1f)) {
+                        val type = info.optString("card_type").takeIf { it.isNotBlank() && it != "null" } ?: "Карта"
+                        val last4 = info.optString("card_last4").takeIf { it.isNotBlank() && it != "null" }
+                        Text(if (last4 != null) "$type •••• $last4" else type, style = PamirType.body, color = c.text)
+                        Text("Подписка продлевается сама — переключатель у каждого ключа", style = PamirType.support, color = c.textDim)
+                    }
+                }
+                Spacer(Modifier.height(Gap.s))
+                TextAction("Отвязать карту", color = c.danger) { cardUnlinkOpen = true }
+            }
+        } else {
+            CardOffer(onLater = null, onNever = null)
+        }
+    }
+
+    /**
+     * Offer to add a card for auto-renewal: after a payment and in the cabinet. The main action is big;
+     * "Не сейчас" and "Больше не показывать" are deliberately quiet (only after a payment).
+     */
+    @Composable
+    private fun CardOffer(onLater: (() -> Unit)?, onNever: (() -> Unit)?) {
+        val c = Pamir.colors
+        PamirCard(tone = Tone.ACCENT) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(PamirIcons.Wallet, size = 44.dp, iconSize = 24.dp)
+                Spacer(Modifier.width(Gap.m))
+                Text("Продлевать вручную больше не нужно", style = PamirType.subtitle, color = c.text, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(Gap.s))
+            Text(
+                "Привяжите карту — подписка будет продлеваться сама в день окончания. VPN не отключится в самый неподходящий момент.",
+                style = PamirType.bodyRegular, color = c.text
+            )
+            Spacer(Modifier.height(Gap.xs))
+            Text("Отключить можно в любой момент. Для проверки спишем 1 ₽ и сразу вернём.", style = PamirType.support, color = c.textDim)
+            Spacer(Modifier.height(Gap.l))
+            PrimaryButton("Привязать карту", icon = PamirIcons.Wallet, loading = cardBusy) { bindCard() }
+            if (onLater != null) {
+                TextAction("Не сейчас", Modifier.align(Alignment.CenterHorizontally)) { onLater() }
+            }
+            if (onNever != null) {
+                Text(
+                    "Больше не показывать", style = PamirType.caption, color = c.textDim.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .clip(Radius.s)
+                        .clickable(role = Role.Button) { onNever() }
+                        .padding(horizontal = Gap.s, vertical = Gap.xs)
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun CardUnlinkSheet(onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        PamirSheet(onDismiss = onDismiss, title = "Отвязать карту?", subtitle = "Автопродление выключится — продлевать подписку придётся вручную") {
+            Spacer(Modifier.height(Gap.s))
+            SecondaryButton("Оставить карту") { onDismiss() }
+            Spacer(Modifier.height(Gap.xs))
+            TextAction("Отвязать", Modifier.align(Alignment.CenterHorizontally), color = c.danger) { unlinkCard() }
         }
     }
 
@@ -2232,11 +2411,21 @@ class PamirActivity : AppCompatActivity() {
             title = if (renewKeys.isEmpty() && loggedIn && !renewLoading) "Оформить подписку" else "Продление подписки"
         ) {
             when {
-                payState == "paid" -> NoteCard(
-                    PamirIcons.Check, "Оплата прошла",
-                    if (payBuy) "Подписка оформлена и уже подключается." else "Новый срок применён — VPN работает без перерыва.", Tone.ACCENT
-                ) {
-                    PrimaryButton("Отлично") { payState = null; onDismiss() }
+                payState == "paid" -> {
+                    val offer = !tv && cardInfo != null && !hasCard() && !cardPromptSkipped && !PamirOffers.cardPromptNever
+                    NoteCard(
+                        PamirIcons.Check, "Оплата прошла",
+                        if (payBuy) "Подписка оформлена и уже подключается." else "Новый срок применён — VPN работает без перерыва.", Tone.ACCENT
+                    ) {
+                        if (!offer) PrimaryButton("Отлично") { payState = null; onDismiss() }
+                    }
+                    if (offer) {
+                        Spacer(Modifier.height(Gap.m))
+                        CardOffer(
+                            onLater = { cardPromptSkipped = true; payState = null; onDismiss() },
+                            onNever = { PamirOffers.cardPromptNever = true; payState = null; onDismiss() }
+                        )
+                    }
                 }
                 payState == "waiting" -> NoteCard(
                     PamirIcons.Clock, "Проверяем оплату",
@@ -2320,6 +2509,12 @@ class PamirActivity : AppCompatActivity() {
                 style = PamirType.support, color = c.textDim
             )
         }
+        val promo = activePromo
+        if (promo != null) {
+            Banner(PamirIcons.Star, "Скидка $promo% применится при оплате", null, Tone.ACCENT, {}, Modifier.padding(bottom = Gap.s))
+        } else if (lastChance != null) {
+            Banner(PamirIcons.Star, "Скидка ${lastChance?.optInt("discount_percent")}% на продление — только сейчас", "Применить", Tone.WARN, { applyLastChance() }, Modifier.padding(bottom = Gap.s))
+        }
         val key = renewKeys.firstOrNull { it.optInt("id") == renewKeyId }
         val group = key?.optInt("tariff_group_id", 0) ?: 0
         val list = tariffs.filter { group == 0 || it.optInt("group_id", 0) == 0 || it.optInt("group_id") == group }.ifEmpty { tariffs }
@@ -2340,7 +2535,14 @@ class PamirActivity : AppCompatActivity() {
                         Text(t.optString("name"), style = PamirType.body.copy(fontWeight = FontWeight.Bold), color = c.text)
                         if (days > 0) Text("$days ${plural(days, "день", "дня", "дней")}", style = PamirType.support, color = c.textDim)
                     }
-                    Text(rub(price), style = PamirType.number.copy(fontSize = 20.sp), color = c.accentText)
+                    if (promo != null) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(rub(price), style = PamirType.support.copy(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough), color = c.textDim)
+                            Text(rub(Math.round(price * (100 - promo) / 10_000.0) * 100), style = PamirType.number.copy(fontSize = 20.sp), color = c.accentText)
+                        }
+                    } else {
+                        Text(rub(price), style = PamirType.number.copy(fontSize = 20.sp), color = c.accentText)
+                    }
                 }
                 Spacer(Modifier.height(Gap.m))
                 Row(horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
@@ -2447,6 +2649,10 @@ class PamirActivity : AppCompatActivity() {
                 if (i > 0) Spacer(Modifier.height(Gap.m))
                 KeyCard(k)
             }
+            if (cardInfo != null && renewKeys.isNotEmpty()) {
+                SectionHeader("Автопродление")
+                AutopayCard()
+            }
             val devKeys = renewKeys.filter { cabDevices.containsKey(it.optInt("id")) }
             if (devKeys.isNotEmpty()) {
                 SectionHeader("Устройства")
@@ -2538,6 +2744,15 @@ class PamirActivity : AppCompatActivity() {
                         Text("Трафик: ${fmtBytes(used)} · без лимита", style = PamirType.caption, color = c.textDim)
                     }
                 }
+            }
+            if (hasCard()) {
+                Spacer(Modifier.height(Gap.s))
+                ToggleRow(
+                    leading = null, title = "Автопродление",
+                    subtitle = if (k.optBoolean("auto_renew")) "Продлим с карты в день окончания" else "Выключено — продлевайте вручную",
+                    checked = k.optBoolean("auto_renew"),
+                    onCheckedChange = { toggleAutoRenew(k, it) }
+                )
             }
             Spacer(Modifier.height(Gap.l))
             PrimaryButton(if (active) "Продлить" else "Возобновить") { openRenew(id) }

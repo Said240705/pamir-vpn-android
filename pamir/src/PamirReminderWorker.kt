@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Every 6 hours: refreshes the subscription (fresh "days left"), reminds about renewal
- * and notifies about a new news item from the admin panel.
+ * notifies about a new news item from the admin panel and about a comeback discount.
  * Runs in the WorkManager process (":bg"), so it works even when the app is closed.
  */
 class PamirReminderWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -24,6 +24,7 @@ class PamirReminderWorker(context: Context, params: WorkerParameters) : Coroutin
             .onFailure { Log.w("Pamir", "reminder: sub update failed ${it.message}") }
         runCatching { PamirWatch.checkExpiry(applicationContext) }
         runCatching { PamirNews.notifyNew(applicationContext) }
+        runCatching { PamirOffers.notifyNew(applicationContext) }
         return Result.success()
     }
 

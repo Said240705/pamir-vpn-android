@@ -2594,9 +2594,13 @@ class PamirActivity : AppCompatActivity() {
     private fun ReferralCard(r: JSONObject) {
         val c = Pamir.colors
         PamirCard {
-            Text("Делитесь ссылкой — получайте бонусы на баланс", style = PamirType.body, color = c.text)
+            Text("Друг оформит подписку по вашей ссылке — вы оба получите +7 дней", style = PamirType.body, color = c.text)
             Spacer(Modifier.height(Gap.xs))
-            Text("Приглашено: ${r.optInt("referrals_count")} · заработано ${rub(r.optLong("total_reward_minor"))}", style = PamirType.support, color = c.textDim)
+            val earned = r.optLong("total_reward_minor")
+            Text(
+                "Приглашено: ${r.optInt("referrals_count")}" + if (earned > 0) " · заработано раньше ${rub(earned)}" else "",
+                style = PamirType.support, color = c.textDim
+            )
             Spacer(Modifier.height(Gap.m))
             Text(
                 r.optString("link"), style = PamirType.support.copy(fontWeight = FontWeight.SemiBold), color = c.accentText,
@@ -2613,7 +2617,7 @@ class PamirActivity : AppCompatActivity() {
                 SecondaryButton("Поделиться", Modifier.weight(1f), icon = PamirIcons.Share) {
                     runCatching {
                         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                            .putExtra(Intent.EXTRA_TEXT, "Pamir VPN — работает даже при белых списках: " + r.optString("link")), null))
+                            .putExtra(Intent.EXTRA_TEXT, "Подключайся к Pamir VPN по моей ссылке — после оформления подписки получишь +7 дней в подарок: " + r.optString("link")), null))
                     }
                 }
             }
@@ -2916,6 +2920,8 @@ class PamirActivity : AppCompatActivity() {
                 LinkRow(PamirIcons.Refresh, if (updating) "Обновляем…" else "Обновить серверы", upd, loading = updating) { updateSubscription() }
                 RowDivider()
                 LinkRow(PamirIcons.Person, "Личный кабинет", "Подписка, устройства, платежи") { tab = Tab.CABINET }
+                RowDivider()
+                LinkRow(PamirIcons.Share, "Пригласить друга", "Вам и другу — по +7 дней") { tab = Tab.CABINET }
             }
             SectionHeader("Помощь")
             RowGroup {

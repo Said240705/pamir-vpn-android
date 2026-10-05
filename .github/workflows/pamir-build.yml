@@ -19,6 +19,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+    - name: Check the version is free
+      # A published release cannot be overwritten ("Resource not accessible by integration"): stop before the build.
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        if gh release view "v$VERSION" -R "${{ github.repository }}" >/dev/null 2>&1; then
+          echo "::error::Версия $VERSION уже есть в Releases. Укажите следующий номер (например, на 1 больше)."
+          exit 1
+        fi
+
     - name: Checkout code
       uses: actions/checkout@v7
       with:
@@ -111,3 +122,11 @@ jobs:
         files: |
           ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*.apk
           ${{ github.workspace }}/fixed/*.apk
+
+    - name: Tidy releases
+      # Test build: older test builds go away. Regular release: all test builds go, 3 newest regular stay.
+      if: success()
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bash pamir/release_cleanup.sh ${{ inputs.prerelease && '1000 1' || '3 0' }} 0

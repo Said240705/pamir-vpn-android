@@ -32,6 +32,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,6 +52,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -67,6 +69,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -78,6 +81,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -144,6 +149,7 @@ private const val PREF_AUTO_BEST = "pamir_auto_best"
 private const val PREF_LAST_SUB_UPDATE = "pamir_last_sub_update"
 private const val PREF_USER_CHOSE = "pamir_user_chose"
 private const val PREF_SMART_LTE = "pamir_smart_lte"
+private const val PREF_TV_BOOT_INIT = "pamir_tv_boot_init"
 private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
 private const val PREF_PREFERRED = "pamir_preferred"
 private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
@@ -230,6 +236,9 @@ class PamirActivity : AppCompatActivity() {
     /** Download URLs of [newVersion], tried in order: GitHub first, the site as a fallback. */
     private var newVersionUrls = emptyList<String>()
     private var updProgress by mutableStateOf(-1)
+    /** Android TV: remote control, no browser or Telegram — links are shown as QR codes. */
+    private val tv by lazy { PamirTv.isTv(this) }
+    private var qrLink by mutableStateOf<QrLink?>(null)
     private var assetsJob: kotlinx.coroutines.Job? = null
     private var sheetOpen by mutableStateOf(false)
     private var rxSpeed by mutableLongStateOf(0L)
@@ -257,6 +266,8 @@ class PamirActivity : AppCompatActivity() {
     private var payState by mutableStateOf<String?>(null)   // waiting | paid | failed
     private var payUrl = ""
     private var payOrder: String? = null
+    /** Payment page shown inside the app (see PamirPay); null = closed. */
+    private var payWebUrl by mutableStateOf<String?>(null)
     private var payBuy = false
     private var payJob: kotlinx.coroutines.Job? = null
     private var reportOpen by mutableStateOf(false)
@@ -270,6 +281,8 @@ class PamirActivity : AppCompatActivity() {
     private var cabTopupOpen by mutableStateOf(false)
     private var cabBusy by mutableStateOf<String?>(null)
     private var emailLoginOpen by mutableStateOf(false)
+    /** The e-mail sheet opens on registration instead of sign-in. */
+    private var emailRegister by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
     // which key of the account this phone uses
     private var deviceKeyId by mutableStateOf(MmkvManager.decodeSettingsString(PREF_DEVICE_KEY, "")?.toIntOrNull())
@@ -335,7 +348,9 @@ class PamirActivity : AppCompatActivity() {
         }
         initRouting()
         reloadServers()
-        setContent { PamirTheme(themeMode) { Root() } }
+        if (tv) enableTvBootOnce()
+        // TV: always dark — a light screen glares in a dark room, and the theme switch is not shown there.
+        setContent { PamirTheme(if (tv) PamirThemeMode.DARK else themeMode) { Root() } }
         if (servers.isNotEmpty() && System.currentTimeMillis() - lastUpdate > 60 * 60 * 1000L) {
             updateSubscription(silent = true)
         }
@@ -497,12 +512,13 @@ class PamirActivity : AppCompatActivity() {
             if (start == null) { loginBusy = false; return@launch }
             val token = start.optString("token")
             val link = start.optString("deep_link").replace("start=weblogin_", "start=applogin_")
-            openUrl(link)
+            openUrl(link, "Вход через Telegram", "Отсканируйте код телефоном и подтвердите вход в Telegram", onClose = { cancelLogin() })
             val enc = Uri.encode(token)
             repeat(150) {
                 delay(2000)
                 val r = api(quiet = true) { p -> PamirApi.call("/auth/telegram/poll?token=$enc", auth = false, proxyPort = p) }
                 if (r?.optString("status") == "approved") {
+                    if (qrLink?.url == link) qrLink = null
                     PamirApi.token = r.optString("access_token")
                     loggedIn = true
                     loginBusy = false
@@ -535,6 +551,32 @@ class PamirActivity : AppCompatActivity() {
             loggedIn = true
             emailLoginOpen = false
             Log.w("Pamir", "email login ok")
+            onLoggedIn()
+        }
+    }
+
+    /** New account by e-mail right in the app (the same /auth/email/register as the site); then like a sign-in. */
+    private fun registerEmail(email: String, password: String, repeat: String) {
+        if (emailBusy) return
+        val e = email.trim()
+        when {
+            !Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$").matches(e) -> { toast("Проверьте почту — например, name@mail.ru"); return }
+            password.length < 6 -> { toast("Пароль — не короче 6 символов"); return }
+            password != repeat -> { toast("Пароли не совпадают"); return }
+        }
+        emailBusy = true
+        lifecycleScope.launch {
+            val r = api { p ->
+                PamirApi.call("/auth/email/register", "POST", JSONObject().put("email", e).put("password", password), auth = false, proxyPort = p)
+            }
+            emailBusy = false
+            val t = r?.optString("access_token").orEmpty()
+            if (t.isBlank()) return@launch
+            PamirApi.token = t
+            loggedIn = true
+            emailLoginOpen = false
+            Log.w("Pamir", "email register ok")
+            toast("Аккаунт создан")
             onLoggedIn()
         }
     }
@@ -793,7 +835,7 @@ class PamirActivity : AppCompatActivity() {
                     payUrl = r.optString("payment_url")
                     payOrder = r.optString("order_id").takeIf { it.isNotBlank() }
                     payState = "waiting"
-                    openUrl(payUrl)
+                    openPayment(payUrl, "Оплата", "Отсканируйте код телефоном и оплатите — подписка продлится сама")
                     watchPayment()
                 }
                 r.optBoolean("completed") || r.optBoolean("ok") -> onPaid()
@@ -808,7 +850,23 @@ class PamirActivity : AppCompatActivity() {
                 delay(4000)
                 if (checkPayment()) return@launch
             }
+            // ~13 minutes without an answer: stop the spinner instead of waiting forever.
+            if (payState == "waiting") {
+                payState = null
+                toast("Не дождались подтверждения оплаты. Если деньги списались — напишите в поддержку", true)
+            }
         }
+    }
+
+    /** Payment page: inside the app on a phone, as a QR code on a TV. */
+    private fun openPayment(url: String, title: String, text: String) {
+        if (tv) openUrl(url, title, text) else payWebUrl = url
+    }
+
+    /** The payment page closed (by the user or after the provider's return): check right away. */
+    private fun onPaymentPageClosed() {
+        payWebUrl = null
+        if (payState == "waiting") lifecycleScope.launch { checkPayment() }
     }
 
     /** true = finished (paid or failed). */
@@ -826,6 +884,8 @@ class PamirActivity : AppCompatActivity() {
 
     private fun onPaid() {
         payState = "paid"
+        payWebUrl = null
+        if (qrLink?.url == payUrl) qrLink = null
         payJob?.cancel()
         Log.w("Pamir", "payment ok buy=$payBuy")
         lifecycleScope.launch {
@@ -909,8 +969,7 @@ class PamirActivity : AppCompatActivity() {
             val url = r?.optString("payment_url").orEmpty()
             if (!url.startsWith("http")) return@launch
             cabTopupOpen = false
-            openUrl(url)
-            toast("Оплатите в открывшемся окне — баланс обновится сам", true)
+            openPayment(url, "Пополнение баланса", "Отсканируйте код телефоном и оплатите — баланс обновится сам")
             payJob?.cancel()
             payJob = lifecycleScope.launch {
                 repeat(60) {
@@ -918,6 +977,8 @@ class PamirActivity : AppCompatActivity() {
                     refreshAccount()
                     delay(300)
                     if ((balanceMinor ?: 0L) > before) {
+                        if (qrLink?.url == url) qrLink = null
+                        if (payWebUrl == url) payWebUrl = null
                         toast("Баланс пополнен: ${rub(balanceMinor ?: 0L)}", true)
                         loadCabinet(silent = true)
                         return@launch
@@ -1198,7 +1259,8 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    private fun smartLte() = MmkvManager.decodeSettingsBool(PREF_SMART_LTE, true)
+    /** Not on TV: it is on Wi-Fi or cable, and the LTE settings are not shown there. */
+    private fun smartLte() = !tv && MmkvManager.decodeSettingsBool(PREF_SMART_LTE, true)
 
     private fun lteServer(): PServer? = servers.firstOrNull { it.isLte && !it.isStub }
 
@@ -1395,8 +1457,18 @@ class PamirActivity : AppCompatActivity() {
         if (running) LauncherManager.restartService(this)
     }
 
-    private fun openUrl(url: String) {
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    /**
+     * Opens [url] in the browser or Telegram. On a TV (and on a phone without an app for the link) it is
+     * shown as a QR code for the phone instead; [onClose] runs when that QR sheet is closed.
+     */
+    private fun openUrl(
+        url: String,
+        title: String = "Откройте на телефоне",
+        text: String = "Отсканируйте код телефоном — ссылка откроется на нём",
+        onClose: (() -> Unit)? = null,
+    ) {
+        if (!tv && runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.isSuccess) return
+        qrLink = QrLink(title, text, url, onClose)
     }
 
     /**
@@ -1405,7 +1477,7 @@ class PamirActivity : AppCompatActivity() {
      * otherwise a system toast is used, because a sheet window would hide the snackbar.
      */
     private fun toast(message: CharSequence, long: Boolean = false, action: String? = null, onAction: (() -> Unit)? = null) {
-        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen || renameTarget != null
+        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen || renameTarget != null || qrLink != null || payWebUrl != null
         if (sheetShown || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             applicationContext.toast(message, long)
             return
@@ -1455,71 +1527,88 @@ class PamirActivity : AppCompatActivity() {
         BackHandler(enabled = tab != Tab.HOME) { tab = if (tab == Tab.APPS) Tab.SETTINGS else Tab.HOME }
         LaunchedEffect(tab) { if (tab != Tab.APPS) applyAppsIfChanged() }
         LaunchedEffect(tab, loggedIn) { if (tab == Tab.CABINET && loggedIn) loadCabinet(silent = true) }
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(c.bg)
-        ) {
-            val onHome = servers.isEmpty() || tab == Tab.HOME
-            val glow by animateFloatAsState(
-                when {
-                    !onHome -> 0.3f
-                    running -> 1f
-                    else -> 0.55f
-                },
-                tween(700), label = "bgGlow"
-            )
+        val indication = if (tv) remember(c.accent, c.text) { TvFocusIndication(c.accent, c.text) } else LocalIndication.current
+        // On a TV the phone layout stays a centered column instead of stretching across the screen.
+        val tvColumn = if (tv) Modifier.widthIn(max = 600.dp) else Modifier
+        CompositionLocalProvider(LocalIndication provides indication, LocalTv provides tv) {
             Box(
                 Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(400.dp)
-                    .graphicsLayer { alpha = glow }
-                    .background(Brush.radialGradient(listOf(c.accent.copy(alpha = if (dark) 0.15f else 0.22f), Color.Transparent)))
-            )
-            if (servers.isEmpty()) {
-                Onboarding()
-            } else {
-                Column(
+                    .fillMaxSize()
+                    .background(c.bg)
+            ) {
+                val onHome = servers.isEmpty() || tab == Tab.HOME
+                val glow by animateFloatAsState(
+                    when {
+                        !onHome -> 0.3f
+                        running -> 1f
+                        else -> 0.55f
+                    },
+                    tween(700), label = "bgGlow"
+                )
+                Box(
                     Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                ) {
-                    Box(Modifier.weight(1f)) {
-                        AnimatedContent(
-                            targetState = tab,
-                            transitionSpec = {
-                                (fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 30 }) togetherWith fadeOut(tween(140))
-                            },
-                            label = "tab"
-                        ) { t ->
-                            when (t) {
-                                Tab.HOME -> Home(onPick = { sheetOpen = true })
-                                Tab.SETTINGS -> Settings()
-                                Tab.APPS -> AppsScreen()
-                                Tab.CABINET -> CabinetScreen()
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(400.dp)
+                        .graphicsLayer { alpha = glow }
+                        .background(Brush.radialGradient(listOf(c.accent.copy(alpha = if (dark) 0.15f else 0.22f), Color.Transparent)))
+                )
+                if (servers.isEmpty()) {
+                    Box(Modifier.align(Alignment.TopCenter).then(if (tv) Modifier.widthIn(max = 960.dp) else Modifier)) { Onboarding() }
+                } else {
+                    Column(
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .then(tvColumn)
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                    ) {
+                        Box(Modifier.weight(1f)) {
+                            AnimatedContent(
+                                targetState = tab,
+                                transitionSpec = {
+                                    (fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 30 }) togetherWith fadeOut(tween(140))
+                                },
+                                label = "tab"
+                            ) { t ->
+                                when (t) {
+                                    Tab.HOME -> Home(onPick = { sheetOpen = true })
+                                    Tab.SETTINGS -> Settings()
+                                    Tab.APPS -> AppsScreen()
+                                    Tab.CABINET -> CabinetScreen()
+                                }
                             }
                         }
+                        // TV has one screen (power, server, subscription, autostart, support) — no tabs.
+                        if (!tv) {
+                            val navTab = if (tab == Tab.APPS) Tab.SETTINGS else tab
+                            BottomNav(navEntries, selected = navTabs.indexOf(navTab), onSelect = { tab = navTabs[it] })
+                        }
                     }
-                    val navTab = if (tab == Tab.APPS) Tab.SETTINGS else tab
-                    BottomNav(navEntries, selected = navTabs.indexOf(navTab), onSelect = { tab = navTabs[it] })
+                }
+                PamirSnackbarHost(
+                    snackbar,
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = if (servers.isEmpty()) 0.dp else 84.dp)
+                )
+                if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
+                if (renewOpen) RenewSheet(onDismiss = { renewOpen = false })
+                if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
+                if (cabTopupOpen) TopupSheet(onDismiss = { cabTopupOpen = false })
+                if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
+                if (keyPickerOpen) KeyPickerSheet(onDismiss = { keyPickerOpen = false })
+                renameTarget?.let { RenameKeySheet(it, onDismiss = { renameTarget = null }) }
+                qrLink?.let { q -> QrSheet(q, onDismiss = { qrLink = null; q.onClose?.invoke() }) }
+                payWebUrl?.let { u ->
+                    PayWebDialog(
+                        u, onReturn = { onPaymentPageClosed() }, onClose = { onPaymentPageClosed() },
+                        onBrowser = { payWebUrl = null; openUrl(u) }
+                    )
                 }
             }
-            PamirSnackbarHost(
-                snackbar,
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = if (servers.isEmpty()) 0.dp else 84.dp)
-            )
-            if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
-            if (renewOpen) RenewSheet(onDismiss = { renewOpen = false })
-            if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
-            if (cabTopupOpen) TopupSheet(onDismiss = { cabTopupOpen = false })
-            if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
-            if (keyPickerOpen) KeyPickerSheet(onDismiss = { keyPickerOpen = false })
-            renameTarget?.let { RenameKeySheet(it, onDismiss = { renameTarget = null }) }
         }
     }
 
@@ -1527,9 +1616,28 @@ class PamirActivity : AppCompatActivity() {
 
     @Composable
     private fun Onboarding() {
-        val c = Pamir.colors
         LaunchedEffect(Unit) {
             while (true) { delay(1500); reloadServers() }
+        }
+        if (tv) {
+            // A TV screen is wide and low: greeting on the left, steps and sign-in on the right.
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = Gap.xl),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(48.dp)
+            ) {
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) { OnboardingIntro() }
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = Gap.xl),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) { OnboardingActions() }
+            }
+            return
         }
         Column(
             Modifier
@@ -1541,37 +1649,52 @@ class PamirActivity : AppCompatActivity() {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(Modifier.height(40.dp))
-            LogoHero()
-            Spacer(Modifier.height(Gap.l))
-            Text(
-                "Добро пожаловать\nв Pamir VPN", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
-                modifier = Modifier.semantics { heading() }
-            )
-            Spacer(Modifier.height(Gap.s))
-            Text("Три шага — и интернет под защитой", style = PamirType.bodyRegular, color = c.textDim, textAlign = TextAlign.Center)
+            OnboardingIntro()
             Spacer(Modifier.height(Gap.xl))
-            OnboardingStep(1, "Войдите через Telegram", "или по почте и паролю от кабинета")
-            OnboardingStep(2, "Подписка подключится сама", "Серверы загрузятся автоматически")
-            OnboardingStep(3, "Нажмите большую кнопку", "Подключение в одно касание")
-            Spacer(Modifier.height(Gap.xl))
-            if (loggedIn && activeKeys(renewKeys).size > 1) {
-                PrimaryButton("Выбрать ключ для этого телефона", icon = PamirIcons.Key, loading = updating) { openKeyPicker() }
-            } else if (loginBusy) {
-                Text("Подтвердите вход в Telegram и вернитесь сюда", style = PamirType.support, color = c.textDim, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(Gap.m))
-                SecondaryButton("Отменить") { cancelLogin() }
-            } else {
-                PrimaryButton(
-                    "Войти через Telegram", subtitle = "Подписка подключится сама", icon = PamirIcons.Telegram,
-                    loading = updating
-                ) { loginTelegram() }
-            }
-            Spacer(Modifier.height(Gap.m))
-            SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailLoginOpen = true }
-            Spacer(Modifier.height(Gap.xs))
-            TextAction("Вставить ссылку подписки", icon = PamirIcons.Link) { importFromClipboard() }
-            Spacer(Modifier.height(Gap.l))
+            OnboardingActions()
         }
+    }
+
+    @Composable
+    private fun OnboardingIntro() {
+        val c = Pamir.colors
+        LogoHero()
+        Spacer(Modifier.height(Gap.l))
+        Text(
+            "Добро пожаловать\nв Pamir VPN", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() }
+        )
+        Spacer(Modifier.height(Gap.s))
+        Text("Три шага — и интернет под защитой", style = PamirType.bodyRegular, color = c.textDim, textAlign = TextAlign.Center)
+    }
+
+    @Composable
+    private fun OnboardingActions() {
+        val c = Pamir.colors
+        OnboardingStep(1, "Войдите через Telegram", "или по почте и паролю от кабинета")
+        OnboardingStep(2, "Подписка подключится сама", "Серверы загрузятся автоматически")
+        OnboardingStep(3, "Нажмите большую кнопку", if (tv) "Подключение одним нажатием на пульте" else "Подключение в одно касание")
+        Spacer(Modifier.height(Gap.xl))
+        if (loggedIn && activeKeys(renewKeys).size > 1) {
+            PrimaryButton(if (tv) "Выбрать ключ для телевизора" else "Выбрать ключ для этого телефона", icon = PamirIcons.Key, loading = updating) { openKeyPicker() }
+        } else if (loginBusy) {
+            Text("Подтвердите вход в Telegram и вернитесь сюда", style = PamirType.support, color = c.textDim, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(Gap.m))
+            SecondaryButton("Отменить") { cancelLogin() }
+        } else {
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { if (tv) runCatching { focus.requestFocus() } }
+            PrimaryButton(
+                "Войти через Telegram", Modifier.focusRequester(focus), subtitle = "Подписка подключится сама",
+                icon = PamirIcons.Telegram, loading = updating
+            ) { loginTelegram() }
+        }
+        Spacer(Modifier.height(Gap.m))
+        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailRegister = false; emailLoginOpen = true }
+        Spacer(Modifier.height(Gap.xs))
+        TextAction("Нет аккаунта? Зарегистрироваться", color = c.accentText) { emailRegister = true; emailLoginOpen = true }
+        if (!tv) TextAction("Вставить ссылку подписки", icon = PamirIcons.Link) { importFromClipboard() }
+        Spacer(Modifier.height(Gap.l))
     }
 
     @Composable
@@ -1648,11 +1771,14 @@ class PamirActivity : AppCompatActivity() {
                 PowerState.ON -> "Защищено"
                 PowerState.OFF -> "Не подключено"
             }
+            val powerFocus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { if (tv) runCatching { powerFocus.requestFocus() } }
             PowerButton(
                 state = power,
                 label = if (running) "Отключить VPN" else "Подключить VPN",
                 stateLabel = stateText,
-                onClick = { toggle() }
+                onClick = { toggle() },
+                modifier = Modifier.focusRequester(powerFocus)
             )
             AnimatedContent(targetState = stateText, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "state") { s ->
                 Text(
@@ -1676,7 +1802,7 @@ class PamirActivity : AppCompatActivity() {
             AnimatedVisibility(visible = running, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                 SpeedCard()
             }
-            if (!running) {
+            if (!running && !tv) {
                 if (whitelist && current?.isLte != true) {
                     Spacer(Modifier.height(Gap.m))
                     WhitelistCard()
@@ -1685,8 +1811,33 @@ class PamirActivity : AppCompatActivity() {
                     Banner(PamirIcons.Signal, "Мобильный интернет не работает? Есть LTE Обход", "Выбрать", Tone.ACCENT, onPick)
                 }
             }
+            if (tv) TvFooter()
             Spacer(Modifier.height(Gap.l))
         }
+    }
+
+    /** TV instead of the Settings tab: autostart with the TV and support (as a QR code). */
+    @Composable
+    private fun TvFooter() {
+        var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
+        Spacer(Modifier.height(Gap.m))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
+            SecondaryButton(if (boot) "Автозапуск: вкл" else "Автозапуск: выкл", Modifier.weight(1f), icon = PamirIcons.Power) {
+                boot = !boot
+                MmkvManager.encodeStartOnBoot(boot)
+                toast(if (boot) "VPN включится сам при включении телевизора" else "Автозапуск выключен")
+            }
+            SecondaryButton("Поддержка", Modifier.weight(1f), icon = PamirIcons.Chat) {
+                openUrl(BOT_URL, "Поддержка", "Отсканируйте код телефоном — ответим в Telegram")
+            }
+        }
+    }
+
+    /** On TV the VPN should come back after the TV is unplugged: autostart is on by default (once, user can turn it off). */
+    private fun enableTvBootOnce() {
+        if (MmkvManager.decodeSettingsBool(PREF_TV_BOOT_INIT, false)) return
+        MmkvManager.encodeSettings(PREF_TV_BOOT_INIT, true)
+        MmkvManager.encodeStartOnBoot(true)
     }
 
     @Composable
@@ -2046,10 +2197,10 @@ class PamirActivity : AppCompatActivity() {
                     PrimaryButton("Отлично") { payState = null; onDismiss() }
                 }
                 payState == "waiting" -> NoteCard(
-                    PamirIcons.Clock, "Ожидаем оплату",
-                    "Оплатите в открывшемся окне и вернитесь сюда — срок обновится сам.", Tone.WARN
+                    PamirIcons.Clock, "Проверяем оплату",
+                    "Как только платёж пройдёт, срок обновится сам — обычно это меньше минуты.", Tone.WARN
                 ) {
-                    SecondaryButton("Открыть оплату ещё раз") { openUrl(payUrl) }
+                    SecondaryButton("Открыть оплату ещё раз") { openPayment(payUrl, "Оплата", "Отсканируйте код телефоном и оплатите — подписка продлится сама") }
                     TextAction("Отменить", Modifier.align(Alignment.CenterHorizontally)) { payState = null; payJob?.cancel() }
                 }
                 payState == "failed" -> NoteCard(
@@ -2086,7 +2237,7 @@ class PamirActivity : AppCompatActivity() {
             PrimaryButton("Войти через Telegram", icon = PamirIcons.Telegram) { loginTelegram() }
         }
         Spacer(Modifier.height(Gap.s))
-        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailLoginOpen = true }
+        SecondaryButton("Войти по почте и паролю", icon = PamirIcons.Mail) { emailRegister = false; emailLoginOpen = true }
     }
 
     @Composable
@@ -2714,7 +2865,7 @@ class PamirActivity : AppCompatActivity() {
                         if (loginBusy) cancelLogin() else loginTelegram()
                     }
                     RowDivider()
-                    LinkRow(PamirIcons.Mail, "Войти по почте", "Если привязали почту в кабинете") { emailLoginOpen = true }
+                    LinkRow(PamirIcons.Mail, "Войти по почте", "Если привязали почту в кабинете") { emailRegister = false; emailLoginOpen = true }
                 }
             }
             SectionHeader("Подписка")
@@ -2826,10 +2977,14 @@ class PamirActivity : AppCompatActivity() {
         val c = Pamir.colors
         var email by remember { mutableStateOf("") }
         var pass by remember { mutableStateOf("") }
+        var pass2 by remember { mutableStateOf("") }
+        val reg = emailRegister
+        val submit = { if (reg) registerEmail(email, pass, pass2) else loginEmail(email, pass) }
         PamirSheet(
             onDismiss = onDismiss,
-            title = "Вход по почте",
-            subtitle = "Почта и пароль от личного кабинета Pamir VPN"
+            title = if (reg) "Регистрация" else "Вход по почте",
+            subtitle = if (reg) "Создайте аккаунт Pamir VPN — подписку оформите сразу после этого"
+            else "Почта и пароль от личного кабинета Pamir VPN"
         ) {
             OutlinedTextField(
                 value = email, onValueChange = { email = it.trim() }, singleLine = true,
@@ -2844,19 +2999,37 @@ class PamirActivity : AppCompatActivity() {
             OutlinedTextField(
                 value = pass, onValueChange = { pass = it }, singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Пароль", style = PamirType.bodyRegular) },
+                placeholder = { Text(if (reg) "Придумайте пароль" else "Пароль", style = PamirType.bodyRegular) },
                 leadingIcon = { Icon(PamirIcons.Lock, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
                 textStyle = PamirType.bodyRegular.copy(color = c.text),
                 visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { loginEmail(email, pass) }),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = if (reg) ImeAction.Next else ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
                 shape = Radius.m, colors = pamirFieldColors()
             )
+            if (reg) {
+                Spacer(Modifier.height(Gap.s))
+                OutlinedTextField(
+                    value = pass2, onValueChange = { pass2 = it }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Повторите пароль", style = PamirType.bodyRegular) },
+                    leadingIcon = { Icon(PamirIcons.Lock, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
+                    textStyle = PamirType.bodyRegular.copy(color = c.text),
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    shape = Radius.m, colors = pamirFieldColors()
+                )
+            }
             Spacer(Modifier.height(Gap.l))
-            PrimaryButton("Войти", loading = emailBusy) { loginEmail(email, pass) }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextAction("Забыли пароль?", color = c.accentText) { forgotPassword(email) }
-                TextAction("Регистрация") { openUrl(CABINET_URL) }
+            PrimaryButton(if (reg) "Создать аккаунт" else "Войти", loading = emailBusy) { submit() }
+            if (reg) {
+                TextAction("У меня уже есть аккаунт", Modifier.align(Alignment.CenterHorizontally), color = c.accentText) { emailRegister = false }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextAction("Забыли пароль?", color = c.accentText) { forgotPassword(email) }
+                    TextAction("Регистрация") { emailRegister = true }
+                }
             }
         }
     }

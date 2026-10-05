@@ -39,6 +39,25 @@ log "== окно входа по почте"
 tap_text '^Войти по почте и паролю$'; sleep 3; shot email_login
 adb shell input keyevent KEYCODE_BACK; sleep 2
 
+if [ "$REG_TEST" = "1" ]; then
+  log "== регистрация в приложении (новый тестовый аккаунт)"
+  EMAIL="emu$(date +%y%m%d%H%M%S)@pamirlink.ru"; PASS="Emu$(date +%s)x"
+  log "почта: $EMAIL"
+  tap_text '^Нет аккаунта'; sleep 3; shot register_sheet
+  tap_text '^Почта$'; sleep 1; adb shell input text "$EMAIL"; sleep 1
+  tap_text '^Придумайте пароль$'; sleep 1; adb shell input text "$PASS"; sleep 1
+  tap_text '^Повторите пароль$'; sleep 1; adb shell input text "$PASS"; sleep 1
+  adb shell input keyevent KEYCODE_BACK; sleep 1; shot register_filled
+  tap_text '^Создать аккаунт$'; sleep 10; shot registered
+
+  log "== оплата внутри приложения (без оплаты: только открыть страницу)"
+  adb shell input swipe 160 520 160 220 400; sleep 2
+  tap_text '^СБП / Карта$'; sleep 12; shot pay_page
+  grep -q 'android.webkit.WebView' /tmp/ui.xml && log "страница оплаты открыта внутри приложения (WebView)" || log "!!! страница оплаты не внутри приложения"
+  adb shell input keyevent KEYCODE_BACK; sleep 2; adb shell input keyevent KEYCODE_BACK; sleep 3; shot pay_waiting
+  tap_text '^Отменить$'; sleep 2; adb shell input keyevent KEYCODE_BACK; sleep 2
+fi
+
 log "== импорт подписки"
 ENC=$(python3 -c "import urllib.parse,os;print(urllib.parse.quote(os.environ.get('SUB_URL',''),safe=''))")
 [ -z "$ENC" ] && log "!!! нет секрета TEST_SUB_URL"

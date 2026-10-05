@@ -194,6 +194,7 @@ edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
         <activity
@@ -221,6 +222,11 @@ for f in glob.glob(os.path.join(MAIN, 'res', 'drawable-*dpi', 'ic_stat_*.png')):
 for sub in ('layout', 'drawable', 'xml'):
     for f in glob.glob(os.path.join(RES, sub, '*.xml')):
         shutil.copy(f, os.path.join(MAIN, 'res', sub, os.path.basename(f)))
+# Android TV launcher banner: our PNG replaces the v2rayNG one; the adaptive banner (API 26+) would win over it
+shutil.copy(os.path.join(RES, 'mipmap-xhdpi', 'ic_banner.png'), os.path.join(MAIN, 'res', 'mipmap-xhdpi', 'ic_banner.png'))
+banner_xml = os.path.join(MAIN, 'res', 'mipmap-anydpi-v26', 'ic_banner.xml')
+if os.path.exists(banner_xml):
+    os.remove(banner_xml)
 for f in glob.glob(os.path.join(MAIN, 'res', 'values*', 'strings.xml')):
     edit(f, [
         (re.compile(r'<string name="app_widget_name">[^<]*</string>'), '<string name="app_widget_name">Pamir VPN</string>'),

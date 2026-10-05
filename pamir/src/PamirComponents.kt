@@ -714,12 +714,14 @@ fun PamirSheet(
 ) {
     val c = Pamir.colors
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // TV: no drag handle — it is useless with a remote and would take the first focus.
+    val tv = LocalTv.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
         containerColor = c.sheet,
         contentColor = c.text,
-        dragHandle = { BottomSheetDefaults.DragHandle(color = c.track) },
+        dragHandle = if (tv) null else ({ BottomSheetDefaults.DragHandle(color = c.track) }),
     ) {
         Column(
             Modifier
@@ -728,7 +730,7 @@ fun PamirSheet(
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = Gap.l)
-                .padding(bottom = Gap.xl)
+                .padding(top = if (tv) Gap.xl else 0.dp, bottom = Gap.xl)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

@@ -1,0 +1,30 @@
+name: Pamir VPN releases cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep_stable:
+        description: 'How many newest regular releases to keep (the latest one is always kept)'
+        default: '3'
+      keep_tests:
+        description: 'How many newest test pre-releases to keep'
+        default: '1'
+      dry_run:
+        description: 'Only show what would be deleted'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Clean releases
+      env:
+        GH_TOKEN: ${{ github.token }}
+        KEEP_STABLE: ${{ inputs.keep_stable }}
+        KEEP_TESTS: ${{ inputs.keep_tests }}
+      run: bash pamir/release_cleanup.sh "$KEEP_STABLE" "$KEEP_TESTS" ${{ inputs.dry_run && '1' || '0' }}

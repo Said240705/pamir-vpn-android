@@ -13,7 +13,8 @@ import com.v2ray.ang.handler.AngConfigManager
 import java.util.concurrent.TimeUnit
 
 /**
- * Twice a day: refreshes the subscription (fresh "days left") and reminds about renewal.
+ * Every 6 hours: refreshes the subscription (fresh "days left"), reminds about renewal
+ * and notifies about a new news item from the admin panel.
  * Runs in the WorkManager process (":bg"), so it works even when the app is closed.
  */
 class PamirReminderWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -22,6 +23,7 @@ class PamirReminderWorker(context: Context, params: WorkerParameters) : Coroutin
         runCatching { AngConfigManager.updateConfigViaSubAll() }
             .onFailure { Log.w("Pamir", "reminder: sub update failed ${it.message}") }
         runCatching { PamirWatch.checkExpiry(applicationContext) }
+        runCatching { PamirNews.notifyNew(applicationContext) }
         return Result.success()
     }
 
@@ -30,12 +32,12 @@ class PamirReminderWorker(context: Context, params: WorkerParameters) : Coroutin
 
         fun schedule(context: Context) {
             runCatching {
-                val request = PeriodicWorkRequestBuilder<PamirReminderWorker>(12, TimeUnit.HOURS)
+                val request = PeriodicWorkRequestBuilder<PamirReminderWorker>(6, TimeUnit.HOURS)
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                     .setInitialDelay(30, TimeUnit.MINUTES)
                     .build()
                 RemoteWorkManager.getInstance(context.applicationContext)
-                    .enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP, request)
+                    .enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.UPDATE, request)
             }.onFailure { Log.w("Pamir", "reminder schedule failed: ${it.message}") }
         }
     }

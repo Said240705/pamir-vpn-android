@@ -277,7 +277,7 @@ object PamirWatch {
         .mapNotNull { Regex("⏳\\s*(\\d+)\\s*D").find(it)?.groupValues?.get(1)?.toIntOrNull() }
         .firstOrNull()
 
-    /** Reminder 3 days, 1 day and on the last day. Called by [PamirReminderWorker] twice a day. */
+    /** Reminder 3 days, 1 day and on the last day. Called by [PamirReminderWorker] every 6 hours. */
     fun checkExpiry(ctx: Context) {
         val d = daysLeft() ?: return
         if (d !in setOf(0, 1, 3)) return
@@ -299,15 +299,19 @@ object PamirWatch {
         runCatching { (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(ALERT_ID) }
     }
 
-    private fun notify(ctx: Context, title: String, text: String, extra: String, action: String?, id: Int = ALERT_ID) {
+    /** Notification that opens the app with [extra]; news use their own [channel] so people can mute them separately. */
+    internal fun notify(
+        ctx: Context, title: String, text: String, extra: String, action: String?, id: Int = ALERT_ID,
+        channel: String = CHANNEL, channelName: String = "Состояние подключения", channelDesc: String = "Обрыв VPN и проблемы с сервером",
+    ) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL, "Состояние подключения", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "Обрыв VPN и проблемы с сервером"
+                NotificationChannel(channel, channelName, NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = channelDesc
                 }
             )
         }
@@ -318,7 +322,7 @@ object PamirWatch {
             ctx, extra.hashCode(), open,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val b = NotificationCompat.Builder(ctx, CHANNEL)
+        val b = NotificationCompat.Builder(ctx, channel)
             .setSmallIcon(R.drawable.ic_stat_name)
             .setColor(0xFF2BEFC0.toInt())
             .setContentTitle(title)

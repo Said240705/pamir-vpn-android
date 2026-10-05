@@ -281,6 +281,8 @@ class PamirActivity : AppCompatActivity() {
     private var cabTopupOpen by mutableStateOf(false)
     private var cabBusy by mutableStateOf<String?>(null)
     private var emailLoginOpen by mutableStateOf(false)
+    private var news by mutableStateOf(PamirNews.cached())
+    private var newsOpen by mutableStateOf(false)
     /** The e-mail sheet opens on registration instead of sign-in. */
     private var emailRegister by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
@@ -381,6 +383,10 @@ class PamirActivity : AppCompatActivity() {
             PamirWatch.cancelAlert(this)
             sheetOpen = true
         }
+        if (i.getBooleanExtra(PamirNews.EXTRA_NEWS, false)) {
+            i.removeExtra(PamirNews.EXTRA_NEWS)
+            openNews()
+        }
         if (i.getBooleanExtra(PamirWatch.EXTRA_RENEW, false)) {
             i.removeExtra(PamirWatch.EXTRA_RENEW)
             openRenew()
@@ -406,6 +412,17 @@ class PamirActivity : AppCompatActivity() {
         if (payState == "waiting") lifecycleScope.launch { checkPayment() }
         lifecycleScope.launch { delay(1200); precheck() }
         lifecycleScope.launch { loadLocations() }
+        lifecycleScope.launch { loadNews() }
+    }
+
+    private suspend fun loadNews() {
+        val port = proxyPort()
+        withContext(Dispatchers.IO) { PamirNews.fetch(port) }?.let { news = it }
+    }
+
+    private fun openNews() {
+        PamirNews.markSeen(news)
+        newsOpen = true
     }
 
     override fun onDestroy() {
@@ -1477,7 +1494,7 @@ class PamirActivity : AppCompatActivity() {
      * otherwise a system toast is used, because a sheet window would hide the snackbar.
      */
     private fun toast(message: CharSequence, long: Boolean = false, action: String? = null, onAction: (() -> Unit)? = null) {
-        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || keyPickerOpen || renameTarget != null || qrLink != null || payWebUrl != null
+        val sheetShown = sheetOpen || renewOpen || reportOpen || cabTopupOpen || emailLoginOpen || newsOpen || keyPickerOpen || renameTarget != null || qrLink != null || payWebUrl != null
         if (sheetShown || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
             applicationContext.toast(message, long)
             return
@@ -1599,6 +1616,7 @@ class PamirActivity : AppCompatActivity() {
                 if (reportOpen) ReportSheet(onDismiss = { reportOpen = false })
                 if (cabTopupOpen) TopupSheet(onDismiss = { cabTopupOpen = false })
                 if (emailLoginOpen) EmailLoginSheet(onDismiss = { emailLoginOpen = false })
+                if (newsOpen) NewsSheet(onDismiss = { newsOpen = false })
                 if (keyPickerOpen) KeyPickerSheet(onDismiss = { keyPickerOpen = false })
                 renameTarget?.let { RenameKeySheet(it, onDismiss = { renameTarget = null }) }
                 qrLink?.let { q -> QrSheet(q, onDismiss = { qrLink = null; q.onClose?.invoke() }) }
@@ -1894,6 +1912,30 @@ class PamirActivity : AppCompatActivity() {
                 },
                 "Продлить", Tone.WARN, { openRenew() }, Modifier.padding(top = Gap.xs)
             )
+            else -> PamirNews.unseen(news)?.let { n ->
+                Banner(
+                    PamirIcons.Info, n.optString("text").trim().lineSequence().first(),
+                    "Читать", Tone.ACCENT, { openNews() }, Modifier.padding(top = Gap.xs)
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun NewsSheet(onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        PamirSheet(onDismiss = onDismiss, title = "Новости") {
+            if (news.isEmpty()) Text("Пока новостей нет", style = PamirType.support, color = c.textDim)
+            news.take(10).forEach { n ->
+                PamirCard(Modifier.padding(vertical = Gap.xs), contentPadding = 14.dp) {
+                    Text(n.optString("text").trim(), style = PamirType.bodyRegular, color = c.text)
+                    val d = PamirNews.date(n)
+                    if (d.isNotEmpty()) {
+                        Spacer(Modifier.height(Gap.xs))
+                        Text(d, style = PamirType.support, color = c.textDim)
+                    }
+                }
+            }
         }
     }
 
@@ -2877,6 +2919,8 @@ class PamirActivity : AppCompatActivity() {
             }
             SectionHeader("Помощь")
             RowGroup {
+                LinkRow(PamirIcons.Info, "Новости", news.firstOrNull()?.let { PamirNews.date(it).ifEmpty { null } }?.let { "Последняя — $it" } ?: "Новые серверы и акции") { openNews() }
+                RowDivider()
                 LinkRow(PamirIcons.Chat, "Поддержка", "Ответим в Telegram") { openUrl(BOT_URL) }
                 RowDivider()
                 LinkRow(PamirIcons.Report, "Сообщить о проблеме", "Отправим описание и журнал разработчикам") { reportOpen = true }

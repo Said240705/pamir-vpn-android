@@ -1218,7 +1218,7 @@ class PamirActivity : AppCompatActivity() {
             )
         }
         servers = list
-        daysLeft = list.firstNotNullOfOrNull { Regex("⏳\\s*(\\d+)\\s*D").find(it.rawRemarks)?.groupValues?.get(1)?.toIntOrNull() }
+        daysLeft = PamirWatch.daysLeft()
         lastUpdate = MmkvManager.decodeSettingsLong(PREF_LAST_SUB_UPDATE, 0L)
         if (lastUpdate == 0L && list.isNotEmpty()) {
             lastUpdate = System.currentTimeMillis()

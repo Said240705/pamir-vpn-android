@@ -21,6 +21,7 @@ import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.helper.MessageHelper
+import com.v2ray.ang.util.HttpUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
 import java.net.Socket
+import org.json.JSONObject
 
 /**
  * Pamir background logic that lives next to the VPN core (":daemon" process):
@@ -58,6 +60,8 @@ object PamirWatch {
     const val K_PREFERRED = "pamir_preferred"
     const val K_REMIND = "pamir_remind"
     private const val K_REMIND_LAST = "pamir_remind_last"
+    /** {subscription url: expiry epoch ms, 0 = none} from the subscription-userinfo header. */
+    private const val K_SUB_EXPIRE = "pamir_sub_expire"
     private const val K_USER_STOP = "pamir_user_stop"
     // Same keys as PREF_USER_CHOSE / PREF_AUTO_BEST in PamirActivity.
     private const val K_USER_CHOSE = "pamir_user_chose"
@@ -271,11 +275,52 @@ object PamirWatch {
 
     // ---------- subscription expiry ----------
 
-    /** Days left from the server names ("…|⏳3D"), null = unknown / unlimited. */
-    fun daysLeft(): Int? = MmkvManager.decodeAllServerList().asSequence()
-        .mapNotNull { MmkvManager.decodeServerConfig(it)?.remarks }
-        .mapNotNull { Regex("⏳\\s*(\\d+)\\s*D").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-        .firstOrNull()
+    /**
+     * Saves the expiry from the subscription response header ("subscription-userinfo: upload=…; expire=<unix s>").
+     * Called by HttpUtil (patched in brand.py) for every subscription download; 0 / absent = no expiry.
+     */
+    fun saveSubInfo(url: String?, header: String?) {
+        if (url.isNullOrBlank() || header.isNullOrBlank()) return
+        runCatching {
+            val map = JSONObject(MmkvManager.decodeSettingsString(K_SUB_EXPIRE, null) ?: "{}")
+            map.put(url, parseExpire(header) ?: 0L)
+            MmkvManager.encodeSettings(K_SUB_EXPIRE, map.toString())
+        }.onFailure { Log.w("Pamir", "sub info: ${it.message}") }
+    }
+
+    /** Expiry in epoch milliseconds from a subscription-userinfo header; null when it has none. */
+    internal fun parseExpire(header: String): Long? {
+        val v = Regex("""(?:^|;)\s*expire\s*=\s*(\d+)""", RegexOption.IGNORE_CASE).find(header)
+            ?.groupValues?.get(1)?.toLongOrNull()?.takeIf { it > 0 } ?: return null
+        return if (v < 100_000_000_000L) v * 1000 else v // seconds (3x-ui) or already milliseconds
+    }
+
+    /** Whole days left until [expireMs]: 0 = ends today (less than a day left), null = already expired. */
+    internal fun daysUntil(expireMs: Long, now: Long = System.currentTimeMillis()): Int? =
+        if (expireMs <= now) null else ((expireMs - now) / 86_400_000L).toInt()
+
+    /**
+     * Days left of the subscription the selected server comes from (or of any subscription when none is selected),
+     * null = unknown / unlimited / expired. Taken from the subscription header; the "…|⏳3D" tail in server names
+     * is the fallback for subscriptions downloaded before the header was saved.
+     */
+    fun daysLeft(): Int? {
+        val known = runCatching { JSONObject(MmkvManager.decodeSettingsString(K_SUB_EXPIRE, null) ?: "{}") }.getOrNull()
+        val subs = MmkvManager.decodeSubscriptions()
+        val selectedSub = MmkvManager.getSelectServer()?.let { MmkvManager.decodeServerConfig(it)?.subscriptionId }
+        val ordered = subs.sortedByDescending { it.guid == selectedSub }
+        for (sub in ordered) {
+            val url = sub.subscription.url
+            if (known == null || url.isBlank()) continue
+            val key = listOf(url, runCatching { HttpUtil.toIdnUrl(url) }.getOrDefault(url)).firstOrNull { known.has(it) } ?: continue
+            val expire = known.optLong(key, 0L)
+            return if (expire > 0) daysUntil(expire) else null
+        }
+        return MmkvManager.decodeAllServerList().asSequence()
+            .mapNotNull { MmkvManager.decodeServerConfig(it)?.remarks }
+            .mapNotNull { Regex("⏳\\s*(\\d+)\\s*D").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            .firstOrNull()
+    }
 
     /** Reminder 3 days, 1 day and on the last day. Called by [PamirReminderWorker] every 6 hours. */
     fun checkExpiry(ctx: Context) {

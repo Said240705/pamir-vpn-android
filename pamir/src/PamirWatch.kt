@@ -16,11 +16,14 @@ import android.os.Process
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.v2ray.ang.AppConfig
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.CoreServiceManager
+import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.helper.MessageHelper
+import com.v2ray.ang.util.HttpUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +36,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
 import java.net.Socket
+import org.json.JSONObject
 
 /**
  * Pamir background logic that lives next to the VPN core (":daemon" process):
@@ -58,6 +62,10 @@ object PamirWatch {
     const val K_PREFERRED = "pamir_preferred"
     const val K_REMIND = "pamir_remind"
     private const val K_REMIND_LAST = "pamir_remind_last"
+    /** {subscription url: expiry epoch ms, 0 = none} from the subscription-userinfo header. */
+    private const val K_SUB_EXPIRE = "pamir_sub_expire"
+    /** Oldest app version that may still connect ("" = any); set from the release info by the update check. */
+    private const val K_MIN_VERSION = "pamir_min_version"
     private const val K_USER_STOP = "pamir_user_stop"
     // Same keys as PREF_USER_CHOSE / PREF_AUTO_BEST in PamirActivity.
     private const val K_USER_CHOSE = "pamir_user_chose"
@@ -105,6 +113,30 @@ object PamirWatch {
     fun selectedTitle(): String =
         MmkvManager.getSelectServer()?.let { MmkvManager.decodeServerConfig(it) }?.let { title(it.remarks) } ?: "Pamir VPN"
 
+    // ---------- required update ----------
+
+    /** True when [remote] is a higher dotted version than [local] ("1.6.10" > "1.6.9"). */
+    fun versionNewer(remote: String, local: String): Boolean {
+        val r = remote.split(".").map { it.trim().toIntOrNull() ?: 0 }
+        val l = local.split(".").map { it.trim().toIntOrNull() ?: 0 }
+        for (i in 0 until maxOf(r.size, l.size)) {
+            val a = r.getOrElse(i) { 0 }; val b = l.getOrElse(i) { 0 }
+            if (a != b) return a > b
+        }
+        return false
+    }
+
+    fun setMinVersion(v: String?) = MmkvManager.encodeSettings(K_MIN_VERSION, v.orEmpty())
+
+    /**
+     * The release marked as required is newer than this build: the app shows only the update screen and
+     * does not connect (the tile, widget and boot start are refused too). Remembered, so it holds offline.
+     */
+    fun updateRequired(): Boolean {
+        val min = MmkvManager.decodeSettingsString(K_MIN_VERSION, "").orEmpty()
+        return min.isNotBlank() && versionNewer(min, BuildConfig.VERSION_NAME)
+    }
+
     /** Called by every "stop"/"restart" request, so the following stop is not treated as a drop. */
     fun markUserStop() {
         MmkvManager.encodeSettings(K_USER_STOP, System.currentTimeMillis())
@@ -113,6 +145,12 @@ object PamirWatch {
     // ---------- core lifecycle hooks (daemon process) ----------
 
     fun onStarted(ctx: Context) {
+        // Started past the update screen (boot autostart, always-on VPN): an outdated build must not connect.
+        if (runCatching { updateRequired() }.getOrDefault(false)) {
+            Log.w(TAG, "required update pending: stopping")
+            LauncherManager.stopService(ctx)
+            return
+        }
         runCatching {
             val uid = Process.myUid()
             MmkvManager.encodeSettings(K_CONN_AT, System.currentTimeMillis())
@@ -271,11 +309,52 @@ object PamirWatch {
 
     // ---------- subscription expiry ----------
 
-    /** Days left from the server names ("…|⏳3D"), null = unknown / unlimited. */
-    fun daysLeft(): Int? = MmkvManager.decodeAllServerList().asSequence()
-        .mapNotNull { MmkvManager.decodeServerConfig(it)?.remarks }
-        .mapNotNull { Regex("⏳\\s*(\\d+)\\s*D").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-        .firstOrNull()
+    /**
+     * Saves the expiry from the subscription response header ("subscription-userinfo: upload=…; expire=<unix s>").
+     * Called by HttpUtil (patched in brand.py) for every subscription download; 0 / absent = no expiry.
+     */
+    fun saveSubInfo(url: String?, header: String?) {
+        if (url.isNullOrBlank() || header.isNullOrBlank()) return
+        runCatching {
+            val map = JSONObject(MmkvManager.decodeSettingsString(K_SUB_EXPIRE, null) ?: "{}")
+            map.put(url, parseExpire(header) ?: 0L)
+            MmkvManager.encodeSettings(K_SUB_EXPIRE, map.toString())
+        }.onFailure { Log.w("Pamir", "sub info: ${it.message}") }
+    }
+
+    /** Expiry in epoch milliseconds from a subscription-userinfo header; null when it has none. */
+    internal fun parseExpire(header: String): Long? {
+        val v = Regex("""(?:^|;)\s*expire\s*=\s*(\d+)""", RegexOption.IGNORE_CASE).find(header)
+            ?.groupValues?.get(1)?.toLongOrNull()?.takeIf { it > 0 } ?: return null
+        return if (v < 100_000_000_000L) v * 1000 else v // seconds (3x-ui) or already milliseconds
+    }
+
+    /** Whole days left until [expireMs]: 0 = ends today (less than a day left), null = already expired. */
+    internal fun daysUntil(expireMs: Long, now: Long = System.currentTimeMillis()): Int? =
+        if (expireMs <= now) null else ((expireMs - now) / 86_400_000L).toInt()
+
+    /**
+     * Days left of the subscription the selected server comes from (or of any subscription when none is selected),
+     * null = unknown / unlimited / expired. Taken from the subscription header; the "…|⏳3D" tail in server names
+     * is the fallback for subscriptions downloaded before the header was saved.
+     */
+    fun daysLeft(): Int? {
+        val known = runCatching { JSONObject(MmkvManager.decodeSettingsString(K_SUB_EXPIRE, null) ?: "{}") }.getOrNull()
+        val subs = MmkvManager.decodeSubscriptions()
+        val selectedSub = MmkvManager.getSelectServer()?.let { MmkvManager.decodeServerConfig(it)?.subscriptionId }
+        val ordered = subs.sortedByDescending { it.guid == selectedSub }
+        for (sub in ordered) {
+            val url = sub.subscription.url
+            if (known == null || url.isBlank()) continue
+            val key = listOf(url, runCatching { HttpUtil.toIdnUrl(url) }.getOrDefault(url)).firstOrNull { known.has(it) } ?: continue
+            val expire = known.optLong(key, 0L)
+            return if (expire > 0) daysUntil(expire) else null
+        }
+        return MmkvManager.decodeAllServerList().asSequence()
+            .mapNotNull { MmkvManager.decodeServerConfig(it)?.remarks }
+            .mapNotNull { Regex("⏳\\s*(\\d+)\\s*D").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            .firstOrNull()
+    }
 
     /** Reminder 3 days, 1 day and on the last day. Called by [PamirReminderWorker] every 6 hours. */
     fun checkExpiry(ctx: Context) {

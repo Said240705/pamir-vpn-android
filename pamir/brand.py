@@ -159,6 +159,11 @@ edit(os.path.join(PKG, 'util', 'HttpUtil.kt'), [
     ('            applyEmbeddedBasicAuthHeader(currentUrl, requestBuilder)\n',
      '            applyEmbeddedBasicAuthHeader(currentUrl, requestBuilder)\n            pamirDeviceHeaders(requestBuilder)\n'),
     ('    private fun applyEmbeddedBasicAuthHeader(', HEADERS_FN),
+    # subscription expiry for the app comes from this header, so server names can stay clean
+    ('                    response.isSuccessful -> {\n                        return response.body?.string() ?: ""\n',
+     '                    response.isSuccessful -> {\n'
+     '                        com.v2ray.ang.pamir.PamirWatch.saveSubInfo(request.url, response.header("subscription-userinfo"))\n'
+     '                        return response.body?.string() ?: ""\n'),
 ])
 
 # 8. imported subscription is called "Pamir VPN"; empty groups (e.g. "Default") are hidden,

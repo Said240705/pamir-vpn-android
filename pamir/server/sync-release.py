@@ -12,6 +12,7 @@ Env:
 """
 import json
 import os
+import re
 import shutil
 import sys
 import urllib.request
@@ -84,6 +85,10 @@ def main():
     for f, path in tmp.items():
         os.replace(path, os.path.join(DIR, f))
     meta = {'version': version}
+    # required update: the app blocks itself below this version (same marker the app reads on GitHub)
+    m = re.search(r'pamir-min-version:\s*([\d.]+)', release.get('body') or '')
+    if m:
+        meta['min_version'] = m.group(1)
     meta['arm64-v8a'] = {'file': 'pamir-vpn.apk', 'size': picked['pamir-vpn.apk']['size']}
     meta['universal'] = {'file': 'pamir-vpn-universal.apk', 'size': picked['pamir-vpn-universal.apk']['size']}
     with open(meta_path + '.new', 'w', encoding='utf-8') as out:

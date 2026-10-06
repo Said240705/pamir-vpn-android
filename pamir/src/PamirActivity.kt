@@ -54,6 +54,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -78,6 +79,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -236,6 +238,8 @@ class PamirActivity : AppCompatActivity() {
     /** Download URLs of [newVersion], tried in order: GitHub first, the site as a fallback. */
     private var newVersionUrls = emptyList<String>()
     private var updProgress by mutableStateOf(-1)
+    /** A release marked as required is out: only the update screen is shown and the VPN does not start. */
+    private var updateRequired by mutableStateOf(PamirWatch.updateRequired())
     /** Android TV: remote control, no browser or Telegram — links are shown as QR codes. */
     private val tv by lazy { PamirTv.isTv(this) }
     private var qrLink by mutableStateOf<QrLink?>(null)
@@ -1240,6 +1244,7 @@ class PamirActivity : AppCompatActivity() {
     private fun toggle() {
         Log.w("Pamir", "toggle running=$running connecting=$connecting selected=$selected")
         if (connecting) return
+        if (updateRequired && !running) return
         if (running) {
             LauncherManager.stopService(this)
             return
@@ -1413,7 +1418,7 @@ class PamirActivity : AppCompatActivity() {
     }
 
     /** A published app build: version and where its APK for this device can be downloaded. */
-    private class UpdateSource(val version: String, val url: String)
+    private class UpdateSource(val version: String, val url: String, val minVersion: String)
 
     private fun httpGet(url: String, accept: String? = null): String {
         val c = URL(url).openConnection() as HttpURLConnection
@@ -1433,7 +1438,9 @@ class PamirActivity : AppCompatActivity() {
         val urls = (0 until assets.length()).associate { assets.getJSONObject(it).let { a -> a.optString("name") to a.optString("browser_download_url") } }
         fun pick(fixed: String, suffix: String) = urls[fixed] ?: urls.entries.firstOrNull { it.key.endsWith(suffix) }?.value
         val url = (if (prefersArm64()) pick("pamir-vpn.apk", "_arm64-v8a.apk") else null) ?: pick("pamir-vpn-universal.apk", "_universal.apk")
-        return if (v.isNotBlank() && url != null) UpdateSource(v, url) else null
+        // The build workflow writes "<!-- pamir-min-version: 1.6.1 -->" into the release notes.
+        val min = Regex("""pamir-min-version:\s*([\d.]+)""").find(o.optString("body"))?.groupValues?.get(1).orEmpty()
+        return if (v.isNotBlank() && url != null) UpdateSource(v, url, min) else null
     }
 
     /** The site mirror (download/android.json), kept for when GitHub is slow or blocked. */
@@ -1442,7 +1449,7 @@ class PamirActivity : AppCompatActivity() {
         val v = o.optString("version")
         val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
         val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
-        return if (v.isNotBlank()) UpdateSource(v, DOWNLOAD_BASE + file) else null
+        return if (v.isNotBlank()) UpdateSource(v, DOWNLOAD_BASE + file, o.optString("min_version")) else null
     }
 
     /** Asks GitHub and the site in parallel; offers the newest version and every source that has it. */
@@ -1453,6 +1460,16 @@ class PamirActivity : AppCompatActivity() {
                 val site = async { runCatching { updateFromSite() }.onFailure { Log.w("Pamir", "update site: ${it.message}") }.getOrNull() }
                 listOfNotNull(gh.await(), site.await())
             }
+            if (found.isNotEmpty()) {
+                // The highest minimum any source reports; the site mirror can lag behind GitHub by a few minutes.
+                val min = found.map { it.minVersion }.filter { it.isNotBlank() }.fold("") { acc, v -> if (acc.isEmpty() || isNewer(v, acc)) v else acc }
+                PamirWatch.setMinVersion(min)
+                updateRequired = PamirWatch.updateRequired()
+                if (updateRequired && running) {
+                    Log.w("Pamir", "required update $min: stopping the VPN")
+                    LauncherManager.stopService(this@PamirActivity)
+                }
+            }
             val best = found.map { it.version }.fold(appVersion()) { acc, v -> if (isNewer(v, acc)) v else acc }
             if (!isNewer(best, appVersion())) return@launch
             newVersionUrls = found.filter { it.version == best }.map { it.url }
@@ -1460,15 +1477,7 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    private fun isNewer(remote: String, local: String): Boolean {
-        val r = remote.split(".").map { it.toIntOrNull() ?: 0 }
-        val l = local.split(".").map { it.toIntOrNull() ?: 0 }
-        for (i in 0 until maxOf(r.size, l.size)) {
-            val a = r.getOrElse(i) { 0 }; val b = l.getOrElse(i) { 0 }
-            if (a != b) return a > b
-        }
-        return false
-    }
+    private fun isNewer(remote: String, local: String): Boolean = PamirWatch.versionNewer(remote, local)
 
     private fun installUpdate() {
         if (updProgress >= 0) return
@@ -1727,6 +1736,61 @@ class PamirActivity : AppCompatActivity() {
                         onBrowser = { payWebUrl = null; openUrl(u) }
                     )
                 }
+                if (updateRequired) RequiredUpdate()
+            }
+        }
+    }
+
+    /** Covers the whole app while a required update is not installed; only updating (or support) is possible. */
+    @Composable
+    private fun RequiredUpdate() {
+        val c = Pamir.colors
+        BackHandler { finish() }
+        LaunchedEffect(Unit) { if (newVersion == null) checkAppUpdate() }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(c.bg)
+                .pointerInput(Unit) { detectTapGestures { } }
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                Modifier
+                    .then(if (tv) Modifier.widthIn(max = 560.dp) else Modifier.fillMaxWidth())
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = Gap.xl, vertical = Gap.xl),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                LogoHero()
+                Spacer(Modifier.height(Gap.l))
+                Text("Важное обновление", style = PamirType.title, color = c.text, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(Gap.s))
+                Text(
+                    "Эта версия приложения устарела и больше не подключается. " +
+                        "Установите новую — это займёт минуту, подписка и настройки сохранятся.",
+                    style = PamirType.body, color = c.textDim, textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(Gap.xl))
+                val v = newVersion
+                PrimaryButton(
+                    when {
+                        updProgress >= 0 -> "Загрузка $updProgress%"
+                        v != null -> "Обновить до $v"
+                        else -> "Проверить обновление"
+                    },
+                    icon = PamirIcons.Download,
+                    loading = updProgress == 0
+                ) { if (v != null) installUpdate() else { toast("Проверяем обновления…"); checkAppUpdate() } }
+                Spacer(Modifier.height(Gap.s))
+                TextAction("Скачать с сайта", color = c.accentText) {
+                    openUrl(
+                        DOWNLOAD_BASE + if (prefersArm64()) "pamir-vpn.apk" else "pamir-vpn-universal.apk",
+                        "Скачать Pamir VPN", "Откройте ссылку на телефоне и установите файл"
+                    )
+                }
+                TextAction("Поддержка", icon = PamirIcons.Chat) { openUrl(BOT_URL, "Поддержка", "Отсканируйте код телефоном — ответим в Telegram") }
             }
         }
     }

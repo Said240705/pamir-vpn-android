@@ -11,6 +11,10 @@ on:
         description: 'Test build: publish as pre-release, users do not get it as an update'
         type: boolean
         default: false
+      required:
+        description: 'Важное обновление: старые версии не подключаются, пока пользователь не обновит'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -110,6 +114,32 @@ jobs:
         cp V2rayNG/app/build/outputs/apk/*/release/*_universal.apk ${{ github.workspace }}/fixed/pamir-vpn-universal.apk
         ls -la ${{ github.workspace }}/fixed
 
+    - name: Release notes
+      # The app reads "pamir-min-version" from the latest release: older builds show only the update screen.
+      # A regular release keeps the minimum of the previous one, so a later optional update does not lift it.
+      id: notes
+      env:
+        GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ inputs.version }}
+        REQUIRED: ${{ inputs.required }}
+      run: |
+        if [ "$REQUIRED" = "true" ]; then
+          MIN="$VERSION"
+        else
+          MIN=$(gh release view -R "${{ github.repository }}" --json body -q .body 2>/dev/null | grep -oP 'pamir-min-version:\s*\K[0-9.]+' | head -1 || true)
+        fi
+        {
+          echo 'body<<PAMIR_EOF'
+          if [ "$REQUIRED" = "true" ]; then
+            echo 'Важное обновление: предыдущие версии больше не подключаются.'
+            echo
+          fi
+          echo 'Pamir VPN для Android. Для большинства телефонов подходит файл *_universal.apk.'
+          if [ -n "$MIN" ]; then echo "<!-- pamir-min-version: $MIN -->"; fi
+          echo 'PAMIR_EOF'
+        } >> "$GITHUB_OUTPUT"
+        echo "min version: ${MIN:-none}"
+
     - name: Publish release
       uses: softprops/action-gh-release@v2
       with:
@@ -118,7 +148,7 @@ jobs:
         target_commitish: ${{ github.sha }}
         prerelease: ${{ inputs.prerelease }}
         make_latest: ${{ inputs.prerelease && 'false' || 'true' }}
-        body: 'Pamir VPN для Android. Для большинства телефонов подходит файл *_universal.apk.'
+        body: ${{ steps.notes.outputs.body }}
         files: |
           ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/release/*.apk
           ${{ github.workspace }}/fixed/*.apk

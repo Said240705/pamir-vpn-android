@@ -78,7 +78,9 @@ class QSTileService : TileService() {
             Tile.STATE_ACTIVE -> LauncherManager.stopService(this)
             else -> {
                 // First connection needs the system VPN dialog -> open the app instead
-                if (MmkvManager.getSelectServer().isNullOrEmpty() || VpnService.prepare(this) != null) {
+                if (MmkvManager.getSelectServer().isNullOrEmpty() || VpnService.prepare(this) != null ||
+                    com.v2ray.ang.pamir.PamirWatch.updateRequired()
+                ) {
                     openApp()
                 } else {
                     LauncherManager.startServiceFromToggle(this)

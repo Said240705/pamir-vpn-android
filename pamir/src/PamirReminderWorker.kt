@@ -25,6 +25,7 @@ class PamirReminderWorker(context: Context, params: WorkerParameters) : Coroutin
         runCatching { PamirWatch.checkExpiry(applicationContext) }
         runCatching { PamirNews.notifyNew(applicationContext) }
         runCatching { PamirOffers.notifyNew(applicationContext) }
+        runCatching { PamirApi.pingInstall(applicationContext) }
         return Result.success()
     }
 

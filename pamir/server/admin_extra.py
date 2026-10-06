@@ -1,21 +1,28 @@
-"""Pamir: промокоды и аналитика для веб-админки (admin/promo.html, admin/analytics.html).
+"""Pamir: промокоды, аналитика и статистика приложения для веб-админки
+(admin/promo.html, admin/analytics.html).
 
 Ставится патчем patch_admin_extra.py как routers/pamir_admin_extra.py бэкенда кабинета.
-Работает с базой бота напрямую (таблицы promo_codes, promo_link_visits, payments, users),
-ничего в схеме не меняет. Ссылка с промокодом — штатная ботовая t.me/<bot>?start=pr_<КОД>.
-Время в базе — UTC.
+Работает с базой бота напрямую (таблицы promo_codes, promo_link_visits, payments, users);
+своя единственная таблица — pamir_app_installs (отметки Android-приложения, создаётся сама).
+Ссылка с промокодом — штатная ботовая t.me/<bot>?start=pr_<КОД>. Время в базе — UTC.
 """
+import asyncio
+import json
 import re
 import secrets
+import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import auth
 import db
+from rate_limit import enforce_rate_limit
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+# Без общего префикса: кроме /admin/... здесь публичная отметка приложения /app-stats/ping.
+router = APIRouter(tags=["admin"])
 
 BOT_USERNAME = "pamirlink_bot"
 CODE_RE = re.compile(r"^[A-Z0-9_-]{3,32}$")
@@ -68,7 +75,7 @@ def _promo_out(r) -> dict:
 
 # ---------- промокоды ----------
 
-@router.get("/promo")
+@router.get("/admin/promo")
 async def promo_list(kind: str = "manual", limit: int = 100, admin=Depends(auth.current_admin)):
     """kind: manual — созданные вручную (по умолчанию), lastchance / wheel / auto, all — все."""
     where, args = "1=1", []
@@ -125,7 +132,7 @@ class PromoIn(BaseModel):
     note: str = ""
 
 
-@router.post("/promo")
+@router.post("/admin/promo")
 async def promo_create(payload: PromoIn, admin=Depends(auth.current_admin)):
     if not 1 <= payload.discount_percent <= 100:
         raise HTTPException(400, "Скидка должна быть от 1 до 100%")
@@ -161,7 +168,7 @@ async def promo_create(payload: PromoIn, admin=Depends(auth.current_admin)):
         await conn.close()
 
 
-@router.post("/promo/{promo_id}/toggle")
+@router.post("/admin/promo/{promo_id}/toggle")
 async def promo_toggle(promo_id: int, admin=Depends(auth.current_admin)):
     conn = await db.get_db()
     try:
@@ -177,7 +184,7 @@ async def promo_toggle(promo_id: int, admin=Depends(auth.current_admin)):
         await conn.close()
 
 
-@router.post("/promo/{promo_id}/delete")
+@router.post("/admin/promo/{promo_id}/delete")
 async def promo_delete(promo_id: int, admin=Depends(auth.current_admin)):
     """Удалить можно только ручной код, которым ещё никто не воспользовался; иначе — выключить."""
     conn = await db.get_db()
@@ -205,7 +212,7 @@ async def promo_delete(promo_id: int, admin=Depends(auth.current_admin)):
 
 # ---------- аналитика ----------
 
-@router.get("/analytics")
+@router.get("/admin/analytics")
 async def analytics(days: int = 30, admin=Depends(auth.current_admin)):
     """days: 7 / 30 / 90; 0 — за всё время. Графики по дням — на дашборде."""
     days = max(0, min(days, 365))
@@ -292,3 +299,142 @@ async def analytics(days: int = 30, admin=Depends(auth.current_admin)):
         return out
     finally:
         await conn.close()
+
+
+# ---------- приложение: установки и версии ----------
+
+GITHUB_RELEASES = "https://api.github.com/repos/Said240705/pamir-vpn-android/releases?per_page=20"
+ID_RE = re.compile(r"^[0-9a-f]{16,64}$")
+VERSION_RE = re.compile(r"^\d{1,4}(\.\d{1,4}){0,3}$")
+_installs_ready = False
+_downloads_cache = {"at": 0.0, "data": None}
+
+
+async def _ensure_installs(conn):
+    global _installs_ready
+    if _installs_ready:
+        return
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pamir_app_installs (
+            install_id TEXT PRIMARY KEY,
+            version TEXT NOT NULL,
+            android TEXT,
+            model TEXT,
+            is_tv INTEGER NOT NULL DEFAULT 0,
+            first_seen TIMESTAMP NOT NULL,
+            last_seen TIMESTAMP NOT NULL
+        )
+        """
+    )
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_pamir_app_installs_seen ON pamir_app_installs(last_seen)")
+    await conn.commit()
+    _installs_ready = True
+
+
+class PingIn(BaseModel):
+    id: str
+    version: str
+    android: str = ""
+    model: str = ""
+    tv: bool = False
+
+
+@router.post("/app-stats/ping")
+async def app_ping(payload: PingIn, request: Request):
+    """Раз в сутки от каждой установки Android-приложения (без аккаунта): ID установки, версия, устройство."""
+    enforce_rate_limit(request, "app_stats_ping", max_requests=30, window_seconds=3600)
+    install_id = payload.id.strip().lower()
+    if not ID_RE.match(install_id) or not VERSION_RE.match(payload.version.strip()):
+        raise HTTPException(400, "bad ping")
+    now = _now()
+    conn = await db.get_db()
+    try:
+        await _ensure_installs(conn)
+        await conn.execute(
+            """
+            INSERT INTO pamir_app_installs (install_id, version, android, model, is_tv, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(install_id) DO UPDATE SET
+                version = excluded.version, android = excluded.android, model = excluded.model,
+                is_tv = excluded.is_tv, last_seen = excluded.last_seen
+            """,
+            (install_id, payload.version.strip(), payload.android.strip()[:20], payload.model.strip()[:80],
+             1 if payload.tv else 0, now, now),
+        )
+        await conn.commit()
+        return {"ok": True}
+    finally:
+        await conn.close()
+
+
+def _fetch_downloads():
+    req = urllib.request.Request(GITHUB_RELEASES, headers={"User-Agent": "pamir-admin", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        releases = json.load(r)
+    out = []
+    for rel in releases:
+        if rel.get("draft"):
+            continue
+        out.append({
+            "version": str(rel.get("tag_name", "")).lstrip("v"),
+            "prerelease": bool(rel.get("prerelease")),
+            "published_at": rel.get("published_at"),
+            "downloads": sum(int(a.get("download_count") or 0) for a in rel.get("assets") or []),
+        })
+    return out
+
+
+async def _downloads():
+    """Скачивания APK по релизам GitHub; кэш 10 минут (лимит GitHub без токена — 60 запросов в час)."""
+    if _downloads_cache["data"] is not None and time.time() - _downloads_cache["at"] < 600:
+        return _downloads_cache["data"]
+    try:
+        data = await asyncio.to_thread(_fetch_downloads)
+    except Exception:
+        return _downloads_cache["data"]  # старые цифры лучше пустоты
+    _downloads_cache.update(at=time.time(), data=data)
+    return data
+
+
+def _vkey(v: str):
+    return tuple(int(x) if x.isdigit() else 0 for x in v.split("."))
+
+
+@router.get("/admin/app-stats")
+async def app_stats(admin=Depends(auth.current_admin)):
+    now = datetime.now(timezone.utc)
+    ago = lambda d: (now - timedelta(days=d)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = await db.get_db()
+    try:
+        await _ensure_installs(conn)
+        cur = await conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN last_seen >= ? THEN 1 ELSE 0 END) AS active_1d,
+                   SUM(CASE WHEN last_seen >= ? THEN 1 ELSE 0 END) AS active_7d,
+                   SUM(CASE WHEN last_seen >= ? THEN 1 ELSE 0 END) AS active_30d,
+                   SUM(CASE WHEN first_seen >= ? THEN 1 ELSE 0 END) AS new_7d,
+                   SUM(CASE WHEN last_seen >= ? AND is_tv = 1 THEN 1 ELSE 0 END) AS tv_30d
+            FROM pamir_app_installs
+            """,
+            (ago(1), ago(7), ago(30), ago(7), ago(30)),
+        )
+        installs = {k: v or 0 for k, v in dict(await cur.fetchone()).items()}
+        # Версии у активных за 30 дней: так видно, на чём сидят сейчас, без давно удаливших.
+        cur = await conn.execute(
+            "SELECT version, COUNT(*) AS n FROM pamir_app_installs WHERE last_seen >= ? GROUP BY version", (ago(30),))
+        versions = sorted(({"version": r["version"], "count": r["n"]} for r in await cur.fetchall()),
+                          key=lambda x: _vkey(x["version"]), reverse=True)
+        cur = await conn.execute(
+            """
+            SELECT CAST(android AS INTEGER) AS major, COUNT(*) AS n FROM pamir_app_installs
+            WHERE last_seen >= ? GROUP BY major ORDER BY n DESC LIMIT 6
+            """, (ago(30),))
+        android = [{"android": str(r["major"] or "?"), "count": r["n"]} for r in await cur.fetchall()]
+    finally:
+        await conn.close()
+    downloads = await _downloads()
+    latest = next((d["version"] for d in downloads or [] if not d["prerelease"]), None)
+    return {"installs": installs, "versions": versions, "android": android,
+            "downloads": downloads, "latest": latest}

@@ -374,6 +374,7 @@ class PamirActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             delay(4000)
             runCatching { PamirCrash.sendPending(applicationContext, proxyPort()) }
+            runCatching { PamirApi.pingInstall(applicationContext, proxyPort()) }
         }
         if (loggedIn) {
             refreshAccount()

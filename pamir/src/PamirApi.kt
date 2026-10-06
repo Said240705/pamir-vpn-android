@@ -3,6 +3,7 @@ package com.v2ray.ang.pamir
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.handler.MmkvManager
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,11 +13,15 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
+import java.util.UUID
 
 /** Small client for the cabinet API (https://app.pamirlink.ru/api). */
 object PamirApi {
     const val BASE = "https://app.pamirlink.ru/api"
     private const val K_TOKEN = "pamir_api_token"
+    private const val K_PING_DAY = "pamir_ping_day"
+    /** Install id, the same one subscription requests send as x-hwid (brand.py, HttpUtil). */
+    private const val K_HWID = "pamir_hwid"
 
     class ApiError(val code: Int, message: String) : Exception(message)
 
@@ -31,6 +36,30 @@ object PamirApi {
      * [proxyPort] — local HTTP proxy of the running VPN core (the app itself is excluded from the tunnel,
      * so under "white lists" the server is reachable only through it). Falls back to a direct request.
      */
+    /**
+     * Once a day: install id, app version and device for the admin statistics (installs, versions in use).
+     * No account data; works without sign-in. Blocking, run on Dispatchers.IO.
+     */
+    fun pingInstall(ctx: Context, proxyPort: Int? = null) {
+        val day = System.currentTimeMillis() / 86_400_000L
+        if (MmkvManager.decodeSettingsLong(K_PING_DAY, -1L) == day) return
+        var id = hwid()
+        if (id.isBlank()) {
+            id = UUID.randomUUID().toString().replace("-", "")
+            MmkvManager.encodeSettings(K_HWID, id)
+        }
+        val model = listOfNotNull(Build.MANUFACTURER, Build.MODEL).joinToString(" ").trim()
+        val body = JSONObject()
+            .put("id", id)
+            .put("version", BuildConfig.VERSION_NAME)
+            .put("android", Build.VERSION.RELEASE.orEmpty())
+            .put("model", model.take(80))
+            .put("tv", PamirTv.isTv(ctx))
+        runCatching { call("/app-stats/ping", "POST", body, auth = false, proxyPort = proxyPort) }
+            .onSuccess { MmkvManager.encodeSettings(K_PING_DAY, day) }
+            .onFailure { Log.w("Pamir", "ping: ${it.message}") }
+    }
+
     fun call(path: String, method: String = "GET", body: JSONObject? = null, auth: Boolean = true, proxyPort: Int? = null): JSONObject {
         val ports: List<Int?> = if (proxyPort != null) listOf(proxyPort, null) else listOf(null)
         var last: Exception? = null
@@ -57,7 +86,7 @@ object PamirApi {
         conn.requestMethod = method
         conn.setRequestProperty("Accept", "application/json")
         conn.setRequestProperty("Cache-Control", "no-cache")
-        conn.setRequestProperty("User-Agent", "PamirVPN-Android")
+        conn.setRequestProperty("User-Agent", "PamirVPN-Android/${BuildConfig.VERSION_NAME}")
         if (auth) token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
         if (body != null) {
             conn.doOutput = true
@@ -84,7 +113,7 @@ object PamirApi {
     fun deviceName(): String =
         listOfNotNull(Build.MANUFACTURER, Build.MODEL).joinToString(" ").trim()
 
-    fun hwid(): String = MmkvManager.decodeSettingsString("pamir_hwid", "") ?: ""
+    fun hwid(): String = MmkvManager.decodeSettingsString(K_HWID, "") ?: ""
 
     fun appVersion(ctx: Context): String =
         runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: ""

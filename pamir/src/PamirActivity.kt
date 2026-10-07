@@ -724,8 +724,11 @@ class PamirActivity : AppCompatActivity() {
     /**
      * After login: put one key on this phone. A single active key (or the one already installed here) is used
      * right away; with several keys the user picks theirs, the others can be sent to family from the cabinet.
+     * Then the cabinet opens (subscription, trial, tariffs), unless the login started in the renewal sheet.
      */
     private suspend fun onLoggedIn() {
+        val fromRenew = renewOpen
+        if (!fromRenew && !tv) tab = Tab.CABINET
         refreshAccount()
         val keys = api { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys") ?: return
         val list = (0 until keys.length()).map { keys.getJSONObject(it) }
@@ -733,7 +736,7 @@ class PamirActivity : AppCompatActivity() {
         val active = activeKeys(list)
         if (active.isEmpty()) {
             toast(if (list.isEmpty()) "Вы вошли. Подписки пока нет — выберите тариф" else "Вы вошли. Подписка закончилась — продлите её", true)
-            openRenew()
+            if (fromRenew || tv) openRenew()
             return
         }
         val onDevice = keysOnDevice(active)
@@ -1663,6 +1666,8 @@ class PamirActivity : AppCompatActivity() {
                     .fillMaxSize()
                     .background(c.bg)
             ) {
+                // Without servers the start screen is shown, except the cabinet right after login (no key yet).
+                val startScreen = servers.isEmpty() && !(loggedIn && tab == Tab.CABINET && !tv)
                 val onHome = servers.isEmpty() || tab == Tab.HOME
                 val glow by animateFloatAsState(
                     when {
@@ -1680,7 +1685,7 @@ class PamirActivity : AppCompatActivity() {
                         .graphicsLayer { alpha = glow }
                         .background(Brush.radialGradient(listOf(c.accent.copy(alpha = if (dark) 0.15f else 0.22f), Color.Transparent)))
                 )
-                if (servers.isEmpty()) {
+                if (startScreen) {
                     Box(Modifier.align(Alignment.TopCenter).then(if (tv) Modifier.widthIn(max = 960.dp) else Modifier)) { Onboarding() }
                 } else {
                     Column(
@@ -1719,7 +1724,7 @@ class PamirActivity : AppCompatActivity() {
                     Modifier
                         .align(Alignment.BottomCenter)
                         .navigationBarsPadding()
-                        .padding(bottom = if (servers.isEmpty()) 0.dp else 84.dp)
+                        .padding(bottom = if (startScreen) 0.dp else 84.dp)
                 )
                 if (sheetOpen) ServerSheet(onDismiss = { sheetOpen = false })
                 if (renewOpen) RenewSheet(onDismiss = { renewOpen = false })

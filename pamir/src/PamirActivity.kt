@@ -1666,8 +1666,9 @@ class PamirActivity : AppCompatActivity() {
                     .fillMaxSize()
                     .background(c.bg)
             ) {
-                // Without servers the start screen is shown, except the cabinet right after login (no key yet).
-                val startScreen = servers.isEmpty() && !(loggedIn && tab == Tab.CABINET && !tv)
+                // The start screen (sign-in) only before login; signed in, the tabs stay even without a subscription.
+                // TV has no tabs, so it keeps the start screen until a key is on it.
+                val startScreen = servers.isEmpty() && (!loggedIn || tv)
                 val onHome = servers.isEmpty() || tab == Tab.HOME
                 val glow by animateFloatAsState(
                     when {
@@ -1705,7 +1706,7 @@ class PamirActivity : AppCompatActivity() {
                                 label = "tab"
                             ) { t ->
                                 when (t) {
-                                    Tab.HOME -> Home(onPick = { sheetOpen = true })
+                                    Tab.HOME -> if (servers.isEmpty()) NoKeyHome() else Home(onPick = { sheetOpen = true })
                                     Tab.SETTINGS -> Settings()
                                     Tab.APPS -> AppsScreen()
                                     Tab.CABINET -> CabinetScreen()
@@ -1841,6 +1842,54 @@ class PamirActivity : AppCompatActivity() {
             OnboardingIntro()
             Spacer(Modifier.height(Gap.xl))
             OnboardingActions()
+        }
+    }
+
+    /** VPN tab when signed in but no key is on this phone yet: trial, tariffs, or a key to pick. */
+    @Composable
+    private fun NoKeyHome() {
+        val c = Pamir.colors
+        LaunchedEffect(Unit) {
+            loadTrialOffer()
+            while (true) { delay(1500); reloadServers() }
+        }
+        val active = activeKeys(renewKeys)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Gap.xl),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(40.dp))
+            LogoHero()
+            Spacer(Modifier.height(Gap.l))
+            Text(
+                if (active.isEmpty()) "Подписки пока нет" else "Ключ ещё не на телефоне",
+                style = PamirType.title, color = c.text, textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(Modifier.height(Gap.s))
+            Text(
+                if (active.isEmpty()) "Выберите тариф — серверы появятся здесь сами, и подключение будет в одно касание."
+                else "Подключите ключ — серверы загрузятся сами.",
+                style = PamirType.bodyRegular, color = c.textDim, textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(Gap.xl))
+            when {
+                active.size > 1 -> PrimaryButton("Выбрать ключ для этого телефона", icon = PamirIcons.Key, loading = updating) { openKeyPicker() }
+                active.size == 1 -> PrimaryButton("Подключить ключ", icon = PamirIcons.Key, loading = updating) { lifecycleScope.launch { applyDeviceKey(active[0]) } }
+                else -> {
+                    if (trialOffer != null) {
+                        TrialCard()
+                        Spacer(Modifier.height(Gap.m))
+                    }
+                    PrimaryButton("Выбрать тариф", icon = PamirIcons.Star) { openRenew() }
+                }
+            }
+            Spacer(Modifier.height(Gap.s))
+            TextAction("Вставить ссылку подписки", icon = PamirIcons.Link) { importFromClipboard() }
+            Spacer(Modifier.height(Gap.l))
         }
     }
 

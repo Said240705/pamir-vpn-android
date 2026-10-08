@@ -273,6 +273,8 @@ class PamirActivity : AppCompatActivity() {
     /** Payment page shown inside the app (see PamirPay); null = closed. */
     private var payWebUrl by mutableStateOf<String?>(null)
     private var payBuy = false
+    /** Account keys before a purchase: the new key is the one not in this set. */
+    private var payKeysBefore = emptySet<Int>()
     private var payJob: kotlinx.coroutines.Job? = null
     private var reportOpen by mutableStateOf(false)
     // in-app cabinet
@@ -303,6 +305,7 @@ class PamirActivity : AppCompatActivity() {
     private var deviceKeyId by mutableStateOf(MmkvManager.decodeSettingsString(PREF_DEVICE_KEY, "")?.toIntOrNull())
     private var keyPickerOpen by mutableStateOf(false)
     private var keyPickerMigrate by mutableStateOf(false)
+    private var keyPickerLoading by mutableStateOf(false)
     /** Free trial from /topup/trial-offer: {available, offer_id, name, duration_days}; null when not offered. */
     private var trialOffer by mutableStateOf<JSONObject?>(null)
     private var trialBusy by mutableStateOf(false)
@@ -616,7 +619,7 @@ class PamirActivity : AppCompatActivity() {
         r.exceptionOrNull()?.let { e ->
             Log.w("Pamir", "api error: ${e.message}")
             if (e is PamirApi.ApiError && e.code == 401) {
-                logout(); if (!quiet) toast("Войдите заново через Telegram", true)
+                logout(); if (!quiet) toast("Сессия истекла — войдите в аккаунт заново", true)
             } else if (!quiet) toast(e.message ?: "Нет связи с сервером", true)
         }
         return r.getOrNull()
@@ -710,8 +713,24 @@ class PamirActivity : AppCompatActivity() {
     private fun logout() {
         PamirApi.token = null
         loggedIn = false
+        // Everything below belongs to the account: after the next sign-in (maybe another account)
+        // the cabinet, banners and renewal must not show the previous one.
         balanceMinor = null
         renewKeys = emptyList()
+        renewKeyId = null
+        tariffs = emptyList()
+        cabLoaded = false
+        cabDevices = emptyMap()
+        cabReferral = null
+        cabPayments = emptyList()
+        cabSupport = emptyList()
+        cardInfo = null
+        lastChance = null
+        trialOffer = null
+        promoResult = null
+        deviceKeyId = null
+        MmkvManager.encodeSettings(PREF_DEVICE_KEY, "")
+        PamirOffers.clearPromo(); activePromo = null
     }
 
     private fun refreshAccount() {
@@ -748,7 +767,30 @@ class PamirActivity : AppCompatActivity() {
             }
             else -> openKeyPicker(migrate = onDevice.size > 1)
         }
-        if (renewOpen) openRenew()
+        if (renewOpen && payState != "paid") openRenew()
+    }
+
+    /**
+     * After buying a subscription: the server creates the key a few seconds after the payment, so wait for it
+     * (up to ~30 s) and put it on this phone. The renewal sheet keeps showing "Оплата прошла" meanwhile.
+     */
+    private suspend fun afterPurchase() {
+        repeat(10) {
+            val ka = api(quiet = true) { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys")
+            val list = if (ka == null) emptyList() else (0 until ka.length()).map { ka.getJSONObject(it) }
+            if (list.isNotEmpty()) renewKeys = list
+            val active = activeKeys(list)
+            val fresh = active.firstOrNull { it.optInt("id") !in payKeysBefore }
+            val key = fresh ?: active.firstOrNull().takeIf { keysOnDevice(active).isEmpty() }
+            if (key != null) {
+                applyDeviceKey(key)
+                loadCabinet(silent = true)
+                return
+            }
+            if (active.isNotEmpty()) { updateSubscription(silent = true); return }
+            delay(3000)
+        }
+        toast("Оплата прошла. Ключ появится через минуту — загляните в кабинет", true)
     }
 
     // ---------- keys on this phone ----------
@@ -789,7 +831,9 @@ class PamirActivity : AppCompatActivity() {
         keyPickerMigrate = migrate
         keyPickerOpen = true
         if (renewKeys.isEmpty() && loggedIn) lifecycleScope.launch {
+            keyPickerLoading = true
             api { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys")?.let { ka -> renewKeys = (0 until ka.length()).map { ka.getJSONObject(it) } }
+            keyPickerLoading = false
         }
     }
 
@@ -883,7 +927,7 @@ class PamirActivity : AppCompatActivity() {
             }.onFailure { e ->
                 Log.w("Pamir", "promo: ${e.message}")
                 if (e is PamirApi.ApiError && e.code == 401) {
-                    logout(); toast("Войдите заново через Telegram", true)
+                    logout(); toast("Сессия истекла — войдите в аккаунт заново", true)
                     return@onFailure
                 }
                 promoResult = false to (PROMO_ERRORS[e.message] ?: e.message ?: "Не удалось применить промокод")
@@ -951,6 +995,7 @@ class PamirActivity : AppCompatActivity() {
             payBusy = null
             if (r == null) return@launch
             payBuy = buy
+            payKeysBefore = renewKeys.map { it.optInt("id") }.toSet()
             when {
                 r.optString("payment_url").startsWith("http") -> {
                     payUrl = r.optString("payment_url")
@@ -1014,7 +1059,7 @@ class PamirActivity : AppCompatActivity() {
         lifecycleScope.launch {
             delay(1500)
             refreshAccount()
-            if (payBuy) onLoggedIn() else updateSubscription(silent = true)
+            if (payBuy) afterPurchase() else updateSubscription(silent = true)
         }
     }
 
@@ -1913,9 +1958,24 @@ class PamirActivity : AppCompatActivity() {
         OnboardingStep(2, "Подписка подключится сама", "Серверы загрузятся автоматически")
         OnboardingStep(3, "Нажмите большую кнопку", if (tv) "Подключение одним нажатием на пульте" else "Подключение в одно касание")
         Spacer(Modifier.height(Gap.xl))
-        if (loggedIn && activeKeys(renewKeys).size > 1) {
-            PrimaryButton(if (tv) "Выбрать ключ для телевизора" else "Выбрать ключ для этого телефона", icon = PamirIcons.Key, loading = updating) { openKeyPicker() }
-        } else if (loginBusy) {
+        if (loggedIn) {
+            // Signed in but no key here yet (TV keeps this screen; phones show NoKeyHome in the VPN tab).
+            LaunchedEffect(Unit) { loadTrialOffer() }
+            val active = activeKeys(renewKeys)
+            when {
+                active.size > 1 -> PrimaryButton(if (tv) "Выбрать ключ для телевизора" else "Выбрать ключ для этого телефона", icon = PamirIcons.Key, loading = updating) { openKeyPicker() }
+                active.size == 1 -> PrimaryButton("Подключить ключ", icon = PamirIcons.Key, loading = updating) { lifecycleScope.launch { applyDeviceKey(active[0]) } }
+                else -> {
+                    if (trialOffer != null) { TrialCard(); Spacer(Modifier.height(Gap.m)) }
+                    PrimaryButton("Выбрать тариф", icon = PamirIcons.Star) { openRenew() }
+                }
+            }
+            Spacer(Modifier.height(Gap.m))
+            TextAction("Выйти из аккаунта", icon = PamirIcons.Logout) { logout(); toast("Вы вышли из аккаунта") }
+            Spacer(Modifier.height(Gap.l))
+            return
+        }
+        if (loginBusy) {
             Text("Подтвердите вход в Telegram и вернитесь сюда", style = PamirType.support, color = c.textDim, textAlign = TextAlign.Center)
             Spacer(Modifier.height(Gap.m))
             SecondaryButton("Отменить") { cancelLogin() }
@@ -2243,9 +2303,13 @@ class PamirActivity : AppCompatActivity() {
             PamirIcons.Warning, "Нет доступа к серверам",
             servers.joinToString("\n") { "${it.flag} ${it.name}".trim() }, Tone.DANGER
         ) {
-            PrimaryButton("Открыть бота", icon = PamirIcons.Telegram) { openUrl(BOT_URL) }
+            PrimaryButton("Продлить подписку", icon = PamirIcons.Star) { openRenew() }
             Spacer(Modifier.height(Gap.s))
             SecondaryButton(if (updating) "Обновляем…" else "Проверить снова", icon = PamirIcons.Refresh, loading = updating) { updateSubscription() }
+            if (loggedIn && !tv) TextAction("Устройства и ключи — в кабинете", Modifier.align(Alignment.CenterHorizontally)) { tab = Tab.CABINET }
+            TextAction("Поддержка", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Chat) {
+                openUrl(BOT_URL, "Поддержка", "Отсканируйте код телефоном — ответим в Telegram")
+            }
         }
     }
 
@@ -2881,7 +2945,7 @@ class PamirActivity : AppCompatActivity() {
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextAction("Переименовать", color = c.textDim, icon = PamirIcons.Edit) { renameTarget = k }
-                if (active && id != deviceKeyId && renewKeys.size > 1) {
+                if (active && id != deviceKeyId && subKey(k.optString("subscription_url")) !in mySubUrls()) {
                     TextAction("На этот телефон", color = c.accentText, icon = PamirIcons.Phone) {
                         if (!updating) lifecycleScope.launch { applyDeviceKey(k) }
                     }
@@ -3306,11 +3370,14 @@ class PamirActivity : AppCompatActivity() {
         PamirSheet(
             onDismiss = onDismiss,
             title = "Какой ключ на этом телефоне?",
-            subtitle = if (keyPickerMigrate) "Сейчас здесь подключены сразу несколько ключей, поэтому серверы повторяются. Оставьте свой — остальные можно отправить близким из кабинета."
+            subtitle = if (keys.isEmpty()) null else if (keyPickerMigrate) "Сейчас здесь подключены сразу несколько ключей, поэтому серверы повторяются. Оставьте свой — остальные можно отправить близким из кабинета."
             else "У вас несколько ключей. Выберите свой — остальные можно отправить близким из кабинета."
         ) {
             if (keys.isEmpty()) {
-                SkeletonCard("Загружаем ключи")
+                if (keyPickerLoading) SkeletonCard("Загружаем ключи")
+                else NoteCard(PamirIcons.Key, "Активных ключей нет", "Оформите подписку — ключ сразу подключится к этому телефону.", Tone.ACCENT) {
+                    PrimaryButton("Выбрать тариф") { keyPickerOpen = false; openRenew() }
+                }
                 return@PamirSheet
             }
             keys.forEach { k ->

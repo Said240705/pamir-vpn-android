@@ -25,6 +25,7 @@ PY
 relaunch(){ adb shell am force-stop $P; sleep 1; adb shell monkey -p $P -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; sleep 6; }
 toggle(){ adb shell am broadcast -a $P.action.widget.click -n $P/com.v2ray.ang.receiver.WidgetProvider >/dev/null; }
 vpn_state(){ log "VPN в системе: $(adb shell dumpsys connectivity | grep -c 'VPN CONNECTED\|type: VPN\[' ) (0 = нет)"; }
+expect(){ dumpui; if grep -q "$1" /tmp/ui.xml; then log "OK: $2"; else log "!!! ОШИБКА: $2"; fi; }
 check_ip(){ tap_text '(провер|check|tap)'; sleep 12; shot "$1"; }
 
 log "== установка"
@@ -49,8 +50,15 @@ if [ "$REG_TEST" = "1" ]; then
   tap_text '^Повторите пароль$'; sleep 1; adb shell input text "$PASS"; sleep 1
   adb shell input keyevent KEYCODE_BACK; sleep 1; shot register_filled
   tap_text '^Создать аккаунт$'; sleep 10; shot registered
+  expect 'Подписки пока нет' 'после регистрации открылся кабинет'
+
+  log "== вкладка VPN после входа без подписки (меню не должно пропадать)"
+  tap_text '^VPN$'; sleep 3; shot vpn_tab_nokey
+  expect 'Выбрать тариф' 'вкладка VPN показывает «Подписки пока нет»'
+  expect 'text="Кабинет"' 'нижнее меню на месте'
 
   log "== оплата внутри приложения (без оплаты: только открыть страницу)"
+  tap_text '^Выбрать тариф$'; sleep 6; shot renew_sheet
   adb shell input swipe 160 520 160 220 400; sleep 2
   tap_text '^СБП / Карта$'; sleep 12; shot pay_page
   grep -q 'android.webkit.WebView' /tmp/ui.xml && log "страница оплаты открыта внутри приложения (WebView)" || log "!!! страница оплаты не внутри приложения"

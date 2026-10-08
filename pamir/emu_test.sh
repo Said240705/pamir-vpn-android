@@ -11,7 +11,7 @@ s=open('/tmp/ui.xml',encoding='utf-8',errors='ignore').read() if __import__('os'
 t=[x for x in re.findall(r'(?:text|content-desc)="([^"]+)"',s) if x.strip()]
 print(f'--- [{sys.argv[1]}] экран:', ' | '.join(t[:40]))
 PY
-}
+tail -1 $R; }
 tap_text(){ dumpui; XY=$(python3 - "$1" <<'PY'
 import re,sys
 s=open('/tmp/ui.xml',encoding='utf-8',errors='ignore').read()
@@ -28,7 +28,7 @@ import re,sys
 s=open('/tmp/ui.xml',encoding='utf-8',errors='ignore').read()
 sys.exit(0 if any(re.search(sys.argv[1],' '.join(re.findall(r'(?:text|content-desc)="([^"]*)"',n)),re.I) for n in re.findall(r'<node [^>]*>',s)) else 1)
 PY
-then tap_text "$1"; return; fi; adb shell input swipe 160 480 160 200 400; sleep 1; done; log "не нашёл даже с прокруткой: [$1]"; }
+then tap_text "$1"; return; fi; adb shell input swipe 160 480 160 200 400; sleep 1; done; log "не нашёл даже с прокруткой: [$1]"; texts "нет $1"; }
 relaunch(){ adb shell am force-stop $P; sleep 1; adb shell monkey -p $P -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; sleep 6; }
 toggle(){ adb shell am broadcast -a $P.action.widget.click -n $P/com.v2ray.ang.receiver.WidgetProvider >/dev/null; }
 vpn_state(){ log "VPN в системе: $(adb shell dumpsys connectivity | grep -c 'VPN CONNECTED\|type: VPN\[' ) (0 = нет)"; }

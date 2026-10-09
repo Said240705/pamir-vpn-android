@@ -171,6 +171,14 @@ edit(os.path.join(PKG, 'util', 'HttpUtil.kt'), [
 edit(os.path.join(PKG, 'handler', 'AngConfigManager.kt'), [
     ('subItem.remarks = uri.fragment ?: "import sub"', 'subItem.remarks = uri.fragment ?: "Pamir VPN"'),
 ])
+# «Расширенные настройки» open the stock v2rayNG screen on top of Pamir in the same task: Back must return to Pamir
+# (upstream sends the whole task to the background there, so the user could not get back).
+edit(os.path.join(PKG, 'ui', 'main', 'MainActivity.kt'), [
+    ('BackHandler { moveTaskToBack(false) }', 'BackHandler { finish() }'),
+    ("""        if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+            moveTaskToBack(false)""", """        if (keyCode == KeyEvent.KEYCODE_BUTTON_B) {
+            finish()"""),
+])
 edit(os.path.join(PKG, 'ui', 'main', 'MainRepository.kt'), [
     ('        result += MmkvManager.decodeSubscriptions()\n        return result',
      '        val subs = MmkvManager.decodeSubscriptions()\n'

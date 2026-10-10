@@ -1,90 +1,89 @@
-# v2rayNG
+<div align="center">
 
-A V2Ray client for Android, support [Xray core](https://github.com/XTLS/Xray-core) and [v2fly core](https://github.com/v2fly/v2ray-core)
+<img src="pamir/docs/logo.png" width="96" alt="Pamir VPN">
 
-[![API](https://img.shields.io/badge/API-24%2B-yellow.svg?style=flat)](https://developer.android.com/about/versions/lollipop)
-[![Kotlin Version](https://img.shields.io/badge/Kotlin-2.4.0-blue.svg)](https://kotlinlang.org)
-[![GitHub commit activity](https://img.shields.io/github/commit-activity/m/2dust/v2rayNG)](https://github.com/2dust/v2rayNG/commits/master)
-[![CodeFactor](https://www.codefactor.io/repository/github/2dust/v2rayng/badge)](https://www.codefactor.io/repository/github/2dust/v2rayng)
-[![GitHub Releases](https://img.shields.io/github/downloads/2dust/v2rayNG/latest/total?logo=github)](https://github.com/2dust/v2rayNG/releases)
-[![Chat on Telegram](https://img.shields.io/badge/Chat%20on-Telegram-brightgreen.svg)](https://t.me/v2rayn)
+# Pamir VPN
 
----
+**Защищённый интернет в одно касание — приложение для Android и Android TV**
 
-## Download / 下载
+[![Последняя версия](https://img.shields.io/github/v/release/Said240705/pamir-vpn-android?label=версия&color=2BEFC0&labelColor=0B1622)](https://github.com/Said240705/pamir-vpn-android/releases/latest)
+[![Скачивания](https://img.shields.io/github/downloads/Said240705/pamir-vpn-android/total?label=скачиваний&color=2BEFC0&labelColor=0B1622)](https://github.com/Said240705/pamir-vpn-android/releases)
+![Android](https://img.shields.io/badge/Android-7.0+-2BEFC0?labelColor=0B1622&logo=android&logoColor=white)
 
-Download the latest release here:
+### [⬇️ Скачать приложение](https://github.com/Said240705/pamir-vpn-android/releases/latest/download/pamir-vpn-universal.apk)
 
-在这里下载最新版本：
+<sub>Файл <code>pamir-vpn-universal.apk</code> подходит для всех телефонов и телевизоров на Android ·
+<a href="https://app.pamirlink.ru">Личный кабинет</a> ·
+<a href="https://t.me/pamirlink_bot">Telegram-бот</a></sub>
 
-[https://github.com/2dust/v2rayNG/releases](https://github.com/2dust/v2rayNG/releases)
+<br>
 
-> [!TIP]
-> v2rayNG is the mobile version. For the desktop version, please visit the v2rayN \
-> v2rayNG 是手机版，电脑版请访问 v2rayN
->
-> https://github.com/2dust/v2rayN
+<img src="pamir/docs/start.jpg" width="200" alt="Первый запуск">&nbsp;
+<img src="pamir/docs/home.jpg" width="200" alt="Главный экран">&nbsp;
+<img src="pamir/docs/servers.jpg" width="200" alt="Выбор сервера">&nbsp;
+<img src="pamir/docs/settings.jpg" width="200" alt="Настройки">
 
----
-
-### Geoip and Geosite
-
-- geoip.dat and geosite.dat files are in `Android/data/com.v2ray.ang/files/assets` (path may differ on some Android device)
-- download feature will get enhanced version in this [repo](https://github.com/Loyalsoldier/v2ray-rules-dat) (note: it needs a working proxy)
-- latest official [domain list](https://github.com/Loyalsoldier/v2ray-rules-dat) and [ip list](https://github.com/Loyalsoldier/geoip) can be imported manually
-- possible to use a third-party dat file in the same folder, like [h2y](https://guide.v2fly.org/routing/sitedata.html#%E5%A4%96%E7%BD%AE%E7%9A%84%E5%9F%9F%E5%90%8D%E6%96%87%E4%BB%B6)
-
-More in our [wiki](https://github.com/2dust/v2rayNG/wiki)
-
-### Geoip 与 Geosite
-
-- geoip.dat 和 geosite.dat 文件位于 `Android/data/com.v2ray.ang/files/assets`（部分设备路径可能不同）
-- 下载功能将获取该 [仓库](https://github.com/Loyalsoldier/v2ray-rules-dat) 中的增强版本（注意：此功能需要一个可用的代理）
-- 最新官方 [域名列表](https://github.com/Loyalsoldier/v2ray-rules-dat) 和 [IP 列表](https://github.com/Loyalsoldier/geoip) 可手动导入
-- 也可在同一文件夹中使用第三方 dat 文件，例如 [h2y](https://guide.v2fly.org/routing/sitedata.html#%E5%A4%96%E7%BD%AE%E7%9A%84%E5%9F%9F%E5%90%8D%E6%96%87%E4%BB%B6)
-
-更多内容请见我们的 [wiki](https://github.com/2dust/v2rayNG/wiki)
+</div>
 
 ---
 
-## Development guide / 开发指南
+## ✨ Возможности
 
-### Note
+| | |
+|---|---|
+| ⚡ **Одна кнопка** | Подключение в одно касание, без настроек и ручного ввода конфигураций |
+| 🔑 **Вход через Telegram или почту** | Подписка подключается сама — ссылки копировать не нужно |
+| 🌍 **Серверы в Европе** | Приложение показывает отклик каждого сервера и само выбирает самый быстрый |
+| 📶 **Работает на мобильном интернете** | Отдельные серверы для сетей с ограничениями и «умный режим», который включает их сам |
+| 🏦 **Сайты РФ напрямую** | Госуслуги и банки открываются без шифрования, всё остальное — под защитой |
+| 📱 **Приложения без VPN** | Можно выбрать программы, которые ходят в интернет напрямую |
+| 💳 **Оплата внутри приложения** | Продление через СБП, карту или с баланса, промокоды, бесплатный пробный период |
+| 🔁 **Автосмена сервера** | Если сервер перестал отвечать, приложение переключится на другой |
+| 📺 **Android TV** | Отдельный интерфейс для пульта, вход по QR-коду, автозапуск вместе с телевизором |
+| 🔔 **Плитка в шторке и виджет** | Включить и выключить защиту можно, не открывая приложение |
 
-- Android project under the V2rayNG folder can be compiled directly in Android Studio, or using the Gradle wrapper. But the v2ray core inside the aar is (probably) outdated.
-- The aar can be compiled from the Golang project [AndroidLibV2rayLite](https://github.com/2dust/AndroidLibV2rayLite) or [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite). For a quick start, read the guides for [Go Mobile](https://github.com/golang/go/wiki/Mobile) and [Makefiles for Go Developers](https://tutorialedge.net/golang/makefiles-for-go-developers/).
-- v2rayNG can run on Android Emulators. For WSA, VPN permission needs to be granted via `appops set [package name] ACTIVATE_VPN allow`.
+## 🚀 Как начать
 
-### 提示
+1. **Скачайте** [`pamir-vpn-universal.apk`](https://github.com/Said240705/pamir-vpn-android/releases/latest/download/pamir-vpn-universal.apk) и установите его.
+2. **Войдите** через Telegram или по почте — подписка и серверы загрузятся сами.
+3. **Нажмите большую кнопку** — готово, интернет под защитой.
 
-- V2rayNG 文件夹下的 Android 项目可直接在 Android Studio 中编译，或使用 Gradle wrapper 编译。但 aar 内置的 v2ray core（可能）已过时。
-- aar 可由 Golang 项目 [AndroidLibV2rayLite](https://github.com/2dust/AndroidLibV2rayLite) 或 [AndroidLibXrayLite](https://github.com/2dust/AndroidLibXrayLite) 编译而成。快速入门可参考 [Go Mobile](https://github.com/golang/go/wiki/Mobile) 指南和 [Makefiles for Go Developers](https://tutorialedge.net/golang/makefiles-for-go-developers/)。
-- v2rayNG 可在 Android 模拟器上运行。对于 WSA，需要通过 `appops set [package name] ACTIVATE_VPN allow` 授予 VPN 权限。
+Нет подписки? В приложении можно оформить бесплатный пробный период или выбрать тариф.
+
+## 🛡 Почему Android предупреждает при установке
+
+Pamir VPN устанавливается из файла, а не из Google Play, поэтому Android и Play Защита могут показать предупреждение «Приложение из неизвестного источника». Это стандартное сообщение для любых приложений не из магазина.
+
+Чтобы установить: нажмите **«Всё равно установить»** (или **«Подробнее» → «Всё равно установить»**). Обновления потом приходят прямо в приложении.
+
+Исходный код приложения открыт — он целиком находится в этом репозитории.
+
+## 💬 Поддержка
+
+- Telegram-бот: [@pamirlink_bot](https://t.me/pamirlink_bot)
+- Личный кабинет: [app.pamirlink.ru](https://app.pamirlink.ru)
+- В приложении: **Настройки → Поддержка** или **Сообщить о проблеме**
 
 ---
 
+<details>
+<summary><b>🛠 Для разработчиков</b></summary>
 
-## GPG Verification / GPG 签名校验
+<br>
 
-Release files are signed with GPG to verify authenticity and integrity, helping prevent mirror, ISP, or CDN hijacking.
+Pamir VPN основан на открытом клиенте [v2rayNG](https://github.com/2dust/v2rayNG) и ядре [Xray](https://github.com/XTLS/Xray-core).
 
-发布文件已使用 GPG 签名，可用于校验文件真实性与完整性，预防镜像站、运营商或 CDN 劫持。
+- `V2rayNG/` — Android-проект v2rayNG (Kotlin, Gradle).
+- `pamir/src/` — интерфейс Pamir на Jetpack Compose: главный экран, кабинет, оплата, настройки, ТВ.
+- `pamir/brand.py` — превращает v2rayNG в Pamir VPN: название, иконки, пакет `ru.pamirlink.vpn`, подключение экранов Pamir.
+- `pamir/server/` — патчи для сервера кабинета и бота.
+- `.github/workflows/pamir-build.yml` — сборка и публикация релиза (кнопка **Run workflow**: версия, тестовая сборка, важное обновление).
+- `.github/workflows/pamir-emulator.yml` — проверка готового APK на эмуляторе Android.
 
-### Fingerprint / 公钥指纹
+Сборка вручную повторяет шаги из `pamir-build.yml`: подготовить ядро (`AndroidLibXrayLite`, `hev-socks5-tunnel`), запустить `python3 pamir/brand.py`, затем `./gradlew assemblePlaystoreRelease` в папке `V2rayNG`.
 
-```text
-7694 5E9F 3E9A 168F 8070 F195 805D 661C
-134D FAF6 8903 C199 463C 31E5 AE90 3AE0
-```
+</details>
 
----
+## 📄 Лицензия
 
-## Community / 社区
-
-Telegram Group / Telegram 群组：
-
-[https://t.me/v2rayN](https://t.me/v2rayN)
-
-Telegram Channel / Telegram 频道：
-
-[https://t.me/github_2dust](https://t.me/github_2dust)
+Распространяется по лицензии [GNU GPL v3](LICENSE), как и исходный проект [v2rayNG](https://github.com/2dust/v2rayNG) (© 2dust и участники проекта).

@@ -304,6 +304,9 @@ class PamirActivity : AppCompatActivity() {
     /** The e-mail sheet opens on registration instead of sign-in. */
     private var emailRegister by mutableStateOf(false)
     private var emailBusy by mutableStateOf(false)
+    /** Address that waits for the 6-digit code from the e-mail (new accounts sign in only after it). */
+    private var emailCodeFor by mutableStateOf<String?>(null)
+    private var emailCodeSentAt by mutableStateOf(0L)
     // which key of the account this phone uses
     private var deviceKeyId by mutableStateOf(MmkvManager.decodeSettingsString(PREF_DEVICE_KEY, "")?.toIntOrNull())
     private var keyPickerOpen by mutableStateOf(false)
@@ -667,17 +670,58 @@ class PamirActivity : AppCompatActivity() {
         if (!email.contains("@") || password.isBlank()) { toast("Введите почту и пароль"); return }
         emailBusy = true
         lifecycleScope.launch {
-            val r = api { p ->
-                PamirApi.call("/auth/email/login", "POST", JSONObject().put("email", email.trim()).put("password", password), auth = false, proxyPort = p)
+            val port = proxyPort()
+            val r = withContext(Dispatchers.IO) {
+                runCatching { PamirApi.call("/auth/email/login", "POST", JSONObject().put("email", email.trim()).put("password", password), auth = false, proxyPort = port) }
             }
             emailBusy = false
-            val t = r?.optString("access_token").orEmpty()
-            if (t.isBlank()) return@launch
-            PamirApi.token = t
-            loggedIn = true
-            emailLoginOpen = false
-            Log.w("Pamir", "email login ok")
-            onLoggedIn()
+            r.exceptionOrNull()?.let { e ->
+                Log.w("Pamir", "email login: ${e.message}")
+                if (e is PamirApi.ApiError && e.code == 403 && e.message == "email_not_verified") {
+                    emailCodeFor = email.trim()
+                    emailCodeSentAt = System.currentTimeMillis()
+                    toast("Подтвердите почту — мы отправили код на ${email.trim()}", true)
+                } else toast(e.message ?: "Нет связи с сервером", true)
+                return@launch
+            }
+            finishEmailLogin(r.getOrNull()?.optString("access_token").orEmpty(), created = false)
+        }
+    }
+
+    private suspend fun finishEmailLogin(t: String, created: Boolean) {
+        if (t.isBlank()) return
+        PamirApi.token = t
+        loggedIn = true
+        emailLoginOpen = false
+        emailCodeFor = null
+        Log.w("Pamir", "email sign-in ok created=$created")
+        if (created) toast("Аккаунт создан")
+        onLoggedIn()
+    }
+
+    /** The 6-digit code from the e-mail: confirms the address and signs in. */
+    private fun verifyEmailCode(code: String) {
+        val email = emailCodeFor ?: return
+        if (emailBusy) return
+        if (code.filter { it.isDigit() }.length != 6) { toast("Введите 6 цифр из письма"); return }
+        emailBusy = true
+        lifecycleScope.launch {
+            val r = api { p ->
+                PamirApi.call("/auth/email/verify-code", "POST", JSONObject().put("email", email).put("code", code.filter { it.isDigit() }), auth = false, proxyPort = p)
+            }
+            emailBusy = false
+            finishEmailLogin(r?.optString("access_token").orEmpty(), created = true)
+        }
+    }
+
+    private fun resendEmailCode() {
+        val email = emailCodeFor ?: return
+        lifecycleScope.launch {
+            val r = api { p -> PamirApi.call("/auth/email/send-code", "POST", JSONObject().put("email", email), auth = false, proxyPort = p) }
+            if (r != null) {
+                emailCodeSentAt = System.currentTimeMillis()
+                toast("Отправили новый код на $email")
+            }
         }
     }
 
@@ -696,14 +740,12 @@ class PamirActivity : AppCompatActivity() {
                 PamirApi.call("/auth/email/register", "POST", JSONObject().put("email", e).put("password", password), auth = false, proxyPort = p)
             }
             emailBusy = false
-            val t = r?.optString("access_token").orEmpty()
-            if (t.isBlank()) return@launch
-            PamirApi.token = t
-            loggedIn = true
-            emailLoginOpen = false
-            Log.w("Pamir", "email register ok")
-            toast("Аккаунт создан")
-            onLoggedIn()
+            if (r?.optString("status") == "code_sent") {
+                emailCodeFor = e
+                emailCodeSentAt = System.currentTimeMillis()
+                return@launch
+            }
+            finishEmailLogin(r?.optString("access_token").orEmpty(), created = true)
         }
     }
 
@@ -3491,6 +3533,34 @@ class PamirActivity : AppCompatActivity() {
     // ---------- e-mail login ----------
 
     @Composable
+    private fun EmailCodeStep(target: String, onDismiss: () -> Unit) {
+        val c = Pamir.colors
+        var code by remember { mutableStateOf("") }
+        var now by remember { mutableStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(emailCodeSentAt) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+        val wait = ((emailCodeSentAt + 60_000L - now) / 1000).coerceAtLeast(0)
+        PamirSheet(onDismiss = onDismiss, title = "Подтвердите почту", subtitle = "Мы отправили 6-значный код на $target. Письмо может попасть в «Спам»") {
+            OutlinedTextField(
+                value = code, onValueChange = { v -> code = v.filter { it.isDigit() }.take(6); if (code.length == 6) verifyEmailCode(code) },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Код из письма", style = PamirType.bodyRegular) },
+                leadingIcon = { Icon(PamirIcons.Mail, contentDescription = null, modifier = Modifier.size(20.dp), tint = c.textDim) },
+                textStyle = PamirType.number.copy(color = c.text, letterSpacing = 6.sp),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { verifyEmailCode(code) }),
+                shape = Radius.m, colors = pamirFieldColors()
+            )
+            Spacer(Modifier.height(Gap.l))
+            PrimaryButton("Подтвердить", loading = emailBusy) { verifyEmailCode(code) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (wait > 0) Text("Новый код — через $wait с", style = PamirType.support, color = c.textDim, modifier = Modifier.padding(vertical = Gap.s))
+                else TextAction("Отправить код ещё раз", color = c.accentText) { resendEmailCode() }
+                TextAction("Другая почта") { emailCodeFor = null }
+            }
+        }
+    }
+
+    @Composable
     private fun EmailLoginSheet(onDismiss: () -> Unit) {
         val c = Pamir.colors
         var email by remember { mutableStateOf("") }
@@ -3498,6 +3568,10 @@ class PamirActivity : AppCompatActivity() {
         var pass2 by remember { mutableStateOf("") }
         val reg = emailRegister
         val submit = { if (reg) registerEmail(email, pass, pass2) else loginEmail(email, pass) }
+        emailCodeFor?.let { target ->
+            EmailCodeStep(target, onDismiss)
+            return
+        }
         PamirSheet(
             onDismiss = onDismiss,
             title = if (reg) "Регистрация" else "Вход по почте",

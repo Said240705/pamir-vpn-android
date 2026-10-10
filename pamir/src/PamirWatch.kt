@@ -129,8 +129,9 @@ object PamirWatch {
     fun setMinVersion(v: String?) = MmkvManager.encodeSettings(K_MIN_VERSION, v.orEmpty())
 
     /**
-     * The release marked as required is newer than this build: the app shows only the update screen and
-     * does not connect (the tile, widget and boot start are refused too). Remembered, so it holds offline.
+     * The release marked as required is newer than this build: the app shows only the update screen, which
+     * cannot be closed. The VPN itself is not stopped (tile, widget and boot start keep working). Remembered,
+     * so it holds offline.
      */
     fun updateRequired(): Boolean {
         val min = MmkvManager.decodeSettingsString(K_MIN_VERSION, "").orEmpty()
@@ -145,12 +146,6 @@ object PamirWatch {
     // ---------- core lifecycle hooks (daemon process) ----------
 
     fun onStarted(ctx: Context) {
-        // Started past the update screen (boot autostart, always-on VPN): an outdated build must not connect.
-        if (runCatching { updateRequired() }.getOrDefault(false)) {
-            Log.w(TAG, "required update pending: stopping")
-            LauncherManager.stopService(ctx)
-            return
-        }
         runCatching {
             val uid = Process.myUid()
             MmkvManager.encodeSettings(K_CONN_AT, System.currentTimeMillis())

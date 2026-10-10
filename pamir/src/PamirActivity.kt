@@ -3335,7 +3335,7 @@ class PamirActivity : AppCompatActivity() {
                     "У вас ${appVersion()}. Обновление скачается и установится поверх — ключи и настройки сохранятся.", Tone.ACCENT
                 ) {
                     PrimaryButton(
-                        if (updProgress >= 0) "Скачиваем… $updProgress%" else "Обновить", icon = PamirIcons.Download, loading = updProgress >= 0
+                        if (updProgress >= 0) "Загрузка $updProgress%" else "Обновить", icon = PamirIcons.Download
                     ) { installUpdate() }
                 }
                 "latest" -> NoteCard(PamirIcons.Check, "У вас последняя версия", "Pamir VPN ${appVersion()} — обновлений нет.", Tone.ACCENT) {

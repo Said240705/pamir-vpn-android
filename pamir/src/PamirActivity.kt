@@ -1552,11 +1552,8 @@ class PamirActivity : AppCompatActivity() {
                 // The highest minimum any source reports; the site mirror can lag behind GitHub by a few minutes.
                 val min = found.map { it.minVersion }.filter { it.isNotBlank() }.fold("") { acc, v -> if (acc.isEmpty() || isNewer(v, acc)) v else acc }
                 PamirWatch.setMinVersion(min)
+                // The update screen covers the app until the user updates; a running VPN keeps working meanwhile.
                 updateRequired = PamirWatch.updateRequired()
-                if (updateRequired && running) {
-                    Log.w("Pamir", "required update $min: stopping the VPN")
-                    LauncherManager.stopService(this@PamirActivity)
-                }
             }
             val best = found.map { it.version }.fold(appVersion()) { acc, v -> if (isNewer(v, acc)) v else acc }
             if (!isNewer(best, appVersion())) {
@@ -1863,8 +1860,8 @@ class PamirActivity : AppCompatActivity() {
                 Text("Важное обновление", style = PamirType.title, color = c.text, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(Gap.s))
                 Text(
-                    "Эта версия приложения устарела и больше не подключается. " +
-                        "Установите новую — это займёт минуту, подписка и настройки сохранятся.",
+                    "Вышла новая версия Pamir VPN — без неё приложение дальше не откроется. " +
+                        "Обновление займёт минуту, подписка и настройки сохранятся.",
                     style = PamirType.body, color = c.textDim, textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(Gap.xl))

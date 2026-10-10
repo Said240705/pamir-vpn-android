@@ -66,8 +66,6 @@ class WidgetProvider : AppWidgetProvider() {
             AppConfig.BROADCAST_ACTION_WIDGET_CLICK -> {
                 if (CoreServiceManager.isRunning()) {
                     LauncherManager.stopService(context)
-                } else if (com.v2ray.ang.pamir.PamirWatch.updateRequired()) {
-                    android.widget.Toast.makeText(context, "Нужно обновить Pamir VPN — откройте приложение", android.widget.Toast.LENGTH_LONG).show()
                 } else {
                     LauncherManager.startServiceFromToggle(context)
                 }

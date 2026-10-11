@@ -93,6 +93,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -2197,33 +2199,44 @@ class PamirActivity : AppCompatActivity() {
             }
             val powerFocus = remember { FocusRequester() }
             LaunchedEffect(Unit) { if (tv) runCatching { powerFocus.requestFocus() } }
+            // Big button as in the Mognu mockup: ~62% of the phone width; TV keeps the compact one (short screen).
+            val screenW = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
+            val btn = if (tv) 172.dp else (screenW * 0.62f).coerceIn(200.dp, 260.dp)
+            Spacer(Modifier.height(Gap.s))
+            StatusChip(power)
             PowerButton(
                 state = power,
                 label = if (running) "Отключить VPN" else "Подключить VPN",
                 stateLabel = stateText,
                 onClick = { toggle() },
                 modifier = Modifier.focusRequester(powerFocus),
+                size = btn,
                 word = if (power == PowerState.ON) "МОГНУЛ" else "МОГНУТЬ"
             )
             AnimatedContent(targetState = stateText, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "state") { s ->
                 Text(
-                    s, style = PamirType.headline, color = if (power == PowerState.ON) c.accentText else c.text,
+                    s, style = PamirType.title, color = c.text, textAlign = TextAlign.Center,
                     modifier = Modifier
                         .clip(Radius.s)
                         .clickable(role = Role.Button) { toggle() }
                         .padding(horizontal = Gap.m, vertical = Gap.xs)
                 )
             }
-            if (running) {
-                Timer()
-            } else {
-                Text(
-                    if (connecting) "Устанавливаем защищённое соединение" else "Подключим к самому быстрому серверу",
-                    style = PamirType.support, color = c.textDim
-                )
+            val sub = when {
+                running -> "Интернет под защитой · " + (current?.name ?: "")
+                connecting -> "Устанавливаем защищённое соединение"
+                else -> "Подключим к самому быстрому серверу"
             }
-            Spacer(Modifier.height(Gap.xl))
-            if (current != null) ServerCard(current, onPick)
+            Text(
+                if (running && current != null) "$sub  ›" else sub, style = PamirType.support, color = c.textDim, textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(Radius.s)
+                    .clickable(enabled = running && current != null, role = Role.Button) { onPick() }
+                    .padding(horizontal = Gap.m, vertical = Gap.xs)
+            )
+            Spacer(Modifier.height(Gap.l))
+            // Connected: speed tiles only (server is in the line above, tap it to change); off: the server card.
+            if (current != null && !running) ServerCard(current, onPick)
             AnimatedVisibility(visible = running, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                 SpeedCard()
             }
@@ -2438,17 +2451,32 @@ class PamirActivity : AppCompatActivity() {
     }
 
     @Composable
-    private fun Timer() {
+    private fun StatusChip(power: PowerState) {
+        val c = Pamir.colors
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         LaunchedEffect(running) {
             while (running) { now = System.currentTimeMillis(); delay(1000) }
         }
         val sec = if (connectedAt > 0) ((now - connectedAt) / 1000).coerceAtLeast(0) else 0
         val t = String.format("%02d:%02d:%02d", sec / 3600, (sec % 3600) / 60, sec % 60)
-        Text(
-            "В защите $t", style = PamirType.support.copy(fontFeatureSettings = "tnum"), color = Pamir.colors.textDim,
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.clearAndSetSemantics { contentDescription = "Подключено $t" }
-        )
+        val (text, fg, bg) = when (power) {
+            PowerState.ON -> Triple("Защищён · $t", c.accentText, c.accentSoft)
+            PowerState.CONNECTING -> Triple("Подключаем…", c.text, c.surfaceHigh)
+            PowerState.OFF -> Triple("Не защищён", c.textDim, c.surfaceHigh)
+        }
+        Row(
+            Modifier
+                .clip(CircleShape)
+                .background(bg)
+                .padding(horizontal = 14.dp, vertical = 7.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .clearAndSetSemantics { contentDescription = if (power == PowerState.ON) "Подключено $t" else text },
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(fg))
+            Spacer(Modifier.width(Gap.s))
+            Text(text, style = PamirType.label.copy(fontFeatureSettings = "tnum"), color = fg, maxLines = 1)
+        }
     }
 
     @Composable
@@ -2505,67 +2533,27 @@ class PamirActivity : AppCompatActivity() {
 
     @Composable
     private fun SpeedCard() {
-        val c = Pamir.colors
         LaunchedEffect(running) { if (running) speedLoop() }
-        PamirCard(Modifier.padding(top = Gap.m), contentPadding = 0.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = Gap.l, end = Gap.l, top = Gap.l),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                SpeedValue(PamirIcons.ArrowDown, "Загрузка", rxSpeed, c.accentText, Modifier.weight(1f))
-                SpeedValue(PamirIcons.ArrowUp, "Отдача", txSpeed, c.info, Modifier.weight(1f))
-            }
-            Sparkline(
-                speedHist, if (c.isDark) c.accent else c.accentDeep,
-                Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-                    .padding(top = Gap.s)
-            )
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(c.surfaceHigh.copy(alpha = if (c.isDark) 0.55f else 0.7f))
-                    .padding(horizontal = Gap.l, vertical = Gap.m)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(PamirIcons.Globe, contentDescription = null, modifier = Modifier.size(16.dp), tint = c.textDim)
-                    Spacer(Modifier.width(Gap.s))
-                    Text(
-                        if (ipInfo.isNotEmpty()) "IP $ipInfo" else "Определяем IP…",
-                        style = PamirType.support, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "За сессию ↓ ${fmtBytes(rxTotal)}  ↑ ${fmtBytes(txTotal)}",
-                        style = PamirType.caption, color = c.textDim, maxLines = 1, modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        if (MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) "РФ напрямую" else "Всё через VPN",
-                        style = PamirType.caption.copy(fontWeight = FontWeight.SemiBold), color = c.textDim, maxLines = 1
-                    )
-                }
-            }
+        Row(Modifier.fillMaxWidth().padding(top = Gap.xs), horizontalArrangement = Arrangement.spacedBy(Gap.m)) {
+            SpeedTile("↓", "Мбит/с загрузка", rxSpeed, Modifier.weight(1f))
+            SpeedTile("↑", "Мбит/с отдача", txSpeed, Modifier.weight(1f))
         }
     }
 
     @Composable
-    private fun SpeedValue(icon: ImageVector, label: String, bps: Long, color: Color, modifier: Modifier) {
+    private fun SpeedTile(arrow: String, label: String, bytesPerSec: Long, modifier: Modifier) {
         val c = Pamir.colors
-        Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(icon, tint = color, background = color.copy(alpha = 0.14f), size = 36.dp, iconSize = 18.dp, shape = CircleShape)
-            Spacer(Modifier.width(Gap.s + 2.dp))
-            Column {
-                Text(
-                    fmtBytes(bps) + "/с", style = PamirType.number.copy(fontSize = 19.sp, fontFeatureSettings = "tnum"),
-                    color = c.text, maxLines = 1
-                )
-                Text(label, style = PamirType.caption, color = c.textDim)
-            }
+        val mbit = bytesPerSec * 8 / 1_000_000.0
+        val v = if (mbit >= 100) "%.0f".format(mbit) else "%.1f".format(java.util.Locale.forLanguageTag("ru"), mbit)
+        Column(
+            modifier
+                .clip(Radius.l)
+                .background(c.surface)
+                .border(1.dp, c.line, Radius.l)
+                .padding(horizontal = Gap.l, vertical = Gap.m)
+        ) {
+            Text("$arrow $v", style = PamirType.title.copy(fontFeatureSettings = "tnum"), color = c.text, maxLines = 1)
+            Text(label, style = PamirType.caption, color = c.textDim, maxLines = 1)
         }
     }
 

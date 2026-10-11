@@ -68,6 +68,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -511,12 +512,27 @@ fun PowerButton(
         rememberInfiniteTransition(label = "breathe")
             .animateFloat(0.55f, 1f, infiniteRepeatable(tween(2200, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "glow").value
     } else 1f
-    Box(modifier.size(size * 1.45f), contentAlignment = Alignment.Center) {
+    Box(modifier.size(if (word != null) size + 84.dp else size * 1.45f), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val glow = 0.32f * on * breathe + 0.16f * busy
             if (glow > 0.01f) {
                 val r = this.size.minDimension / 2
                 drawCircle(Brush.radialGradient(listOf(c.accent.copy(alpha = glow), Color.Transparent), center, r), r)
+            }
+            if (word != null) {
+                // Mognu rings: a dashed one while off, two solid accent rings while protected
+                val br = size.toPx() / 2
+                val w = 1.5.dp.toPx()
+                if (on < 0.99f) {
+                    drawCircle(
+                        c.track.copy(alpha = 1f - on), br + 16.dp.toPx(),
+                        style = Stroke(w, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 5.dp.toPx())))
+                    )
+                }
+                if (on > 0.01f) {
+                    drawCircle(c.accent.copy(alpha = 0.55f * on * breathe), br + 16.dp.toPx(), style = Stroke(w))
+                    drawCircle(c.accent.copy(alpha = 0.22f * on), br + 36.dp.toPx(), style = Stroke(w))
+                }
             }
         }
         Box(

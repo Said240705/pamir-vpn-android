@@ -1,14 +1,15 @@
 name: Mognu test APK
 
 # Private test build of the Mognu redesign: package ru.pamirlink.vpn.test («Mognu тест»), installs next to
-# the real app. Not published as a release, so users never get it; the APK is a build artifact only.
+# the real app. The APK goes to a draft release «Mognu тест»: drafts are visible only to repo members and
+# are never releases/latest, so users and the in-app updater never see it. A stable release run tidies drafts away.
 on:
   push:
     branches: [mognu]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -93,3 +94,15 @@ jobs:
         name: mognu-test-apk
         path: V2rayNG/app/build/outputs/apk/*/release/*_universal.apk
         retention-days: 14
+
+    - name: Draft release with the test APK
+      env:
+        GH_TOKEN: ${{ github.token }}
+        R: ${{ github.repository }}
+      run: |
+        for id in $(gh api "repos/$R/releases" --paginate --jq '.[] | select(.draft and .name == "Mognu тест") | .id'); do
+          gh api -X DELETE "repos/$R/releases/$id"
+        done
+        cp V2rayNG/app/build/outputs/apk/*/release/*_universal.apk mognu-test.apk
+        gh release create "mognu-test-${{ github.run_number }}" mognu-test.apk -R "$R" --draft --target "${{ github.sha }}" \
+          --title "Mognu тест" --notes "Тестовая сборка редизайна Mognu (ветка mognu, ${GITHUB_SHA::7}). Ставится рядом с основным приложением."

@@ -38,16 +38,14 @@ import androidx.compose.ui.window.DialogProperties
 
 /**
  * Payment inside the app. The provider's page (YooKassa etc.) opens in a WebView; when it sends the user
- * back to [RETURN_PAGE] the screen closes and the app checks the payment itself. Without this the browser
+ * back to our return page (pay-return.html on any mirror) the screen closes and the app checks the payment itself. Without this the browser
  * landed on the site's return page, which knows only Telegram and the web cabinet and sent the user to the bot.
  * SBP and bank links leave the WebView: the system opens the bank app, as a browser would.
  */
 object PamirPay {
-    const val RETURN_PAGE = "https://app.pamirlink.ru/pay-return.html"
-
     /** The provider's return: our return page, or a hop to the Telegram bot that page would make. */
     fun isReturn(url: String): Boolean {
-        if (url.startsWith(RETURN_PAGE)) return true
+        if (PamirHosts.isOurs(url) && Uri.parse(url).path == "/pay-return.html") return true
         val host = Uri.parse(url).host?.lowercase().orEmpty()
         return host == "t.me" || host == "telegram.me"
     }

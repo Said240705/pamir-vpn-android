@@ -146,7 +146,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 
-private const val CABINET_URL = "https://app.pamirlink.ru/?from=android"
 private const val BOT_URL = "https://t.me/pamirlink_bot"
 private const val PREF_RU_DIRECT = "pamir_ru_direct"
 private const val PREF_ROUTING_INIT = "pamir_routing_init"
@@ -157,8 +156,6 @@ private const val PREF_SMART_LTE = "pamir_smart_lte"
 private const val PREF_TV_BOOT_INIT = "pamir_tv_boot_init"
 private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
 private const val PREF_PREFERRED = "pamir_preferred"
-private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
-private const val DOWNLOAD_BASE = "https://app.pamirlink.ru/download/"
 /** Latest non-prerelease build; AppConfig.APP_URL is github.com/<owner>/pamir-vpn-android after branding. */
 private val GITHUB_LATEST = AppConfig.APP_URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest"
 private const val PREF_THEME = "pamir_theme"
@@ -392,6 +389,7 @@ class PamirActivity : AppCompatActivity() {
             delay(4000)
             runCatching { PamirCrash.sendPending(applicationContext, proxyPort()) }
             runCatching { PamirApi.pingInstall(applicationContext, proxyPort()) }
+            runCatching { PamirHosts.refresh(proxyPort()) }
         }
         if (loggedIn) {
             refreshAccount()
@@ -1048,7 +1046,7 @@ class PamirActivity : AppCompatActivity() {
     /** Message for WhatsApp/Telegram: how to install the app and connect this key on another phone. */
     private fun shareKey(k: JSONObject) {
         // open-app.html opens Pamir VPN with the key on Android and offers Incy/Happ on iPhone
-        val link = "https://app.pamirlink.ru/open-app.html?url=" + Uri.encode(k.optString("subscription_url"))
+        val link = PamirHosts.web("/open-app.html?url=") + Uri.encode(k.optString("subscription_url"))
         val text = "Mognu — ключ «${keyName(k)}»\n\n" +
             "Откройте ссылку на телефоне — VPN подключится в один клик:\n$link\n\n" +
             "Если приложения ещё нет, ссылка предложит его скачать."
@@ -1619,13 +1617,16 @@ class PamirActivity : AppCompatActivity() {
         return if (v.isNotBlank() && url != null) UpdateSource(v, url, min) else null
     }
 
-    /** The site mirror (download/android.json), kept for when GitHub is slow or blocked. */
+    /** The site mirror (download/android.json), kept for when GitHub is slow or blocked; the first host that answers. */
     private fun updateFromSite(): UpdateSource? {
-        val o = JSONObject(httpGet(UPDATE_JSON))
-        val v = o.optString("version")
-        val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
-        val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
-        return if (v.isNotBlank()) UpdateSource(v, DOWNLOAD_BASE + file, o.optString("min_version")) else null
+        for (h in PamirHosts.ordered()) {
+            val o = runCatching { JSONObject(httpGet("$h/download/android.json")) }.getOrNull() ?: continue
+            val v = o.optString("version")
+            val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
+            val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
+            return if (v.isNotBlank()) UpdateSource(v, "$h/download/$file", o.optString("min_version")) else null
+        }
+        return null
     }
 
     /** Asks GitHub and the site in parallel; offers the newest version and every source that has it. */
@@ -1966,7 +1967,7 @@ class PamirActivity : AppCompatActivity() {
                 Spacer(Modifier.height(Gap.s))
                 TextAction("Скачать с сайта", color = c.accentText) {
                     openUrl(
-                        DOWNLOAD_BASE + if (prefersArm64()) "pamir-vpn.apk" else "pamir-vpn-universal.apk",
+                        PamirHosts.web("/download/") + if (prefersArm64()) "pamir-vpn.apk" else "pamir-vpn-universal.apk",
                         "Скачать Mognu", "Откройте ссылку на телефоне и установите файл"
                     )
                 }
@@ -2740,7 +2741,7 @@ class PamirActivity : AppCompatActivity() {
                     "Так вы сможете продлевать подписку прямо здесь — в пару касаний, через СБП, карту или с баланса.", Tone.ACCENT
                 ) {
                     LoginButtons()
-                    TextAction("Продлить в личном кабинете", Modifier.align(Alignment.CenterHorizontally)) { openUrl(CABINET_URL) }
+                    TextAction("Продлить в личном кабинете", Modifier.align(Alignment.CenterHorizontally)) { openUrl(PamirHosts.web("/?from=android")) }
                 }
                 renewLoading -> {
                     SkeletonCard("Загружаем тарифы")
@@ -2817,7 +2818,7 @@ class PamirActivity : AppCompatActivity() {
         if (list.isEmpty()) {
             Text("Тарифы сейчас недоступны. Попробуйте позже или продлите в кабинете.", style = PamirType.support, color = c.textDim)
             Spacer(Modifier.height(Gap.m))
-            SecondaryButton("Открыть кабинет") { openUrl(CABINET_URL) }
+            SecondaryButton("Открыть кабинет") { openUrl(PamirHosts.web("/?from=android")) }
             return
         }
         list.forEach { t ->

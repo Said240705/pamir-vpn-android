@@ -15,9 +15,8 @@ import java.net.Proxy
 import java.net.URL
 import java.util.UUID
 
-/** Small client for the cabinet API (https://app.pamirlink.ru/api). */
+/** Small client for the cabinet API (<host>/api on every mirror from [PamirHosts]). */
 object PamirApi {
-    const val BASE = "https://app.pamirlink.ru/api"
     private const val K_TOKEN = "pamir_api_token"
     private const val K_PING_DAY = "pamir_ping_day"
     /** Install id, the same one subscription requests send as x-hwid (brand.py, HttpUtil). */
@@ -60,28 +59,38 @@ object PamirApi {
             .onFailure { Log.w("Pamir", "ping: ${it.message}") }
     }
 
+    /**
+     * Tries every mirror (last working first), each through the VPN proxy and then directly. Only a connection
+     * failure or a page that is not our API (operator block page, CDN error) moves on; an API error is final.
+     */
     fun call(path: String, method: String = "GET", body: JSONObject? = null, auth: Boolean = true, proxyPort: Int? = null): JSONObject {
         val ports: List<Int?> = if (proxyPort != null) listOf(proxyPort, null) else listOf(null)
         var last: Exception? = null
-        for (port in ports) {
-            try {
-                return once(path, method, body, auth, port)
-            } catch (e: ApiError) {
-                throw e
-            } catch (e: IOException) {
-                last = e
-                Log.w("Pamir", "api $path via ${port ?: "direct"}: ${e.message}")
+        var attempt = 0
+        for (host in PamirHosts.ordered()) {
+            for (port in ports) {
+                try {
+                    val r = once(host, path, method, body, auth, port, if (attempt++ == 0) 8_000 else 5_000)
+                    PamirHosts.markGood(host)
+                    return r
+                } catch (e: ApiError) {
+                    PamirHosts.markGood(host)
+                    throw e
+                } catch (e: IOException) {
+                    last = e
+                    Log.w("Pamir", "api $path at $host via ${port ?: "direct"}: ${e.message}")
+                }
             }
         }
         throw ApiError(0, "Нет связи с сервером. Проверьте интернет или включите VPN")
             .also { it.initCause(last) }
     }
 
-    private fun once(path: String, method: String, body: JSONObject?, auth: Boolean, port: Int?): JSONObject {
-        val url = URL(BASE + path)
+    private fun once(host: String, path: String, method: String, body: JSONObject?, auth: Boolean, port: Int?, connectMs: Int): JSONObject {
+        val url = URL("$host/api$path")
         val conn = (if (port != null) url.openConnection(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port)))
         else url.openConnection()) as HttpURLConnection
-        conn.connectTimeout = 10_000
+        conn.connectTimeout = connectMs
         conn.readTimeout = 20_000
         conn.requestMethod = method
         conn.setRequestProperty("Accept", "application/json")
@@ -97,6 +106,8 @@ object PamirApi {
         val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
             ?.bufferedReader()?.use { it.readText() }.orEmpty()
         conn.disconnect()
+        // Not our API: an operator block page or a CDN error page (HTML) — try the next mirror.
+        if (text.trimStart().startsWith("<")) throw IOException("not an API answer ($code)")
         if (code !in 200..299) {
             val detail = runCatching { JSONObject(text).opt("detail") }.getOrNull()
             val msg = when (detail) {

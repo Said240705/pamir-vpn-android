@@ -26,6 +26,7 @@ class PamirReminderWorker(context: Context, params: WorkerParameters) : Coroutin
         runCatching { PamirNews.notifyNew(applicationContext) }
         runCatching { PamirOffers.notifyNew(applicationContext) }
         runCatching { PamirApi.pingInstall(applicationContext) }
+        runCatching { PamirHosts.refresh() }
         return Result.success()
     }
 

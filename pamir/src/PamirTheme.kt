@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.sp
 // Design tokens of the Pamir UI. Screens never use raw colors, sizes or text styles:
 // everything goes through Pamir.colors, PamirType, Gap and Radius.
 
-/** Palette of one theme. `accent` is the brand mint used for fills; `accentText` is the same hue tuned for text/icons on surfaces. */
+/** Palette of one theme. `accent` is the brand lime (violet in the light theme) used for fills; `accentText` is the same hue tuned for text/icons on surfaces. */
 @Immutable
 data class PamirColors(
     val isDark: Boolean,
@@ -49,58 +49,61 @@ data class PamirColors(
 
 val PamirDark = PamirColors(
     isDark = true,
-    bg = Color(0xFF0A121D),
-    surface = Color(0xFF111C2B),
-    surfaceHigh = Color(0xFF182638),
-    sheet = Color(0xFF0F1926),
+    bg = Color(0xFF09090F),
+    surface = Color(0xFF13131C),
+    surfaceHigh = Color(0xFF1C1C28),
+    sheet = Color(0xFF111119),
     line = Color(0x17FFFFFF),
-    track = Color(0xFF26344A),
-    accent = Color(0xFF2BEFC0),
-    accentDeep = Color(0xFF17B896),
-    accentText = Color(0xFF2BEFC0),
-    onAccent = Color(0xFF05241D),
-    accentSoft = Color(0x1F2BEFC0),
-    text = Color(0xFFEEF3F7),
-    textDim = Color(0xFF93A3B6),
-    warn = Color(0xFFF0B46A),
-    warnSoft = Color(0xFF2A2014),
-    danger = Color(0xFFF0766A),
-    dangerSoft = Color(0xFF2C1719),
-    info = Color(0xFF7FB8FF),
-    powerOff = listOf(Color(0xFF1C2B40), Color(0xFF0F1927)),
-    powerOn = listOf(Color(0xFF1D5A4D), Color(0xFF0B2B25)),
-    powerIconOff = Color(0xFF9FB0C3),
+    track = Color(0xFF2A2A3B),
+    accent = Color(0xFFC8FF2E),
+    accentDeep = Color(0xFFA3E000),
+    accentText = Color(0xFFC8FF2E),
+    onAccent = Color(0xFF0A0A10),
+    accentSoft = Color(0x1FC8FF2E),
+    text = Color(0xFFF4F4F8),
+    textDim = Color(0xFF8E8EA6),
+    warn = Color(0xFFFFC24A),
+    warnSoft = Color(0xFF2A2112),
+    danger = Color(0xFFFF6B6B),
+    dangerSoft = Color(0xFF2C1518),
+    info = Color(0xFF9D7BFF),
+    powerOff = listOf(Color(0xFF1E1E2B), Color(0xFF111119)),
+    powerOn = listOf(Color(0xFFC8FF2E), Color(0xFFA3E000)),
+    powerIconOff = Color(0xFF8E8EA6),
 )
 
+/** Light theme: violet carries the accent — lime text is unreadable on white. */
 val PamirLight = PamirColors(
     isDark = false,
-    bg = Color(0xFFF2F5F8),
+    bg = Color(0xFFF4F3F8),
     surface = Color(0xFFFFFFFF),
-    surfaceHigh = Color(0xFFEAEFF4),
+    surfaceHigh = Color(0xFFECEAF4),
     sheet = Color(0xFFFFFFFF),
     line = Color(0x14000000),
-    track = Color(0xFFD3DBE4),
-    accent = Color(0xFF2BEFC0),
-    accentDeep = Color(0xFF17B896),
-    accentText = Color(0xFF0A8466),
-    onAccent = Color(0xFF05241D),
-    accentSoft = Color(0x1F17B896),
-    text = Color(0xFF0E1A28),
-    textDim = Color(0xFF586879),
+    track = Color(0xFFDDDAE8),
+    accent = Color(0xFF6A3DF5),
+    accentDeep = Color(0xFF5428E0),
+    accentText = Color(0xFF5A2EE6),
+    onAccent = Color(0xFFFFFFFF),
+    accentSoft = Color(0x1F6A3DF5),
+    text = Color(0xFF12111A),
+    textDim = Color(0xFF5F5C72),
     warn = Color(0xFFB8700F),
     warnSoft = Color(0xFFFFF3E0),
-    danger = Color(0xFFCC3D33),
+    danger = Color(0xFFD23B3B),
     dangerSoft = Color(0xFFFDECEA),
-    info = Color(0xFF2F7BD6),
-    powerOff = listOf(Color(0xFFFFFFFF), Color(0xFFE3E9F0)),
-    powerOn = listOf(Color(0xFFDDFBF1), Color(0xFFAEEED9)),
-    powerIconOff = Color(0xFF7C8B9C),
+    info = Color(0xFF6A3DF5),
+    powerOff = listOf(Color(0xFFFFFFFF), Color(0xFFE8E6F1)),
+    powerOn = listOf(Color(0xFF7B52FF), Color(0xFF5428E0)),
+    powerIconOff = Color(0xFF7A7790),
 )
 
 /** Type scale. Nothing smaller than 12sp, row titles 15sp, secondary lines 13sp. */
 object PamirType {
-    val hero = TextStyle(fontSize = 26.sp, lineHeight = 32.sp, fontWeight = FontWeight.ExtraBold)
-    val title = TextStyle(fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.ExtraBold)
+    val hero = TextStyle(fontFamily = MognuDisplay, fontSize = 24.sp, lineHeight = 30.sp, fontWeight = FontWeight.Black)
+    val title = TextStyle(fontFamily = MognuDisplay, fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.ExtraBold)
+    /** Brand name and the word on the power button. */
+    val brand = TextStyle(fontFamily = MognuDisplay, fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.Black)
     val headline = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.ExtraBold)
     val subtitle = TextStyle(fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
     val body = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)

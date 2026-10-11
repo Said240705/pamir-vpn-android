@@ -38,16 +38,16 @@ class QSTileService : TileService() {
         if (state == Tile.STATE_ACTIVE) {
             tile.state = Tile.STATE_ACTIVE
             val server = PamirWatch.title(CoreServiceManager.getRunningServerName().ifBlank { null })
-                .takeIf { it != "Pamir VPN" } ?: PamirWatch.selectedTitle()
+                .takeIf { it != "Mognu" } ?: PamirWatch.selectedTitle()
             if (Build.VERSION.SDK_INT >= 29) {
-                tile.label = "Pamir VPN"
+                tile.label = "Mognu"
                 tile.subtitle = server
             } else {
                 tile.label = server
             }
         } else {
             tile.state = Tile.STATE_INACTIVE
-            tile.label = "Pamir VPN"
+            tile.label = "Mognu"
             if (Build.VERSION.SDK_INT >= 29) tile.subtitle = "Отключено"
         }
         tile.updateTile()

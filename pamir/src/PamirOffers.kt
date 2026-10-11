@@ -32,7 +32,7 @@ object PamirOffers {
         MmkvManager.encodeSettings(K_NOTIFIED, code)
         val pct = o.optInt("discount_percent")
         PamirWatch.notify(
-            ctx, "Скидка $pct% на продление Pamir VPN",
+            ctx, "Скидка $pct% на продление Mognu",
             "Подписка закончилась — вернитесь со скидкой $pct%. Предложение действует недолго.",
             EXTRA_OFFER, "Забрать скидку", NOTIFY_ID
         )

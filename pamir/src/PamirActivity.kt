@@ -578,7 +578,7 @@ class PamirActivity : AppCompatActivity() {
         if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
         if (MmkvManager.decodeSettingsBool("pamir_notif_asked", false)) {
             if (fromSettings) {
-                toast("Разрешите уведомления для Pamir VPN", true)
+                toast("Разрешите уведомления для Mognu", true)
                 runCatching {
                     startActivity(
                         Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -1047,7 +1047,7 @@ class PamirActivity : AppCompatActivity() {
     private fun shareKey(k: JSONObject) {
         // open-app.html opens Pamir VPN with the key on Android and offers Incy/Happ on iPhone
         val link = "https://app.pamirlink.ru/open-app.html?url=" + Uri.encode(k.optString("subscription_url"))
-        val text = "Pamir VPN — ключ «${keyName(k)}»\n\n" +
+        val text = "Mognu — ключ «${keyName(k)}»\n\n" +
             "Откройте ссылку на телефоне — VPN подключится в один клик:\n$link\n\n" +
             "Если приложения ещё нет, ссылка предложит его скачать."
         runCatching {
@@ -1946,7 +1946,7 @@ class PamirActivity : AppCompatActivity() {
                 Text("Важное обновление", style = PamirType.title, color = c.text, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(Gap.s))
                 Text(
-                    "Вышла новая версия Pamir VPN — без неё приложение дальше не откроется. " +
+                    "Вышла новая версия Mognu — без неё приложение дальше не откроется. " +
                         "Обновление займёт минуту, подписка и настройки сохранятся.",
                     style = PamirType.body, color = c.textDim, textAlign = TextAlign.Center
                 )
@@ -1965,7 +1965,7 @@ class PamirActivity : AppCompatActivity() {
                 TextAction("Скачать с сайта", color = c.accentText) {
                     openUrl(
                         DOWNLOAD_BASE + if (prefersArm64()) "pamir-vpn.apk" else "pamir-vpn-universal.apk",
-                        "Скачать Pamir VPN", "Откройте ссылку на телефоне и установите файл"
+                        "Скачать Mognu", "Откройте ссылку на телефоне и установите файл"
                     )
                 }
                 TextAction("Поддержка", icon = PamirIcons.Chat) { openUrl(BOT_URL, "Поддержка", "Отсканируйте код телефоном — ответим в Telegram") }
@@ -2070,7 +2070,7 @@ class PamirActivity : AppCompatActivity() {
         LogoHero()
         Spacer(Modifier.height(Gap.l))
         Text(
-            "Добро пожаловать\nв Pamir VPN", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
+            "Добро пожаловать\nв Mognu", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
             modifier = Modifier.semantics { heading() }
         )
         Spacer(Modifier.height(Gap.s))
@@ -2191,9 +2191,9 @@ class PamirActivity : AppCompatActivity() {
                 else -> PowerState.OFF
             }
             val stateText = when (power) {
-                PowerState.CONNECTING -> "Подключение…"
-                PowerState.ON -> "Защищено"
-                PowerState.OFF -> "Не подключено"
+                PowerState.CONNECTING -> "Подключаем…"
+                PowerState.ON -> "Ты всех могнул 😎"
+                PowerState.OFF -> "Нажми — и всех могни"
             }
             val powerFocus = remember { FocusRequester() }
             LaunchedEffect(Unit) { if (tv) runCatching { powerFocus.requestFocus() } }
@@ -2202,11 +2202,12 @@ class PamirActivity : AppCompatActivity() {
                 label = if (running) "Отключить VPN" else "Подключить VPN",
                 stateLabel = stateText,
                 onClick = { toggle() },
-                modifier = Modifier.focusRequester(powerFocus)
+                modifier = Modifier.focusRequester(powerFocus),
+                word = if (power == PowerState.ON) "МОГНУЛ" else "МОГНУТЬ"
             )
             AnimatedContent(targetState = stateText, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "state") { s ->
                 Text(
-                    s, style = PamirType.headline, color = if (s == "Защищено") c.accentText else c.text,
+                    s, style = PamirType.headline, color = if (power == PowerState.ON) c.accentText else c.text,
                     modifier = Modifier
                         .clip(Radius.s)
                         .clickable(role = Role.Button) { toggle() }
@@ -2217,7 +2218,7 @@ class PamirActivity : AppCompatActivity() {
                 Timer()
             } else {
                 Text(
-                    if (connecting) "Устанавливаем защищённое соединение" else "Нажмите, чтобы защитить соединение",
+                    if (connecting) "Устанавливаем защищённое соединение" else "Подключим к самому быстрому серверу",
                     style = PamirType.support, color = c.textDim
                 )
             }
@@ -2270,9 +2271,9 @@ class PamirActivity : AppCompatActivity() {
                 .padding(vertical = Gap.s),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Image(painterResource(R.drawable.pamir_logo), contentDescription = null, modifier = Modifier.size(28.dp))
+            Image(painterResource(R.drawable.pamir_logo), contentDescription = null, modifier = Modifier.size(30.dp))
             Spacer(Modifier.width(Gap.s))
-            Text("Pamir VPN", style = PamirType.subtitle, color = c.text, modifier = Modifier.weight(1f))
+            Text("Mognu", style = PamirType.brand, color = c.text, modifier = Modifier.weight(1f))
             val d = daysLeft
             val tone = if (d != null && d <= 3) Tone.WARN else Tone.ACCENT
             val left = when {
@@ -3132,7 +3133,7 @@ class PamirActivity : AppCompatActivity() {
             PrimaryButton("Поделиться ссылкой", icon = PamirIcons.Share) {
                 runCatching {
                     startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(Intent.EXTRA_TEXT, "Подключайся к Pamir VPN по моей ссылке — после оформления подписки получишь +7 дней в подарок: " + r.optString("link")), null))
+                        .putExtra(Intent.EXTRA_TEXT, "Подключайся к Mognu по моей ссылке — после оформления подписки получишь +7 дней в подарок: " + r.optString("link")), null))
                 }
             }
             TextAction("Скопировать ссылку", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Copy) { copyText("ref", r.optString("link")) }
@@ -3435,7 +3436,7 @@ class PamirActivity : AppCompatActivity() {
                         if (updProgress >= 0) "Загрузка $updProgress%" else "Обновить", icon = PamirIcons.Download
                     ) { installUpdate() }
                 }
-                "latest" -> NoteCard(PamirIcons.Check, "У вас последняя версия", "Pamir VPN ${appVersion()} — обновлений нет.", Tone.ACCENT) {
+                "latest" -> NoteCard(PamirIcons.Check, "У вас последняя версия", "Mognu ${appVersion()} — обновлений нет.", Tone.ACCENT) {
                     PrimaryButton("Отлично") { onDismiss() }
                 }
                 else -> NoteCard(PamirIcons.Warning, "Не удалось проверить", "Проверьте интернет и попробуйте ещё раз.", Tone.WARN) {
@@ -3732,8 +3733,8 @@ class PamirActivity : AppCompatActivity() {
         PamirSheet(
             onDismiss = onDismiss,
             title = if (reg) "Регистрация" else "Вход по почте",
-            subtitle = if (reg) "Создайте аккаунт Pamir VPN — подписку оформите сразу после этого"
-            else "Почта и пароль от личного кабинета Pamir VPN"
+            subtitle = if (reg) "Создайте аккаунт Mognu — подписку оформите сразу после этого"
+            else "Почта и пароль от личного кабинета Mognu"
         ) {
             OutlinedTextField(
                 value = email, onValueChange = { email = it.trim() }, singleLine = true,

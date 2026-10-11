@@ -1,5 +1,6 @@
 package com.v2ray.ang.pamir
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -12,6 +13,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -83,6 +87,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 // Stateless building blocks of the Pamir screens. They know nothing about the VPN or the API:
 // the activity passes text, state and callbacks in.
@@ -486,10 +491,14 @@ enum class PowerState { OFF, CONNECTING, ON }
 /**
  * The main connect button. Colors cross-fade between states, a spinning arc shows connecting,
  * the glow breathes while protected; every press gives haptic feedback.
+ * [word] replaces the power glyph with a brand word («МОГНУТЬ» / «МОГНУЛ»).
  * Infinite animations run only in the states that show them.
  */
 @Composable
-fun PowerButton(state: PowerState, label: String, stateLabel: String, onClick: () -> Unit, modifier: Modifier = Modifier, size: Dp = 172.dp) {
+fun PowerButton(
+    state: PowerState, label: String, stateLabel: String, onClick: () -> Unit, modifier: Modifier = Modifier, size: Dp = 172.dp,
+    word: String? = null,
+) {
     val c = Pamir.colors
     val haptic = LocalHapticFeedback.current
     val on by animateFloatAsState(if (state == PowerState.ON) 1f else 0f, tween(600), label = "on")
@@ -538,6 +547,7 @@ fun PowerButton(state: PowerState, label: String, stateLabel: String, onClick: (
                         topLeft = Offset(inset, inset), size = ringSize, style = Stroke(stroke, cap = StrokeCap.Round)
                     )
                 }
+                if (word != null) return@Canvas
                 val ic = lerp(c.powerIconOff, c.accentText, maxOf(on, busy * 0.6f))
                 val ir = r * 0.30f
                 val w = r * 0.075f
@@ -547,6 +557,14 @@ fun PowerButton(state: PowerState, label: String, stateLabel: String, onClick: (
                     style = Stroke(width = w, cap = StrokeCap.Round)
                 )
                 drawLine(ic, Offset(center.x, center.y - ir * 1.15f), Offset(center.x, center.y - ir * 0.05f), strokeWidth = w, cap = StrokeCap.Round)
+            }
+            if (word != null) {
+                AnimatedContent(targetState = word, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "word") { w ->
+                    Text(
+                        w, style = PamirType.brand.copy(fontSize = (size.value * 0.115f).sp, letterSpacing = 0.5.sp),
+                        color = lerp(c.text, c.onAccent, on), maxLines = 1
+                    )
+                }
             }
         }
     }

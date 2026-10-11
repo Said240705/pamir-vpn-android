@@ -1,5 +1,6 @@
 #!/bin/bash
 # Mognu: сайт на mognu.app (через Cloudflare) — новый сайт из ветки mognu, /api — тот же бэкенд, что у app.pamirlink.ru.
+# Запасной домен — тем же скриптом: bash setup_mognu_domain.sh mognu.net (тот же сайт и API, второй вход).
 #
 # Что делает:
 #   1. копия всей /etc/nginx → /root/nginx-backup-mognu-<время>.tgz
@@ -10,7 +11,7 @@
 # Пока бренд не объявлен, поисковикам отдаётся noindex. Старый сайт, бот и VPN не меняются.
 # Повторный запуск: только обновляет файлы сайта (настройки nginx уже есть).
 set -euo pipefail
-DOMAIN=mognu.app
+DOMAIN=${1:-mognu.app}
 WEB=/var/www/mognu/frontend
 ACME=/var/www/mognu/acme
 SITE=/etc/nginx/sites-available/$DOMAIN
@@ -18,7 +19,7 @@ LINK=/etc/nginx/sites-enabled/$DOMAIN
 OLD_FRONT=/var/www/pamir-miniapp/frontend
 
 echo "== 1. копия настроек nginx"
-BK=/root/nginx-backup-mognu-$(date +%Y%m%d-%H%M%S).tgz
+BK=/root/nginx-backup-$DOMAIN-$(date +%Y%m%d-%H%M%S).tgz
 tar -czf "$BK" -C / etc/nginx
 echo "   $BK"
 
@@ -50,7 +51,7 @@ restore() {
 
 echo "== 3. порт 80 и сертификат"
 cat > "$SITE" <<EOF
-# Mognu (setup_mognu_domain.sh)
+# Mognu: $DOMAIN (setup_mognu_domain.sh)
 server {
     listen 80;
     server_name $DOMAIN www.$DOMAIN;
@@ -123,5 +124,5 @@ echo "== 5. проверка"
 code=$(curl -sk --max-time 10 --resolve $DOMAIN:443:127.0.0.1 -o /dev/null -w "%{http_code}" "https://$DOMAIN/welcome.html" || true)
 api=$(curl -sk --max-time 10 --resolve $DOMAIN:443:127.0.0.1 -o /dev/null -w "%{http_code}" "https://$DOMAIN/api/topup/public/server-status" || true)
 old=$(curl -sk --max-time 10 --resolve app.pamirlink.ru:443:127.0.0.1 -o /dev/null -w "%{http_code}" "https://app.pamirlink.ru/" || true)
-echo "   mognu.app: сайт $code, api $api; старый app.pamirlink.ru: $old"
+echo "   $DOMAIN: сайт $code, api $api; старый app.pamirlink.ru: $old"
 echo "Готово: https://$DOMAIN/  (откат: tar -xzf $BK -C / && rm -f $LINK && systemctl reload nginx)"

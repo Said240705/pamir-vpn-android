@@ -287,7 +287,9 @@ class PamirActivity : AppCompatActivity() {
     private var cabDevices by mutableStateOf<Map<Int, Pair<List<JSONObject>, Int>>>(emptyMap())
     private var cabReferral by mutableStateOf<JSONObject?>(null)
     private var cabPayments by mutableStateOf<List<JSONObject>>(emptyList())
-    private var cabSupport by mutableStateOf<List<JSONObject>>(emptyList())
+    /** Support ticket: the open one with its messages, or the number and status of the last one. */
+    private var support by mutableStateOf(PamirSupport.State(0, null, emptyList()))
+    private var supportUnread by mutableStateOf(false)
     private var cabTopupOpen by mutableStateOf(false)
     private var cabBusy by mutableStateOf<String?>(null)
     private var emailLoginOpen by mutableStateOf(false)
@@ -413,6 +415,11 @@ class PamirActivity : AppCompatActivity() {
         if (i.getBooleanExtra(PamirOffers.EXTRA_OFFER, false)) {
             i.removeExtra(PamirOffers.EXTRA_OFFER)
             lifecycleScope.launch { loadLastChance(); if (lastChance != null) applyLastChance() else openRenew() }
+        }
+        if (i.getBooleanExtra(PamirSupport.EXTRA_SUPPORT, false)) {
+            i.removeExtra(PamirSupport.EXTRA_SUPPORT)
+            PamirSupport.cancelNotification(this)
+            if (loggedIn) { tab = Tab.SETTINGS; supportOpen = true }
         }
         if (i.getBooleanExtra(PamirNews.EXTRA_NEWS, false)) {
             i.removeExtra(PamirNews.EXTRA_NEWS)
@@ -807,7 +814,9 @@ class PamirActivity : AppCompatActivity() {
         cabDevices = emptyMap()
         cabReferral = null
         cabPayments = emptyList()
-        cabSupport = emptyList()
+        support = PamirSupport.State(0, null, emptyList())
+        supportUnread = false
+        PamirSupport.stopWatching(this)
         cardInfo = null
         lastChance = null
         trialOffer = null
@@ -1201,9 +1210,13 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun loadSupport() {
+    /** [viewed] — the support sheet is open, so new answers count as read. */
+    private suspend fun loadSupport(viewed: Boolean = false) {
         val sj = api(quiet = true) { p -> PamirApi.call("/topup/support/messages", proxyPort = p) } ?: return
-        sj.optJSONArray("messages")?.let { a -> cabSupport = (0 until a.length()).map { a.getJSONObject(it) } }
+        val s = PamirSupport.parse(sj)
+        support = s
+        PamirSupport.track(this, s, viewed)
+        supportUnread = PamirSupport.unread(s)
     }
 
     private fun removeDevice(keyId: Int, deviceId: Int) {
@@ -1248,14 +1261,36 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendSupport(text: String) {
+    /** A message to the open ticket, or — when none is open — a new ticket with [topic] as its first line. */
+    private fun sendSupport(text: String, topic: String? = null, onSent: () -> Unit = {}) {
         val t = text.trim()
         if (t.isEmpty() || cabBusy != null) return
+        val opening = !support.open
+        val body = if (opening && topic != null) "Тема: $topic\n\n$t" else t
         cabBusy = "support"
         lifecycleScope.launch {
-            val r = api { p -> PamirApi.call("/topup/support/send", "POST", JSONObject().put("text", t), proxyPort = p) }
+            val r = api { p -> PamirApi.call("/topup/support/send", "POST", JSONObject().put("text", body), proxyPort = p) }
+            if (r != null) {
+                onSent()
+                loadSupport(viewed = true)
+                toast(if (opening) "Обращение${if (support.threadId > 0) " №${support.threadId}" else ""} открыто. Ответ придёт уведомлением" else "Отправлено")
+            }
             cabBusy = null
-            if (r != null) { loadSupport(); toast("Отправлено. Ответ придёт сюда и в Telegram") }
+        }
+    }
+
+    private fun closeTicket() {
+        if (cabBusy != null || !support.open) return
+        cabBusy = "support_close"
+        lifecycleScope.launch {
+            val n = support.threadId
+            val r = api { p -> PamirApi.call("/topup/support/close", "POST", JSONObject(), proxyPort = p) }
+            if (r != null) {
+                PamirSupport.stopWatching(this@PamirActivity)
+                loadSupport(viewed = true)
+                toast("Обращение${if (n > 0) " №$n" else ""} закрыто")
+            }
+            cabBusy = null
         }
     }
 
@@ -3160,55 +3195,6 @@ class PamirActivity : AppCompatActivity() {
     }
 
     @Composable
-    private fun SupportCard() {
-        val c = Pamir.colors
-        var text by remember { mutableStateOf("") }
-        PamirCard {
-            val msgs = cabSupport.takeLast(6)
-            if (msgs.isEmpty()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconBadge(PamirIcons.Chat)
-                    Spacer(Modifier.width(Gap.m))
-                    Text("Напишите нам — отвечаем быстро. Ответ появится здесь и придёт в Telegram.", style = PamirType.support, color = c.textDim)
-                }
-            }
-            msgs.forEach { m ->
-                val mine = m.optString("sender_type") == "user"
-                val body = runCatching { Html.fromHtml(m.optString("text"), Html.FROM_HTML_MODE_COMPACT).toString().trim() }.getOrDefault(m.optString("text"))
-                    .ifBlank { if (m.optString("media_type") == "photo") "Фото" else "" }
-                if (body.isBlank()) return@forEach
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 3.dp),
-                    horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start
-                ) {
-                    Text(
-                        body, style = PamirType.support, color = if (mine) c.onAccent else c.text,
-                        modifier = Modifier
-                            .fillMaxWidth(0.85f)
-                            .wrapContentWidth(if (mine) Alignment.End else Alignment.Start)
-                            .clip(RoundedCornerShape(16.dp, 16.dp, if (mine) 4.dp else 16.dp, if (mine) 16.dp else 4.dp))
-                            .background(if (mine) c.accent else c.surfaceHigh)
-                            .padding(horizontal = Gap.m, vertical = Gap.s)
-                    )
-                }
-            }
-            Spacer(Modifier.height(Gap.m))
-            OutlinedTextField(
-                value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Ваше сообщение", style = PamirType.support) },
-                textStyle = PamirType.bodyRegular.copy(color = c.text),
-                shape = Radius.m, colors = pamirFieldColors(), maxLines = 4
-            )
-            Spacer(Modifier.height(Gap.m))
-            PrimaryButton("Отправить", loading = cabBusy == "support") {
-                if (text.isBlank()) toast("Введите сообщение") else { sendSupport(text); text = "" }
-            }
-        }
-    }
-
-    @Composable
     private fun TopupSheet(onDismiss: () -> Unit) {
         val c = Pamir.colors
         var custom by remember { mutableStateOf("") }
@@ -3322,12 +3308,114 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    /** Support chat from Settings (same messages as in the web cabinet; answers also come to Telegram). */
+    /**
+     * Support as tickets: a topic and a description open a numbered ticket; while it is open, the chat
+     * and further messages go to it; the user or support can close it. Answers also come as notifications.
+     */
     @Composable
     private fun SupportSheet(onDismiss: () -> Unit) {
-        LaunchedEffect(Unit) { loadSupport() }
-        PamirSheet(onDismiss = onDismiss, title = "Поддержка", subtitle = "Отвечаем быстро — ответ появится здесь") {
-            SupportCard()
+        val c = Pamir.colors
+        val s = support
+        var text by remember { mutableStateOf("") }
+        var topic by remember { mutableStateOf<String?>(null) }
+        // Refresh while the sheet is open, so an answer appears without reopening it.
+        LaunchedEffect(Unit) {
+            while (true) {
+                loadSupport(viewed = true)
+                delay(20_000)
+            }
+        }
+        PamirSheet(
+            onDismiss = onDismiss,
+            title = if (s.open) "Обращение №${s.threadId}" else "Поддержка",
+            subtitle = if (s.open) "Ответ придёт уведомлением и появится здесь" else "Опишите проблему — откроем обращение и ответим здесь",
+            headerAction = if (s.open) ({ Chip("открыто", Tone.ACCENT) }) else null
+        ) {
+            if (s.open) {
+                PamirCard {
+                    val msgs = s.messages.map { it to PamirSupport.plain(it) }.filter { it.second.isNotBlank() }.takeLast(30)
+                    msgs.forEach { (m, body) ->
+                        val mine = m.optString("sender_type") == "user"
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 3.dp),
+                            horizontalAlignment = if (mine) Alignment.End else Alignment.Start
+                        ) {
+                            if (!mine) Text("Поддержка", style = PamirType.caption, color = c.accentText, modifier = Modifier.padding(start = Gap.xs, bottom = 2.dp))
+                            Text(
+                                body, style = PamirType.support, color = if (mine) c.onAccent else c.text,
+                                modifier = Modifier
+                                    .fillMaxWidth(0.85f)
+                                    .wrapContentWidth(if (mine) Alignment.End else Alignment.Start)
+                                    .clip(RoundedCornerShape(16.dp, 16.dp, if (mine) 4.dp else 16.dp, if (mine) 16.dp else 4.dp))
+                                    .background(if (mine) c.accent else c.surfaceHigh)
+                                    .padding(horizontal = Gap.m, vertical = Gap.s)
+                            )
+                        }
+                    }
+                    if (msgs.none { it.first.optString("sender_type") == "admin" }) {
+                        Spacer(Modifier.height(Gap.xs))
+                        Text("Обращение у поддержки. Обычно отвечаем в течение часа.", style = PamirType.caption, color = c.textDim)
+                    }
+                    Spacer(Modifier.height(Gap.m))
+                    OutlinedTextField(
+                        value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Добавить сообщение", style = PamirType.support) },
+                        textStyle = PamirType.bodyRegular.copy(color = c.text),
+                        shape = Radius.m, colors = pamirFieldColors(), maxLines = 4
+                    )
+                    Spacer(Modifier.height(Gap.m))
+                    PrimaryButton("Отправить", loading = cabBusy == "support") {
+                        if (text.isBlank()) toast("Введите сообщение") else sendSupport(text) { text = "" }
+                    }
+                }
+                Spacer(Modifier.height(Gap.s))
+                TextAction(
+                    if (cabBusy == "support_close") "Закрываем…" else "Вопрос решён — закрыть обращение",
+                    Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Check
+                ) { closeTicket() }
+            } else {
+                if (s.status == "closed" && s.threadId > 0) {
+                    NoteCard(PamirIcons.Check, "Обращение №${s.threadId} закрыто", "Если вопрос остался или появился новый — откройте новое обращение.", Tone.NEUTRAL) {}
+                    Spacer(Modifier.height(Gap.m))
+                }
+                Text("Тема", style = PamirType.label, color = c.textDim, modifier = Modifier.padding(start = Gap.xs, bottom = Gap.s))
+                val topics = listOf("Не подключается", "Медленно работает", "Оплата и подписка", "Другое")
+                topics.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(Gap.s), modifier = Modifier.padding(bottom = Gap.s)) {
+                        row.forEach { t ->
+                            val on = topic == t
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .clip(Radius.m)
+                                    .background(if (on) c.accent else c.surface)
+                                    .border(1.dp, if (on) c.accent else c.line, Radius.m)
+                                    .clickable(role = Role.RadioButton) { topic = t }
+                                    .padding(horizontal = Gap.s),
+                                contentAlignment = Alignment.Center
+                            ) { Text(t, style = PamirType.label, color = if (on) c.onAccent else c.text, maxLines = 1) }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(Gap.xs))
+                OutlinedTextField(
+                    value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Что случилось? Например: не подключается на мобильном интернете", style = PamirType.support) },
+                    textStyle = PamirType.bodyRegular.copy(color = c.text),
+                    shape = Radius.m, colors = pamirFieldColors(), minLines = 3, maxLines = 6
+                )
+                Spacer(Modifier.height(Gap.m))
+                PrimaryButton("Открыть обращение", loading = cabBusy == "support") {
+                    when {
+                        topic == null -> toast("Выберите тему")
+                        text.isBlank() -> toast("Опишите проблему")
+                        else -> sendSupport(text, topic) { text = ""; topic = null }
+                    }
+                }
+            }
             Spacer(Modifier.height(Gap.s))
             TextAction("Написать в Telegram", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Telegram) { openUrl(BOT_URL) }
         }
@@ -3440,7 +3528,13 @@ class PamirActivity : AppCompatActivity() {
             RowGroup {
                 LinkRow(PamirIcons.Info, "Новости", news.firstOrNull()?.let { PamirNews.date(it).ifEmpty { null } }?.let { "Последняя — $it" } ?: "Новые серверы и акции") { openNews() }
                 RowDivider()
-                LinkRow(PamirIcons.Chat, "Поддержка", if (loggedIn) "Напишите нам прямо здесь" else "Ответим в Telegram") {
+                val supSub = when {
+                    !loggedIn -> "Ответим в Telegram"
+                    supportUnread -> "Новый ответ по обращению №${support.threadId}"
+                    support.open -> "Обращение №${support.threadId} открыто"
+                    else -> "Откройте обращение — ответим здесь"
+                }
+                LinkRow(PamirIcons.Chat, "Поддержка", supSub) {
                     if (loggedIn) supportOpen = true else openUrl(BOT_URL)
                 }
                 RowDivider()

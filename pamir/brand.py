@@ -233,7 +233,7 @@ for f in glob.glob(os.path.join(MAIN, 'res', 'drawable-*dpi', 'ic_stat_*.png')):
     os.remove(f)
 for sub in ('layout', 'drawable', 'xml', 'font'):
     os.makedirs(os.path.join(MAIN, 'res', sub), exist_ok=True)
-    for f in glob.glob(os.path.join(RES, sub, '*.xml')):
+    for f in glob.glob(os.path.join(RES, sub, '*.xml' if sub != 'font' else '*.ttf')):
         shutil.copy(f, os.path.join(MAIN, 'res', sub, os.path.basename(f)))
 # Android TV launcher banner: our PNG replaces the v2rayNG one; the adaptive banner (API 26+) would win over it
 shutil.copy(os.path.join(RES, 'mipmap-xhdpi', 'ic_banner.png'), os.path.join(MAIN, 'res', 'mipmap-xhdpi', 'ic_banner.png'))
@@ -306,4 +306,4 @@ edit(os.path.join(PKG, 'AngApplication.kt'), [
     ('        MmkvManager.initialize(this)\n', '        MmkvManager.initialize(this)\n        com.v2ray.ang.pamir.PamirCrash.install(this)\n'),
 ])
 
-print(f'brand: ok -> ru.pamirlink.vpn {VERSION} ({CODE}), owner {OWNER}')
+print(f'brand: ok -> {PACKAGE} «{APP_NAME}» {VERSION} ({CODE}), owner {OWNER}')

@@ -6,6 +6,7 @@ name: Mognu test APK
 on:
   push:
     branches: [mognu]
+    paths-ignore: ['pamir/server/**', '**.md']
   workflow_dispatch:
 
 permissions:

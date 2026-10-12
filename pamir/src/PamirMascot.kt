@@ -1,6 +1,7 @@
 package com.v2ray.ang.pamir
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -16,6 +17,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -29,6 +31,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
@@ -46,7 +49,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 private val Lime = Color(0xFFC8FF2E)
 private val LimeAsleep = Color(0xFFA6CF3A)
@@ -64,6 +69,8 @@ private const val ART_TOP = -40f
  * The connect button of the home screen: the crowned «M» as a Telegram-style sticker that changes mood with the VPN.
  * Off — asleep (closed eyes, crown askew, dimmer lime); connecting — straining (brows, sweat drop, shaking);
  * on — sunglasses whose top edge reads as an «M», golden crown and sparkles. A tap squashes it like a pressed sticker.
+ * Alive in every pose: it breathes while asleep, and with the glasses on the crown hops and a shine runs over the lenses
+ * every few seconds (same behaviour as the mascot on mognu.app).
  */
 @Composable
 fun MognuMascot(
@@ -88,11 +95,24 @@ fun MognuMascot(
     // only the connecting pose moves on its own: a quick shake while it strains
     val shake = if (state == PowerState.CONNECTING) loop.animateFloat(-1.6f, 1.6f, infiniteRepeatable(tween(90, easing = LinearEasing), RepeatMode.Reverse), label = "shake").value else 0f
     val zDrift = if (state == PowerState.OFF) loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing)), label = "z").value else 0f
+    val breathe = if (state == PowerState.OFF) loop.animateFloat(1f, 1.025f, infiniteRepeatable(tween(1600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe").value else 1f
+    // with the glasses on: now and then the crown hops and a shine sweeps across the lenses
+    val hop = remember { Animatable(0f) }
+    val shine = remember { Animatable(0f) }
+    LaunchedEffect(state) {
+        if (state != PowerState.ON) return@LaunchedEffect
+        while (true) {
+            delay(3500L + Random.nextLong(3500L))
+            launch { shine.snapTo(0f); shine.animateTo(1f, tween(520, easing = FastOutSlowInEasing)); shine.snapTo(0f) }
+            hop.animateTo(1f, tween(160))
+            hop.animateTo(0f, spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessMediumLow))
+        }
+    }
 
     Canvas(
         modifier
             .size(width, width * (ART_H / ART_W))
-            .graphicsLayer { scaleX = press.value; scaleY = press.value * press.value; rotationZ = tilt; translationX = shake.dp.toPx() }
+            .graphicsLayer { scaleX = press.value * breathe; scaleY = press.value * press.value * breathe; rotationZ = tilt; translationX = shake.dp.toPx() }
             .clickable(interactionSource = source, indication = null, role = Role.Button) {
                 haptic.performHapticFeedback(if (state == PowerState.OFF) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
                 scope.launch {
@@ -140,8 +160,8 @@ fun MognuMascot(
         // crown: askew while asleep, straight and lifted, golden when on
         val crown = path(84f to 44f, 80f to 2f, 104f to 22f, 120f to -10f, 136f to 22f, 160f to 2f, 156f to 44f)
         val pivot = p(120f, 30f)
-        translate(-8 * s * off, (6 * off - 6 * on) * s) {
-            rotate(-16f * off, pivot) {
+        translate(-8 * s * off, (6 * off - 6 * on - 14 * hop.value) * s) {
+            rotate(-16f * off - 6f * hop.value, pivot) {
                 drawPath(crown, Color.White, style = Stroke(14 * s, join = StrokeJoin.Round))
                 drawPath(crown, lerp(Ink, Gold, on))
             }
@@ -187,6 +207,12 @@ fun MognuMascot(
                 q(108f, 152f, 98f, 152f); l(80f, 152f); q(70f, 152f, 64f, 146f); l(54f, 120f); close()
             }
             drawPath(glasses, ink)
+            if (shine.value > 0f) clipPath(glasses) {
+                val dx = -130f + 260f * shine.value
+                val shineColor = Color.White.copy(alpha = 0.35f * on)
+                drawPath(path(70f + dx to 108f, 84f + dx to 108f, 66f + dx to 152f, 52f + dx to 152f), shineColor)
+                drawPath(path(92f + dx to 108f, 98f + dx to 108f, 80f + dx to 152f, 74f + dx to 152f), shineColor)
+            }
             val glint = Color.White.copy(alpha = 0.6f * on)
             drawLine(glint, p(78f, 116f), p(96f, 116f), 5 * s, StrokeCap.Round)
             drawLine(glint, p(150f, 116f), p(166f, 116f), 5 * s, StrokeCap.Round)

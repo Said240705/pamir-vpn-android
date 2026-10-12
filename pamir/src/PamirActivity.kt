@@ -2773,7 +2773,7 @@ class PamirActivity : AppCompatActivity() {
         val days = o.optInt("duration_days")
         NoteCard(
             PamirIcons.Star, "Пробный период — бесплатно",
-            "${o.optString("name").takeIf { it.isNotBlank() && it != "null" } ?: "VPN"} на $days ${plural(days, "день", "дня", "дней")}. Один раз, без оплаты и привязки карты.",
+            "Mognu на $days ${plural(days, "день", "дня", "дней")}. Один раз, без оплаты и привязки карты.",
             Tone.ACCENT
         ) {
             PrimaryButton("Попробовать бесплатно", icon = PamirIcons.Bolt, loading = trialBusy) { activateTrial() }

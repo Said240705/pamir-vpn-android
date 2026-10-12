@@ -50,7 +50,7 @@ class WidgetProvider : AppWidgetProvider() {
             views.setInt(R.id.layout_background, "setBackgroundResource", R.drawable.pamir_widget_btn_on)
             views.setImageViewResource(R.id.image_switch, R.drawable.pamir_ic_power_dark)
             views.setTextViewText(R.id.widget_status, "Защищено · " + PamirWatch.selectedTitle())
-            views.setTextColor(R.id.widget_status, 0xFF2BEFC0.toInt())
+            views.setTextColor(R.id.widget_status, 0xFFC8FF2E.toInt())
         } else {
             views.setInt(R.id.layout_background, "setBackgroundResource", R.drawable.pamir_widget_btn_off)
             views.setImageViewResource(R.id.image_switch, R.drawable.pamir_ic_power_light)

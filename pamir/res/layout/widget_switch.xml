@@ -39,8 +39,8 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:singleLine="true"
-            android:text="Pamir VPN"
-            android:textColor="#FFEEF3F7"
+            android:text="Mognu"
+            android:textColor="#FFF4F4F8"
             android:textSize="14sp"
             android:textStyle="bold" />
 
@@ -51,7 +51,7 @@
             android:ellipsize="end"
             android:singleLine="true"
             android:text="Не подключено"
-            android:textColor="#FF8494A8"
+            android:textColor="#FF8E8EA6"
             android:textSize="12sp" />
     </LinearLayout>
 

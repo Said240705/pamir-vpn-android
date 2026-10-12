@@ -97,7 +97,7 @@ object PamirWatch {
 
     /** "🇪🇸 Испания 1" for notifications, tile and widget. */
     fun title(remarks: String?): String {
-        if (remarks.isNullOrBlank()) return "Pamir VPN"
+        if (remarks.isNullOrBlank()) return "Mognu"
         val (flag, name) = cleanName(remarks)
         return "$flag $name"
     }
@@ -111,7 +111,7 @@ object PamirWatch {
     }
 
     fun selectedTitle(): String =
-        MmkvManager.getSelectServer()?.let { MmkvManager.decodeServerConfig(it) }?.let { title(it.remarks) } ?: "Pamir VPN"
+        MmkvManager.getSelectServer()?.let { MmkvManager.decodeServerConfig(it) }?.let { title(it.remarks) } ?: "Mognu"
 
     // ---------- required update ----------
 
@@ -165,7 +165,7 @@ object PamirWatch {
             Log.w(TAG, "core stopped, byUser=$byUser")
             if (!byUser && alertsOn()) {
                 notify(
-                    ctx, "Pamir VPN отключился",
+                    ctx, "Mognu отключился",
                     "Соединение прервано. Нажмите, чтобы подключиться снова",
                     EXTRA_RECONNECT, "Подключить"
                 )
@@ -398,7 +398,7 @@ object PamirWatch {
         )
         val b = NotificationCompat.Builder(ctx, channel)
             .setSmallIcon(R.drawable.ic_stat_name)
-            .setColor(0xFF2BEFC0.toInt())
+            .setColor(0xFFC8FF2E.toInt())
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Pamir VPN branding for the v2rayNG sources. Runs in CI before the Gradle build.
+"""Mognu (Pamir) branding for the v2rayNG sources. Runs in CI before the Gradle build.
 
 Env:
   PAMIR_OWNER    GitHub owner of the pamir-vpn-android repo (for update checks)
   PAMIR_VERSION  versionName, e.g. 1.0.0 (must be digits and dots for the update checker)
   PAMIR_CODE     integer versionCode (monotonic, e.g. 1000 + run number)
+  PAMIR_TEST     1 = private test build: own package (installs next to the real app), name «Mognu тест»
 """
 import glob
-import io
 import os
 import re
 import sys
-import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'V2rayNG', 'app'))
 MAIN = os.path.join(ROOT, 'src', 'main')
@@ -19,11 +18,16 @@ PKG = os.path.join(MAIN, 'java', 'com', 'v2ray', 'ang')
 OWNER = os.environ.get('PAMIR_OWNER', 'pamirvpn')
 VERSION = os.environ.get('PAMIR_VERSION', '1.0.0')
 CODE = os.environ.get('PAMIR_CODE', '1000')
-APP_NAME = 'Pamir VPN'
-ASSETS = 'https://app.pamirlink.ru/assets/'
+TEST = os.environ.get('PAMIR_TEST') == '1'
+BRAND = 'Mognu'
+APP_NAME = BRAND + (' тест' if TEST else '')
+PACKAGE = 'ru.pamirlink.vpn' + ('.test' if TEST else '')
+BRAND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res', 'brand')
 
-MINT, MINT_DEEP = '2BEFC0', '17B896'
-BG, SURFACE, SURFACE_HI = '0B1420', '101B2A', '17243A'
+# Mognu palette: lime accent on near-black, violet carries the accent in the light theme
+MINT, MINT_DEEP = 'C8FF2E', 'A3E000'
+VIOLET, VIOLET_DEEP = '6A3DF5', '5428E0'
+BG, SURFACE, SURFACE_HI = '1E1640', '2A2058', '352A68'
 
 
 def edit(path, pairs, required=True):
@@ -41,7 +45,7 @@ def edit(path, pairs, required=True):
 
 # 1. package id, version, apk names
 edit(os.path.join(ROOT, 'build.gradle.kts'), [
-    ('applicationId = "com.v2ray.ang"', 'applicationId = "ru.pamirlink.vpn"'),
+    ('applicationId = "com.v2ray.ang"', f'applicationId = "{PACKAGE}"'),
     ('    namespace = "com.v2ray.ang"\n', '    namespace = "com.v2ray.ang"\n    lint { checkReleaseBuilds = false }\n'),
     (re.compile(r'versionCode = \d+'), f'versionCode = {int(CODE)}'),
     (re.compile(r'versionName = "[^"]*"'), f'versionName = "{VERSION}"'),
@@ -68,16 +72,16 @@ edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
 # 5. colours: dark by default, no Material You override, mint accents
 theme = os.path.join(PKG, 'ui', 'compose', 'Theme.kt')
 dark = {
-    'primary': MINT, 'onPrimary': '05241D', 'primaryContainer': '0F3B31', 'onPrimaryContainer': 'B8FFEA',
-    'secondary': MINT, 'onSecondary': '05241D', 'secondaryContainer': '0F3B31', 'onSecondaryContainer': 'B8FFEA',
-    'tertiary': MINT, 'onTertiary': '05241D',
-    'background': BG, 'surface': BG, 'surfaceTint': MINT, 'inversePrimary': '0F6B57',
-    'surfaceVariant': SURFACE_HI, 'outlineVariant': '24344D',
-    'surfaceContainerLowest': '070E17', 'surfaceContainerLow': SURFACE, 'surfaceContainer': SURFACE,
-    'surfaceContainerHigh': SURFACE_HI, 'surfaceContainerHighest': '1D2C45',
+    'primary': MINT, 'onPrimary': '0A0A10', 'primaryContainer': '2E3A0A', 'onPrimaryContainer': 'E6FFB0',
+    'secondary': MINT, 'onSecondary': '0A0A10', 'secondaryContainer': '2E3A0A', 'onSecondaryContainer': 'E6FFB0',
+    'tertiary': MINT, 'onTertiary': '0A0A10',
+    'background': BG, 'surface': BG, 'surfaceTint': MINT, 'inversePrimary': '4A6A00',
+    'surfaceVariant': SURFACE_HI, 'outlineVariant': '453A80',
+    'surfaceContainerLowest': '160F33', 'surfaceContainerLow': SURFACE, 'surfaceContainer': SURFACE,
+    'surfaceContainerHigh': SURFACE_HI, 'surfaceContainerHighest': '3F3378',
 }
-light = {'primary': MINT_DEEP, 'onPrimary': 'FFFFFF', 'secondary': MINT_DEEP, 'onSecondary': 'FFFFFF',
-         'secondaryContainer': 'D3FBEF', 'onSecondaryContainer': '00382E', 'surfaceTint': MINT_DEEP}
+light = {'primary': VIOLET, 'onPrimary': 'FFFFFF', 'secondary': VIOLET, 'onSecondary': 'FFFFFF',
+         'secondaryContainer': 'E6DEFF', 'onSecondaryContainer': '1F0A66', 'surfaceTint': VIOLET}
 s = open(theme, encoding='utf-8').read()
 for name, colors in (('DarkColor', dark), ('LightColor', light)):
     m = re.search(r'private val %s = \w+ColorScheme\((.*?)\n\)' % name, s, re.S)
@@ -89,8 +93,8 @@ for name, colors in (('DarkColor', dark), ('LightColor', light)):
         if n != 1:
             sys.exit(f'brand: {name}.{key} not found')
     s = s[:m.start(1)] + block + s[m.end(1):]
-s = s.replace('val colorFabActive = Color(0xFFf97910)', f'val colorFabActive = Color(0xFF{MINT_DEEP})')
-s = s.replace('val colorConfigType = Color(0xFFf97910)', f'val colorConfigType = Color(0xFF{MINT_DEEP})')
+s = s.replace('val colorFabActive = Color(0xFFf97910)', f'val colorFabActive = Color(0xFF{VIOLET})')
+s = s.replace('val colorConfigType = Color(0xFFf97910)', f'val colorConfigType = Color(0xFF{VIOLET})')
 s = s.replace('decodeSettingsString(AppConfig.PREF_UI_MODE_NIGHT, "0") ?: "0"', 'decodeSettingsString(AppConfig.PREF_UI_MODE_NIGHT, "2") ?: "2"')
 s = s.replace('decodeSettingsBool(AppConfig.PREF_DYNAMIC_COLOR, true)', 'decodeSettingsBool(AppConfig.PREF_DYNAMIC_COLOR, false)')
 open(theme, 'w', encoding='utf-8').write(s)
@@ -99,25 +103,16 @@ edit(os.path.join(PKG, 'ui', 'settings', 'SettingsActivity.kt'), [
     ('rememberMmkvBool(AppConfig.PREF_DYNAMIC_COLOR, true)', 'rememberMmkvBool(AppConfig.PREF_DYNAMIC_COLOR, false)'),
 ])
 
-# 6. launcher icons from the Pamir logo
+# 6. launcher icons: Mognu crowned M from pamir/res/brand (kept in the repo, so a build never depends on the site)
 from PIL import Image, ImageDraw  # noqa: E402
 
-
-def fetch(name):
-    local = os.environ.get('PAMIR_ASSETS_DIR')
-    if local:
-        return Image.open(os.path.join(local, name)).convert('RGBA')
-    req = urllib.request.Request(ASSETS + name, headers={'User-Agent': 'pamir-ci'})
-    return Image.open(io.BytesIO(urllib.request.urlopen(req, timeout=60).read())).convert('RGBA')
-
-
-icon = fetch('icon-512.webp')   # full square icon (dark bg + mark)
-mark = fetch('logo.webp')       # transparent mark
+icon = Image.open(os.path.join(BRAND_DIR, 'icon.png')).convert('RGBA')   # full square icon (lime + mark)
+mark = Image.open(os.path.join(BRAND_DIR, 'mark.png')).convert('RGBA')   # transparent dark mark
 bbox = mark.getbbox()
 if bbox:
     mark = mark.crop(bbox)
 
-edit(os.path.join(MAIN, 'res', 'values', 'ic_launcher_background.xml'), [('#FFFFFF', '#FF' + SURFACE)])
+edit(os.path.join(MAIN, 'res', 'values', 'ic_launcher_background.xml'), [('#FFFFFF', '#FF' + MINT)])
 sizes = {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}
 for dens, px in sizes.items():
     d = os.path.join(MAIN, 'res', 'mipmap-' + dens)
@@ -169,7 +164,7 @@ edit(os.path.join(PKG, 'util', 'HttpUtil.kt'), [
 # 8. imported subscription is called "Pamir VPN"; empty groups (e.g. "Default") are hidden,
 #    so right after import the user lands on the list with servers
 edit(os.path.join(PKG, 'handler', 'AngConfigManager.kt'), [
-    ('subItem.remarks = uri.fragment ?: "import sub"', 'subItem.remarks = uri.fragment ?: "Pamir VPN"'),
+    ('subItem.remarks = uri.fragment ?: "import sub"', f'subItem.remarks = uri.fragment ?: "{BRAND}"'),
 ])
 # «Расширенные настройки» open the stock v2rayNG screen on top of Pamir in the same task: Back must return to Pamir
 # (upstream sends the whole task to the background there, so the user could not get back).
@@ -192,7 +187,11 @@ import shutil
 dst = os.path.join(PKG, 'pamir')
 os.makedirs(dst, exist_ok=True)
 shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src', 'PamirActivity.kt'), os.path.join(dst, 'PamirActivity.kt'))
-logo = mark.copy(); logo.thumbnail((256, 256), Image.LANCZOS)
+# in-app logo: the full rounded icon (the dark mark alone would vanish on the dark theme)
+logo = icon.resize((256, 256), Image.LANCZOS)
+lmask = Image.new('L', (256, 256), 0)
+ImageDraw.Draw(lmask).rounded_rectangle((0, 0, 255, 255), radius=56, fill=255)
+logo.putalpha(lmask)
 os.makedirs(os.path.join(MAIN, 'res', 'drawable-nodpi'), exist_ok=True)
 logo.save(os.path.join(MAIN, 'res', 'drawable-nodpi', 'pamir_logo.png'))
 edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
@@ -232,8 +231,9 @@ shutil.copy(os.path.join(SRC, 'QSTileService.kt'), os.path.join(PKG, 'service', 
 shutil.copy(os.path.join(SRC, 'WidgetProvider.kt'), os.path.join(PKG, 'receiver', 'WidgetProvider.kt'))
 for f in glob.glob(os.path.join(MAIN, 'res', 'drawable-*dpi', 'ic_stat_*.png')):
     os.remove(f)
-for sub in ('layout', 'drawable', 'xml'):
-    for f in glob.glob(os.path.join(RES, sub, '*.xml')):
+for sub in ('layout', 'drawable', 'xml', 'font'):
+    os.makedirs(os.path.join(MAIN, 'res', sub), exist_ok=True)
+    for f in glob.glob(os.path.join(RES, sub, '*.xml' if sub != 'font' else '*.ttf')):
         shutil.copy(f, os.path.join(MAIN, 'res', sub, os.path.basename(f)))
 # Android TV launcher banner: our PNG replaces the v2rayNG one; the adaptive banner (API 26+) would win over it
 shutil.copy(os.path.join(RES, 'mipmap-xhdpi', 'ic_banner.png'), os.path.join(MAIN, 'res', 'mipmap-xhdpi', 'ic_banner.png'))
@@ -242,8 +242,8 @@ if os.path.exists(banner_xml):
     os.remove(banner_xml)
 for f in glob.glob(os.path.join(MAIN, 'res', 'values*', 'strings.xml')):
     edit(f, [
-        (re.compile(r'<string name="app_widget_name">[^<]*</string>'), '<string name="app_widget_name">Pamir VPN</string>'),
-        (re.compile(r'<string name="app_tile_name">[^<]*</string>'), '<string name="app_tile_name">Pamir VPN</string>'),
+        (re.compile(r'<string name="app_widget_name">[^<]*</string>'), f'<string name="app_widget_name">{BRAND}</string>'),
+        (re.compile(r'<string name="app_tile_name">[^<]*</string>'), f'<string name="app_tile_name">{BRAND}</string>'),
     ], required=False)
 
 PROBE_FN = """    /** Pamir watchdog probe: delay through the running core, -1 = no answer, -2 = not running. */
@@ -295,7 +295,7 @@ SPEED_FN = """    private fun appendSpeedString(text: StringBuilder, name: Strin
 nm = os.path.join(PKG, 'handler', 'NotificationManager.kt')
 edit(nm, [
     ('.setContentTitle(currentConfig?.remarks ?: service.getString(R.string.app_name))',
-     '.setContentTitle(currentConfig?.remarks?.let { com.v2ray.ang.pamir.PamirWatch.title(it) } ?: service.getString(R.string.app_name))\n            .setColor(0xFF2BEFC0.toInt())'),
+     '.setContentTitle(currentConfig?.remarks?.let { com.v2ray.ang.pamir.PamirWatch.title(it) } ?: service.getString(R.string.app_name))\n            .setColor(0xFF' + MINT + '.toInt())'),
     (re.compile(r'    private fun appendSpeedString\(text: StringBuilder, name: String\?, up: Double, down: Double\) \{.*?\n    \}\n', re.S),
      lambda m: SPEED_FN),
 ])
@@ -306,4 +306,4 @@ edit(os.path.join(PKG, 'AngApplication.kt'), [
     ('        MmkvManager.initialize(this)\n', '        MmkvManager.initialize(this)\n        com.v2ray.ang.pamir.PamirCrash.install(this)\n'),
 ])
 
-print(f'brand: ok -> ru.pamirlink.vpn {VERSION} ({CODE}), owner {OWNER}')
+print(f'brand: ok -> {PACKAGE} «{APP_NAME}» {VERSION} ({CODE}), owner {OWNER}')

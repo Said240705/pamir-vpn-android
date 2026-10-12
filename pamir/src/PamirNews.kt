@@ -52,7 +52,7 @@ object PamirNews {
         val title = text.lineSequence().first().take(60)
         PamirWatch.notify(
             ctx, title, text, EXTRA_NEWS, "Открыть", NOTIFY_ID,
-            channel = "pamir_news", channelName = "Новости Pamir VPN", channelDesc = "Новые серверы, акции и важные сообщения"
+            channel = "pamir_news", channelName = "Новости Mognu", channelDesc = "Новые серверы, акции и важные сообщения"
         )
     }
 

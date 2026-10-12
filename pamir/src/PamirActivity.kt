@@ -93,6 +93,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -144,7 +146,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 
-private const val CABINET_URL = "https://app.pamirlink.ru/?from=android"
 private const val BOT_URL = "https://t.me/pamirlink_bot"
 private const val PREF_RU_DIRECT = "pamir_ru_direct"
 private const val PREF_ROUTING_INIT = "pamir_routing_init"
@@ -155,8 +156,6 @@ private const val PREF_SMART_LTE = "pamir_smart_lte"
 private const val PREF_TV_BOOT_INIT = "pamir_tv_boot_init"
 private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
 private const val PREF_PREFERRED = "pamir_preferred"
-private const val UPDATE_JSON = "https://app.pamirlink.ru/download/android.json"
-private const val DOWNLOAD_BASE = "https://app.pamirlink.ru/download/"
 /** Latest non-prerelease build; AppConfig.APP_URL is github.com/<owner>/pamir-vpn-android after branding. */
 private val GITHUB_LATEST = AppConfig.APP_URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest"
 private const val PREF_THEME = "pamir_theme"
@@ -390,6 +389,7 @@ class PamirActivity : AppCompatActivity() {
             delay(4000)
             runCatching { PamirCrash.sendPending(applicationContext, proxyPort()) }
             runCatching { PamirApi.pingInstall(applicationContext, proxyPort()) }
+            runCatching { PamirHosts.refresh(proxyPort()) }
         }
         if (loggedIn) {
             refreshAccount()
@@ -578,7 +578,7 @@ class PamirActivity : AppCompatActivity() {
         if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
         if (MmkvManager.decodeSettingsBool("pamir_notif_asked", false)) {
             if (fromSettings) {
-                toast("Разрешите уведомления для Pamir VPN", true)
+                toast("Разрешите уведомления для Mognu", true)
                 runCatching {
                     startActivity(
                         Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -1046,8 +1046,8 @@ class PamirActivity : AppCompatActivity() {
     /** Message for WhatsApp/Telegram: how to install the app and connect this key on another phone. */
     private fun shareKey(k: JSONObject) {
         // open-app.html opens Pamir VPN with the key on Android and offers Incy/Happ on iPhone
-        val link = "https://app.pamirlink.ru/open-app.html?url=" + Uri.encode(k.optString("subscription_url"))
-        val text = "Pamir VPN — ключ «${keyName(k)}»\n\n" +
+        val link = PamirHosts.web("/open-app.html?url=") + Uri.encode(k.optString("subscription_url"))
+        val text = "Mognu — ключ «${keyName(k)}»\n\n" +
             "Откройте ссылку на телефоне — VPN подключится в один клик:\n$link\n\n" +
             "Если приложения ещё нет, ссылка предложит его скачать."
         runCatching {
@@ -1617,13 +1617,16 @@ class PamirActivity : AppCompatActivity() {
         return if (v.isNotBlank() && url != null) UpdateSource(v, url, min) else null
     }
 
-    /** The site mirror (download/android.json), kept for when GitHub is slow or blocked. */
+    /** The site mirror (download/android.json), kept for when GitHub is slow or blocked; the first host that answers. */
     private fun updateFromSite(): UpdateSource? {
-        val o = JSONObject(httpGet(UPDATE_JSON))
-        val v = o.optString("version")
-        val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
-        val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
-        return if (v.isNotBlank()) UpdateSource(v, DOWNLOAD_BASE + file, o.optString("min_version")) else null
+        for (h in PamirHosts.ordered()) {
+            val o = runCatching { JSONObject(httpGet("$h/download/android.json")) }.getOrNull() ?: continue
+            val v = o.optString("version")
+            val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
+            val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
+            return if (v.isNotBlank()) UpdateSource(v, "$h/download/$file", o.optString("min_version")) else null
+        }
+        return null
     }
 
     /** Asks GitHub and the site in parallel; offers the newest version and every source that has it. */
@@ -1946,7 +1949,7 @@ class PamirActivity : AppCompatActivity() {
                 Text("Важное обновление", style = PamirType.title, color = c.text, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(Gap.s))
                 Text(
-                    "Вышла новая версия Pamir VPN — без неё приложение дальше не откроется. " +
+                    "Вышла новая версия Mognu — без неё приложение дальше не откроется. " +
                         "Обновление займёт минуту, подписка и настройки сохранятся.",
                     style = PamirType.body, color = c.textDim, textAlign = TextAlign.Center
                 )
@@ -1964,8 +1967,8 @@ class PamirActivity : AppCompatActivity() {
                 Spacer(Modifier.height(Gap.s))
                 TextAction("Скачать с сайта", color = c.accentText) {
                     openUrl(
-                        DOWNLOAD_BASE + if (prefersArm64()) "pamir-vpn.apk" else "pamir-vpn-universal.apk",
-                        "Скачать Pamir VPN", "Откройте ссылку на телефоне и установите файл"
+                        PamirHosts.web("/download/") + if (prefersArm64()) "pamir-vpn.apk" else "pamir-vpn-universal.apk",
+                        "Скачать Mognu", "Откройте ссылку на телефоне и установите файл"
                     )
                 }
                 TextAction("Поддержка", icon = PamirIcons.Chat) { openUrl(BOT_URL, "Поддержка", "Отсканируйте код телефоном — ответим в Telegram") }
@@ -2070,7 +2073,7 @@ class PamirActivity : AppCompatActivity() {
         LogoHero()
         Spacer(Modifier.height(Gap.l))
         Text(
-            "Добро пожаловать\nв Pamir VPN", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
+            "Добро пожаловать\nв Mognu", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
             modifier = Modifier.semantics { heading() }
         )
         Spacer(Modifier.height(Gap.s))
@@ -2190,42 +2193,54 @@ class PamirActivity : AppCompatActivity() {
                 running -> PowerState.ON
                 else -> PowerState.OFF
             }
-            val stateText = when (power) {
-                PowerState.CONNECTING -> "Подключение…"
-                PowerState.ON -> "Защищено"
-                PowerState.OFF -> "Не подключено"
+            val say = when (power) {
+                PowerState.CONNECTING -> "Могу… могу…"
+                PowerState.ON -> "Ты всех могнул"
+                PowerState.OFF -> "Нажми — и всех могни"
             }
             val powerFocus = remember { FocusRequester() }
             LaunchedEffect(Unit) { if (tv) runCatching { powerFocus.requestFocus() } }
-            PowerButton(
+            // Mascot as in the Mognu sticker mockup: ~62% of the phone width; TV keeps it compact (short screen).
+            val screenW = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
+            val mascotW = if (tv) 150.dp else (screenW * 0.62f).coerceIn(200.dp, 250.dp)
+            Spacer(Modifier.height(Gap.m))
+            MognuMascot(
                 state = power,
                 label = if (running) "Отключить VPN" else "Подключить VPN",
-                stateLabel = stateText,
+                stateLabel = say,
                 onClick = { toggle() },
-                modifier = Modifier.focusRequester(powerFocus)
+                modifier = Modifier.focusRequester(powerFocus),
+                width = mascotW
             )
-            AnimatedContent(targetState = stateText, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "state") { s ->
+            Spacer(Modifier.height(Gap.m))
+            AnimatedContent(targetState = say, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "say") { t ->
                 Text(
-                    s, style = PamirType.headline, color = if (s == "Защищено") c.accentText else c.text,
+                    t, style = PamirType.hero.copy(fontSize = 26.sp, lineHeight = 31.sp), color = c.text, textAlign = TextAlign.Center,
                     modifier = Modifier
                         .clip(Radius.s)
                         .clickable(role = Role.Button) { toggle() }
                         .padding(horizontal = Gap.m, vertical = Gap.xs)
                 )
             }
-            if (running) {
-                Timer()
-            } else {
-                Text(
-                    if (connecting) "Устанавливаем защищённое соединение" else "Нажмите, чтобы защитить соединение",
-                    style = PamirType.support, color = c.textDim
-                )
+            val sub = when {
+                running -> listOfNotNull(current?.name, "подключено ${connectedFor()}").joinToString(", ")
+                connecting -> current?.let { "Подключаемся: ${it.name}" } ?: "Подключаемся"
+                else -> "Mognu дремлет. Разбуди его"
             }
-            Spacer(Modifier.height(Gap.xl))
-            if (current != null) ServerCard(current, onPick)
+            Text(
+                if (running && current != null) "$sub  ›" else sub, style = PamirType.bodyRegular, color = c.textDim, textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .clip(Radius.s)
+                    .clickable(enabled = running && current != null, role = Role.Button) { onPick() }
+                    .padding(horizontal = Gap.m, vertical = Gap.xs)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+            )
+            // Connected: one line of speeds (server is in the line above, tap it to change); off: the server card.
             AnimatedVisibility(visible = running, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                SpeedCard()
+                SpeedLine()
             }
+            Spacer(Modifier.height(Gap.l))
+            if (current != null && !running) ServerCard(current, onPick)
             if (!running && !tv) {
                 if (whitelist && current?.isLte != true) {
                     Spacer(Modifier.height(Gap.m))
@@ -2270,9 +2285,9 @@ class PamirActivity : AppCompatActivity() {
                 .padding(vertical = Gap.s),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Image(painterResource(R.drawable.pamir_logo), contentDescription = null, modifier = Modifier.size(28.dp))
+            Image(painterResource(R.drawable.pamir_logo), contentDescription = null, modifier = Modifier.size(30.dp))
             Spacer(Modifier.width(Gap.s))
-            Text("Pamir VPN", style = PamirType.subtitle, color = c.text, modifier = Modifier.weight(1f))
+            Text("Mognu", style = PamirType.brand, color = c.text, modifier = Modifier.weight(1f))
             val d = daysLeft
             val tone = if (d != null && d <= 3) Tone.WARN else Tone.ACCENT
             val left = when {
@@ -2436,18 +2451,19 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /** How long the VPN has been on, ticking every second while connected: «меньше минуты», «12 мин», «1 ч 05 мин». */
     @Composable
-    private fun Timer() {
+    private fun connectedFor(): String {
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         LaunchedEffect(running) {
             while (running) { now = System.currentTimeMillis(); delay(1000) }
         }
-        val sec = if (connectedAt > 0) ((now - connectedAt) / 1000).coerceAtLeast(0) else 0
-        val t = String.format("%02d:%02d:%02d", sec / 3600, (sec % 3600) / 60, sec % 60)
-        Text(
-            "В защите $t", style = PamirType.support.copy(fontFeatureSettings = "tnum"), color = Pamir.colors.textDim,
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.clearAndSetSemantics { contentDescription = "Подключено $t" }
-        )
+        val min = if (connectedAt > 0) ((now - connectedAt) / 60_000).coerceAtLeast(0) else 0
+        return when {
+            min < 1 -> "меньше минуты"
+            min < 60 -> "$min мин"
+            else -> "${min / 60} ч ${"%02d".format(min % 60)} мин"
+        }
     }
 
     @Composable
@@ -2503,67 +2519,29 @@ class PamirActivity : AppCompatActivity() {
     }
 
     @Composable
-    private fun SpeedCard() {
+    private fun SpeedLine() {
         val c = Pamir.colors
         LaunchedEffect(running) { if (running) speedLoop() }
-        PamirCard(Modifier.padding(top = Gap.m), contentPadding = 0.dp) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(start = Gap.l, end = Gap.l, top = Gap.l),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                SpeedValue(PamirIcons.ArrowDown, "Загрузка", rxSpeed, c.accentText, Modifier.weight(1f))
-                SpeedValue(PamirIcons.ArrowUp, "Отдача", txSpeed, c.info, Modifier.weight(1f))
-            }
-            Sparkline(
-                speedHist, if (c.isDark) c.accent else c.accentDeep,
-                Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-                    .padding(top = Gap.s)
-            )
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(c.surfaceHigh.copy(alpha = if (c.isDark) 0.55f else 0.7f))
-                    .padding(horizontal = Gap.l, vertical = Gap.m)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(PamirIcons.Globe, contentDescription = null, modifier = Modifier.size(16.dp), tint = c.textDim)
-                    Spacer(Modifier.width(Gap.s))
-                    Text(
-                        if (ipInfo.isNotEmpty()) "IP $ipInfo" else "Определяем IP…",
-                        style = PamirType.support, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "За сессию ↓ ${fmtBytes(rxTotal)}  ↑ ${fmtBytes(txTotal)}",
-                        style = PamirType.caption, color = c.textDim, maxLines = 1, modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        if (MmkvManager.decodeSettingsBool(PREF_RU_DIRECT, true)) "РФ напрямую" else "Всё через VPN",
-                        style = PamirType.caption.copy(fontWeight = FontWeight.SemiBold), color = c.textDim, maxLines = 1
-                    )
-                }
-            }
+        fun mbit(bytesPerSec: Long): String {
+            val v = bytesPerSec * 8 / 1_000_000.0
+            return if (v >= 100) "%.0f".format(v) else "%.1f".format(java.util.Locale.forLanguageTag("ru"), v)
         }
-    }
-
-    @Composable
-    private fun SpeedValue(icon: ImageVector, label: String, bps: Long, color: Color, modifier: Modifier) {
-        val c = Pamir.colors
-        Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(icon, tint = color, background = color.copy(alpha = 0.14f), size = 36.dp, iconSize = 18.dp, shape = CircleShape)
-            Spacer(Modifier.width(Gap.s + 2.dp))
-            Column {
-                Text(
-                    fmtBytes(bps) + "/с", style = PamirType.number.copy(fontSize = 19.sp, fontFeatureSettings = "tnum"),
-                    color = c.text, maxLines = 1
-                )
-                Text(label, style = PamirType.caption, color = c.textDim)
+        val num = PamirType.subtitle.copy(fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum")
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = Gap.m)
+                .clearAndSetSemantics { contentDescription = "Загрузка ${mbit(rxSpeed)}, отдача ${mbit(txSpeed)} мегабит в секунду" },
+            horizontalArrangement = Arrangement.spacedBy(Gap.xl, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("Загрузка ", style = PamirType.bodyRegular, color = c.textDim)
+                Text("${mbit(rxSpeed)} Мбит/с", style = num, color = c.text, maxLines = 1)
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("Отдача ", style = PamirType.bodyRegular, color = c.textDim)
+                Text(mbit(txSpeed), style = num, color = c.text, maxLines = 1)
             }
         }
     }
@@ -2751,7 +2729,7 @@ class PamirActivity : AppCompatActivity() {
                     "Так вы сможете продлевать подписку прямо здесь — в пару касаний, через СБП, карту или с баланса.", Tone.ACCENT
                 ) {
                     LoginButtons()
-                    TextAction("Продлить в личном кабинете", Modifier.align(Alignment.CenterHorizontally)) { openUrl(CABINET_URL) }
+                    TextAction("Продлить в личном кабинете", Modifier.align(Alignment.CenterHorizontally)) { openUrl(PamirHosts.web("/?from=android")) }
                 }
                 renewLoading -> {
                     SkeletonCard("Загружаем тарифы")
@@ -2783,7 +2761,7 @@ class PamirActivity : AppCompatActivity() {
         val days = o.optInt("duration_days")
         NoteCard(
             PamirIcons.Star, "Пробный период — бесплатно",
-            "${o.optString("name").takeIf { it.isNotBlank() && it != "null" } ?: "VPN"} на $days ${plural(days, "день", "дня", "дней")}. Один раз, без оплаты и привязки карты.",
+            "Mognu на $days ${plural(days, "день", "дня", "дней")}. Один раз, без оплаты и привязки карты.",
             Tone.ACCENT
         ) {
             PrimaryButton("Попробовать бесплатно", icon = PamirIcons.Bolt, loading = trialBusy) { activateTrial() }
@@ -2828,7 +2806,7 @@ class PamirActivity : AppCompatActivity() {
         if (list.isEmpty()) {
             Text("Тарифы сейчас недоступны. Попробуйте позже или продлите в кабинете.", style = PamirType.support, color = c.textDim)
             Spacer(Modifier.height(Gap.m))
-            SecondaryButton("Открыть кабинет") { openUrl(CABINET_URL) }
+            SecondaryButton("Открыть кабинет") { openUrl(PamirHosts.web("/?from=android")) }
             return
         }
         list.forEach { t ->
@@ -3132,7 +3110,7 @@ class PamirActivity : AppCompatActivity() {
             PrimaryButton("Поделиться ссылкой", icon = PamirIcons.Share) {
                 runCatching {
                     startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(Intent.EXTRA_TEXT, "Подключайся к Pamir VPN по моей ссылке — после оформления подписки получишь +7 дней в подарок: " + r.optString("link")), null))
+                        .putExtra(Intent.EXTRA_TEXT, "Подключайся к Mognu по моей ссылке — после оформления подписки получишь +7 дней в подарок: " + r.optString("link")), null))
                 }
             }
             TextAction("Скопировать ссылку", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Copy) { copyText("ref", r.optString("link")) }
@@ -3435,7 +3413,7 @@ class PamirActivity : AppCompatActivity() {
                         if (updProgress >= 0) "Загрузка $updProgress%" else "Обновить", icon = PamirIcons.Download
                     ) { installUpdate() }
                 }
-                "latest" -> NoteCard(PamirIcons.Check, "У вас последняя версия", "Pamir VPN ${appVersion()} — обновлений нет.", Tone.ACCENT) {
+                "latest" -> NoteCard(PamirIcons.Check, "У вас последняя версия", "Mognu ${appVersion()} — обновлений нет.", Tone.ACCENT) {
                     PrimaryButton("Отлично") { onDismiss() }
                 }
                 else -> NoteCard(PamirIcons.Warning, "Не удалось проверить", "Проверьте интернет и попробуйте ещё раз.", Tone.WARN) {
@@ -3732,8 +3710,8 @@ class PamirActivity : AppCompatActivity() {
         PamirSheet(
             onDismiss = onDismiss,
             title = if (reg) "Регистрация" else "Вход по почте",
-            subtitle = if (reg) "Создайте аккаунт Pamir VPN — подписку оформите сразу после этого"
-            else "Почта и пароль от личного кабинета Pamir VPN"
+            subtitle = if (reg) "Создайте аккаунт Mognu — подписку оформите сразу после этого"
+            else "Почта и пароль от личного кабинета Mognu"
         ) {
             OutlinedTextField(
                 value = email, onValueChange = { email = it.trim() }, singleLine = true,

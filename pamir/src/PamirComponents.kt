@@ -1,5 +1,6 @@
 package com.v2ray.ang.pamir
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -12,6 +13,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -64,6 +68,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -83,6 +88,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 // Stateless building blocks of the Pamir screens. They know nothing about the VPN or the API:
 // the activity passes text, state and callbacks in.
@@ -339,7 +345,7 @@ fun pamirSwitchColors() = SwitchDefaults.colors(
     checkedThumbColor = Color.White,
     checkedBorderColor = Color.Transparent,
     uncheckedTrackColor = Pamir.colors.track,
-    uncheckedThumbColor = if (Pamir.colors.isDark) Color(0xFFB8C4D2) else Color.White,
+    uncheckedThumbColor = if (Pamir.colors.isDark) Color(0xFFA9A7BC) else Color.White,
     uncheckedBorderColor = Color.Transparent,
 )
 
@@ -479,78 +485,10 @@ fun PingBars(quality: PingQuality, modifier: Modifier = Modifier) {
     }
 }
 
-// ---------- power button ----------
+// ---------- connect state ----------
 
+/** VPN state shown by the home screen mascot ([MognuMascot]). */
 enum class PowerState { OFF, CONNECTING, ON }
-
-/**
- * The main connect button. Colors cross-fade between states, a spinning arc shows connecting,
- * the glow breathes while protected; every press gives haptic feedback.
- * Infinite animations run only in the states that show them.
- */
-@Composable
-fun PowerButton(state: PowerState, label: String, stateLabel: String, onClick: () -> Unit, modifier: Modifier = Modifier, size: Dp = 172.dp) {
-    val c = Pamir.colors
-    val haptic = LocalHapticFeedback.current
-    val on by animateFloatAsState(if (state == PowerState.ON) 1f else 0f, tween(600), label = "on")
-    val busy by animateFloatAsState(if (state == PowerState.CONNECTING) 1f else 0f, tween(300), label = "busy")
-    val spin = if (state == PowerState.CONNECTING) {
-        rememberInfiniteTransition(label = "spin")
-            .animateFloat(0f, 360f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "spinAngle").value
-    } else 0f
-    val breathe = if (state == PowerState.ON) {
-        rememberInfiniteTransition(label = "breathe")
-            .animateFloat(0.55f, 1f, infiniteRepeatable(tween(2200, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "glow").value
-    } else 1f
-    Box(modifier.size(size * 1.45f), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize()) {
-            val glow = 0.32f * on * breathe + 0.16f * busy
-            if (glow > 0.01f) {
-                val r = this.size.minDimension / 2
-                drawCircle(Brush.radialGradient(listOf(c.accent.copy(alpha = glow), Color.Transparent), center, r), r)
-            }
-        }
-        Box(
-            Modifier
-                .size(size)
-                .shadow(if (c.isDark) 0.dp else 14.dp, CircleShape, spotColor = c.accentDeep.copy(alpha = 0.35f))
-                .clip(CircleShape)
-                .clickable(role = Role.Button) {
-                    haptic.performHapticFeedback(if (state == PowerState.OFF) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
-                    onClick()
-                }
-                .semantics {
-                    contentDescription = label
-                    stateDescription = stateLabel
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(Modifier.fillMaxSize()) {
-                val r = this.size.minDimension / 2
-                drawCircle(Brush.verticalGradient(listOf(lerp(c.powerOff[0], c.powerOn[0], on), lerp(c.powerOff[1], c.powerOn[1], on))), r)
-                val stroke = 3.dp.toPx()
-                val inset = stroke / 2
-                val ringSize = Size(this.size.width - stroke, this.size.height - stroke)
-                drawCircle(lerp(c.line, c.accent, on), r - inset, style = Stroke(stroke))
-                if (busy > 0.01f) {
-                    drawArc(
-                        c.accent.copy(alpha = busy), startAngle = spin - 90f, sweepAngle = 110f, useCenter = false,
-                        topLeft = Offset(inset, inset), size = ringSize, style = Stroke(stroke, cap = StrokeCap.Round)
-                    )
-                }
-                val ic = lerp(c.powerIconOff, c.accentText, maxOf(on, busy * 0.6f))
-                val ir = r * 0.30f
-                val w = r * 0.075f
-                drawArc(
-                    ic, startAngle = -60f, sweepAngle = 300f, useCenter = false,
-                    topLeft = Offset(center.x - ir, center.y - ir + ir * 0.12f), size = Size(ir * 2, ir * 2),
-                    style = Stroke(width = w, cap = StrokeCap.Round)
-                )
-                drawLine(ic, Offset(center.x, center.y - ir * 1.15f), Offset(center.x, center.y - ir * 0.05f), strokeWidth = w, cap = StrokeCap.Round)
-            }
-        }
-    }
-}
 
 @Composable
 fun Sparkline(values: List<Float>, color: Color, modifier: Modifier = Modifier) {
@@ -763,7 +701,7 @@ fun pamirFieldColors(): TextFieldColors {
 fun PamirSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
     val c = Pamir.colors
     SnackbarHost(state, modifier) { data ->
-        val bg = if (c.isDark) c.surfaceHigh else Color(0xFF1B2636)
+        val bg = if (c.isDark) c.surfaceHigh else Color(0xFF1C1B26)
         val fg = if (c.isDark) c.text else Color.White
         Row(
             Modifier

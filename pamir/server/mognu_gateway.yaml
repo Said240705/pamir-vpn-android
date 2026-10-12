@@ -1,0 +1,42 @@
+openapi: 3.0.0
+info:
+  title: mognu
+  version: 1.0.0
+# Yandex API Gateway для mognu.app: весь сайт и API → origin.mognu.app (наш сервер), все методы, заголовки и query.
+# /download/… — переход на dl.mognu.app (Yandex CDN): шлюз не отдаёт ответы больше 2,5 МБ, а APK больше.
+paths:
+  /download/{file+}:
+    get:
+      parameters:
+      - name: file
+        in: path
+        required: true
+        schema:
+          type: string
+      x-yc-apigateway-integration:
+        type: dummy
+        http_code: 302
+        http_headers:
+          Location: https://dl.mognu.app/download/{file}
+          Cache-Control: no-cache
+        content:
+          '*': ''
+  /{path+}:
+    x-yc-apigateway-any-method:
+      parameters:
+      - name: path
+        in: path
+        required: false
+        schema:
+          type: string
+      x-yc-apigateway-integration:
+        type: http
+        url: https://origin.mognu.app/{path}
+        headers:
+          '*': '*'
+          Host: mognu.app
+        query:
+          '*': '*'
+        timeouts:
+          connect: 5
+          read: 60

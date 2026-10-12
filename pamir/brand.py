@@ -27,7 +27,7 @@ BRAND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res', 'bra
 # Mognu palette: lime accent on near-black, violet carries the accent in the light theme
 MINT, MINT_DEEP = 'C8FF2E', 'A3E000'
 VIOLET, VIOLET_DEEP = '6A3DF5', '5428E0'
-BG, SURFACE, SURFACE_HI = '09090F', '13131C', '1C1C28'
+BG, SURFACE, SURFACE_HI = '1E1640', '2A2058', '352A68'
 
 
 def edit(path, pairs, required=True):
@@ -76,9 +76,9 @@ dark = {
     'secondary': MINT, 'onSecondary': '0A0A10', 'secondaryContainer': '2E3A0A', 'onSecondaryContainer': 'E6FFB0',
     'tertiary': MINT, 'onTertiary': '0A0A10',
     'background': BG, 'surface': BG, 'surfaceTint': MINT, 'inversePrimary': '4A6A00',
-    'surfaceVariant': SURFACE_HI, 'outlineVariant': '2A2A3B',
-    'surfaceContainerLowest': '050508', 'surfaceContainerLow': SURFACE, 'surfaceContainer': SURFACE,
-    'surfaceContainerHigh': SURFACE_HI, 'surfaceContainerHighest': '252533',
+    'surfaceVariant': SURFACE_HI, 'outlineVariant': '453A80',
+    'surfaceContainerLowest': '160F33', 'surfaceContainerLow': SURFACE, 'surfaceContainer': SURFACE,
+    'surfaceContainerHigh': SURFACE_HI, 'surfaceContainerHighest': '3F3378',
 }
 light = {'primary': VIOLET, 'onPrimary': 'FFFFFF', 'secondary': VIOLET, 'onSecondary': 'FFFFFF',
          'secondaryContainer': 'E6DEFF', 'onSecondaryContainer': '1F0A66', 'surfaceTint': VIOLET}

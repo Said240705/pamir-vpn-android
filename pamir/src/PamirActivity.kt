@@ -2193,30 +2193,29 @@ class PamirActivity : AppCompatActivity() {
                 running -> PowerState.ON
                 else -> PowerState.OFF
             }
-            val stateText = when (power) {
-                PowerState.CONNECTING -> "Подключаем…"
-                PowerState.ON -> "Ты всех могнул 😎"
+            val say = when (power) {
+                PowerState.CONNECTING -> "Могу… могу…"
+                PowerState.ON -> "Ты всех могнул"
                 PowerState.OFF -> "Нажми — и всех могни"
             }
             val powerFocus = remember { FocusRequester() }
             LaunchedEffect(Unit) { if (tv) runCatching { powerFocus.requestFocus() } }
-            // Big button as in the Mognu mockup: ~62% of the phone width; TV keeps the compact one (short screen).
+            // Mascot as in the Mognu sticker mockup: ~62% of the phone width; TV keeps it compact (short screen).
             val screenW = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
-            val btn = if (tv) 172.dp else (screenW * 0.62f).coerceIn(200.dp, 260.dp)
-            Spacer(Modifier.height(Gap.s))
-            StatusChip(power)
-            PowerButton(
+            val mascotW = if (tv) 150.dp else (screenW * 0.62f).coerceIn(200.dp, 250.dp)
+            Spacer(Modifier.height(Gap.m))
+            MognuMascot(
                 state = power,
                 label = if (running) "Отключить VPN" else "Подключить VPN",
-                stateLabel = stateText,
+                stateLabel = say,
                 onClick = { toggle() },
                 modifier = Modifier.focusRequester(powerFocus),
-                size = btn,
-                word = if (power == PowerState.ON) "МОГНУЛ" else "МОГНУТЬ"
+                width = mascotW
             )
-            AnimatedContent(targetState = stateText, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "state") { s ->
+            Spacer(Modifier.height(Gap.m))
+            AnimatedContent(targetState = say, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "say") { t ->
                 Text(
-                    s, style = PamirType.title, color = c.text, textAlign = TextAlign.Center,
+                    t, style = PamirType.hero.copy(fontSize = 26.sp, lineHeight = 31.sp), color = c.text, textAlign = TextAlign.Center,
                     modifier = Modifier
                         .clip(Radius.s)
                         .clickable(role = Role.Button) { toggle() }
@@ -2224,23 +2223,24 @@ class PamirActivity : AppCompatActivity() {
                 )
             }
             val sub = when {
-                running -> "Интернет под защитой · " + (current?.name ?: "")
-                connecting -> "Устанавливаем защищённое соединение"
-                else -> "Подключим к самому быстрому серверу"
+                running -> listOfNotNull(current?.name, "подключено ${connectedFor()}").joinToString(", ")
+                connecting -> current?.let { "Подключаемся: ${it.name}" } ?: "Подключаемся"
+                else -> "Mognu дремлет. Разбуди его"
             }
             Text(
-                if (running && current != null) "$sub  ›" else sub, style = PamirType.support, color = c.textDim, textAlign = TextAlign.Center,
+                if (running && current != null) "$sub  ›" else sub, style = PamirType.bodyRegular, color = c.textDim, textAlign = TextAlign.Center,
                 modifier = Modifier
                     .clip(Radius.s)
                     .clickable(enabled = running && current != null, role = Role.Button) { onPick() }
                     .padding(horizontal = Gap.m, vertical = Gap.xs)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
             )
-            Spacer(Modifier.height(Gap.l))
-            // Connected: speed tiles only (server is in the line above, tap it to change); off: the server card.
-            if (current != null && !running) ServerCard(current, onPick)
+            // Connected: one line of speeds (server is in the line above, tap it to change); off: the server card.
             AnimatedVisibility(visible = running, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                SpeedCard()
+                SpeedLine()
             }
+            Spacer(Modifier.height(Gap.l))
+            if (current != null && !running) ServerCard(current, onPick)
             if (!running && !tv) {
                 if (whitelist && current?.isLte != true) {
                     Spacer(Modifier.height(Gap.m))
@@ -2451,32 +2451,18 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /** How long the VPN has been on, ticking every second while connected: «меньше минуты», «12 мин», «1 ч 05 мин». */
     @Composable
-    private fun StatusChip(power: PowerState) {
-        val c = Pamir.colors
+    private fun connectedFor(): String {
         var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
         LaunchedEffect(running) {
             while (running) { now = System.currentTimeMillis(); delay(1000) }
         }
-        val sec = if (connectedAt > 0) ((now - connectedAt) / 1000).coerceAtLeast(0) else 0
-        val t = String.format("%02d:%02d:%02d", sec / 3600, (sec % 3600) / 60, sec % 60)
-        val (text, fg, bg) = when (power) {
-            PowerState.ON -> Triple("Защищён · $t", c.accentText, c.accentSoft)
-            PowerState.CONNECTING -> Triple("Подключаем…", c.text, c.surfaceHigh)
-            PowerState.OFF -> Triple("Не защищён", c.textDim, c.surfaceHigh)
-        }
-        Row(
-            Modifier
-                .clip(CircleShape)
-                .background(bg)
-                .padding(horizontal = 14.dp, vertical = 7.dp)
-                .semantics { liveRegion = LiveRegionMode.Polite }
-                .clearAndSetSemantics { contentDescription = if (power == PowerState.ON) "Подключено $t" else text },
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(fg))
-            Spacer(Modifier.width(Gap.s))
-            Text(text, style = PamirType.label.copy(fontFeatureSettings = "tnum"), color = fg, maxLines = 1)
+        val min = if (connectedAt > 0) ((now - connectedAt) / 60_000).coerceAtLeast(0) else 0
+        return when {
+            min < 1 -> "меньше минуты"
+            min < 60 -> "$min мин"
+            else -> "${min / 60} ч ${"%02d".format(min % 60)} мин"
         }
     }
 
@@ -2533,28 +2519,30 @@ class PamirActivity : AppCompatActivity() {
     }
 
     @Composable
-    private fun SpeedCard() {
-        LaunchedEffect(running) { if (running) speedLoop() }
-        Row(Modifier.fillMaxWidth().padding(top = Gap.xs), horizontalArrangement = Arrangement.spacedBy(Gap.m)) {
-            SpeedTile("↓", "Мбит/с загрузка", rxSpeed, Modifier.weight(1f))
-            SpeedTile("↑", "Мбит/с отдача", txSpeed, Modifier.weight(1f))
-        }
-    }
-
-    @Composable
-    private fun SpeedTile(arrow: String, label: String, bytesPerSec: Long, modifier: Modifier) {
+    private fun SpeedLine() {
         val c = Pamir.colors
-        val mbit = bytesPerSec * 8 / 1_000_000.0
-        val v = if (mbit >= 100) "%.0f".format(mbit) else "%.1f".format(java.util.Locale.forLanguageTag("ru"), mbit)
-        Column(
-            modifier
-                .clip(Radius.l)
-                .background(c.surface)
-                .border(1.dp, c.line, Radius.l)
-                .padding(horizontal = Gap.l, vertical = Gap.m)
+        LaunchedEffect(running) { if (running) speedLoop() }
+        fun mbit(bytesPerSec: Long): String {
+            val v = bytesPerSec * 8 / 1_000_000.0
+            return if (v >= 100) "%.0f".format(v) else "%.1f".format(java.util.Locale.forLanguageTag("ru"), v)
+        }
+        val num = PamirType.subtitle.copy(fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum")
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = Gap.m)
+                .clearAndSetSemantics { contentDescription = "Загрузка ${mbit(rxSpeed)}, отдача ${mbit(txSpeed)} мегабит в секунду" },
+            horizontalArrangement = Arrangement.spacedBy(Gap.xl, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("$arrow $v", style = PamirType.title.copy(fontFeatureSettings = "tnum"), color = c.text, maxLines = 1)
-            Text(label, style = PamirType.caption, color = c.textDim, maxLines = 1)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("Загрузка ", style = PamirType.bodyRegular, color = c.textDim)
+                Text("${mbit(rxSpeed)} Мбит/с", style = num, color = c.text, maxLines = 1)
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("Отдача ", style = PamirType.bodyRegular, color = c.textDim)
+                Text(mbit(txSpeed), style = num, color = c.text, maxLines = 1)
+            }
         }
     }
 

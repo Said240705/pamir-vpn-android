@@ -345,7 +345,7 @@ fun pamirSwitchColors() = SwitchDefaults.colors(
     checkedThumbColor = Color.White,
     checkedBorderColor = Color.Transparent,
     uncheckedTrackColor = Pamir.colors.track,
-    uncheckedThumbColor = if (Pamir.colors.isDark) Color(0xFFB8C4D2) else Color.White,
+    uncheckedThumbColor = if (Pamir.colors.isDark) Color(0xFFA9A7BC) else Color.White,
     uncheckedBorderColor = Color.Transparent,
 )
 
@@ -797,7 +797,7 @@ fun pamirFieldColors(): TextFieldColors {
 fun PamirSnackbarHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
     val c = Pamir.colors
     SnackbarHost(state, modifier) { data ->
-        val bg = if (c.isDark) c.surfaceHigh else Color(0xFF1B2636)
+        val bg = if (c.isDark) c.surfaceHigh else Color(0xFF1C1B26)
         val fg = if (c.isDark) c.text else Color.White
         Row(
             Modifier

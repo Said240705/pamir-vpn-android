@@ -6,7 +6,8 @@
     python3 mognu_texts.py rollback вернуть все файлы из *.bak-mognu
 
 Правила (только внутри строковых литералов Python, комментарии и имена в коде не трогаются):
-  • «Pamir VPN» / «PamirVPN» / «Памир VPN» → «Mognu»;
+  • «Pamir VPN» / «Памир VPN» → «Mognu» (слитное «PamirVPN-Android» — метка приложения для сервера, не трогается);
+  • описания модулей и функций (docstring) не трогаются — их видят только разработчики;
   • отдельное слово «Pamir» / «Памир» → «Mognu» — только в строках с русским текстом (сообщения людям),
     служебные строки вроде логов и ключей настроек остаются как есть;
   • ссылки на страницы сайта (кабинет, лендинг, iPhone) → https://mognu.app/…;
@@ -24,7 +25,8 @@ from pathlib import Path
 
 ROOTS = [Path('/root/YadrenoVPN/bot'), Path('/root/pamir-vpn-miniapp/backend')]
 CYR = re.compile('[А-Яа-яЁё]')
-PHRASE = re.compile(r'Pamir\s?VPN|Памир\s?VPN|PAMIR\s?VPN')
+# only with a space: «PamirVPN-Android/» is the app's User-Agent the server checks — must stay
+PHRASE = re.compile(r'Pamir VPN|Памир VPN|PAMIR VPN')
 WORD = re.compile(r'(?<![\w/.@-])(Pamir|Памир)(?![\w_.-])')
 PAGES = [('https://app.pamirlink.ru/index.html', 'https://mognu.app/index.html'),
          ('https://app.pamirlink.ru/welcome.html', 'https://mognu.app/welcome.html'),
@@ -37,6 +39,8 @@ def fix_string(tok: str) -> str:
         new = WORD.sub('Mognu', new)
     for a, b in PAGES:
         new = new.replace(a, b)
+    if 'Mognu' in new:
+        new = new.replace('🏔', '👑')  # mountains belonged to Pamir; the crown is Mognu's
     return new
 
 
@@ -49,8 +53,18 @@ def plan(path: Path):
     lines = src.splitlines(keepends=True)
     changes = []
     # work bottom-up so positions stay valid
+    skip = {tokenize.NEWLINE, tokenize.NL, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING, tokenize.COMMENT}
+    docstrings = set()
+    for i, t in enumerate(toks):  # a string that is a whole statement is a docstring: for developers only
+        if t.type == tokenize.STRING:
+            prev = next((x for x in reversed(toks[:i]) if x.type not in (tokenize.NL, tokenize.COMMENT)), None)
+            nxt = toks[i + 1] if i + 1 < len(toks) else None
+            if (prev is None or prev.type in skip) and (nxt is None or nxt.type in (tokenize.NEWLINE, tokenize.ENDMARKER)):
+                docstrings.add(t.start)
     for t in reversed(toks):
         if t.type != tokenize.STRING and getattr(tokenize, 'FSTRING_MIDDLE', -1) != t.type:
+            continue
+        if t.start in docstrings:
             continue
         new = fix_string(t.string)
         if new == t.string:

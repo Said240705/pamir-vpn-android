@@ -134,7 +134,7 @@ jobs:
             echo 'Важное обновление: старые версии показывают только экран обновления, пока его не установят.'
             echo
           fi
-          echo 'Pamir VPN для Android. Для большинства телефонов подходит файл *_universal.apk.'
+          echo 'Mognu для Android (бывший Pamir). Для большинства телефонов подходит файл *_universal.apk.'
           if [ -n "$MIN" ]; then echo "<!-- pamir-min-version: $MIN -->"; fi
           echo 'PAMIR_EOF'
         } >> "$GITHUB_OUTPUT"
@@ -144,7 +144,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ inputs.version }}
-        name: Pamir VPN ${{ inputs.version }}${{ inputs.prerelease && ' (тест)' || '' }}
+        name: Mognu ${{ inputs.version }}${{ inputs.prerelease && ' (тест)' || '' }}
         target_commitish: ${{ github.sha }}
         prerelease: ${{ inputs.prerelease }}
         make_latest: ${{ inputs.prerelease && 'false' || 'true' }}

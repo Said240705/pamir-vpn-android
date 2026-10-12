@@ -22,7 +22,9 @@
    - `/setdomain` → `mognu.app` (вход через Telegram на сайте);
    - кнопка меню / Mini App → `https://mognu.app/`.
    Юзернейм бота (`@pamirlink_bot`) не меняем: на него ведут все старые ссылки и приглашения.
-4. **Тексты бота и писем** — патч сервера (готовится отдельно), затем `systemctl restart yadreno-vpn pamir-backend`.
+4. **Тексты бота и писем.** `python3 mognu_texts.py apply` (тексты) и `python3 patch_email_mognu.py` (оформление писем),
+   затем `systemctl restart yadreno-vpn pamir-backend`. Откат: `mognu_texts.py rollback`, `patch_email_mognu.py rollback`.
+   Приветствие и рассылки из админки хранятся в базе — поправить вручную в админке.
 5. **Приложение.** Влить ветку `mognu` приложения в `main` и собрать релиз (обычное обновление, не «важное»).
    Пакет тот же — у людей придёт обновление, ключи и вход сохранятся.
 6. **Telegram-канал.** Сменить название и аватарку, опубликовать ролик 16:9 и пост.

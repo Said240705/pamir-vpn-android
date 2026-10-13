@@ -42,6 +42,7 @@ MODEL = 'claude-haiku-5-5'
 POLL_SECONDS = 3
 QUIET_SECONDS = 4          # wait until the person stops typing a burst of messages
 MAX_REPLIES_PER_THREAD = 6  # after that, hand over to a human
+MARK = '\u2063'  # invisible first character: the cabinet shows these replies as Mognu, not as a live admin
 HANDOFF_TEXT = 'Тут лучше разберётся живой админ — я его позвал, он ответит прямо здесь 👑'
 
 log = logging.getLogger('mognu-assistant')
@@ -183,7 +184,7 @@ def history_for(db, thread_id, mine):
             if r['media_type'] and r['media_type'] != 'text':
                 text = (text + '\n' if text else '') + '[человек прислал картинку/файл — ты их не видишь]'
         elif r['id'] in mine:
-            role, text = 'assistant', html.unescape(r['text_html'] or '').strip()
+            role, text = 'assistant', html.unescape(r['text_html'] or '').lstrip(MARK).strip()
         else:
             continue  # system/other admin-side records
         if not text:
@@ -201,7 +202,7 @@ def history_for(db, thread_id, mine):
 
 def post_reply(auth, thread_id, text):
     header, secret = auth
-    req = urllib.request.Request(REPLY_URL, data=json.dumps({'thread_id': thread_id, 'text': text}).encode(),
+    req = urllib.request.Request(REPLY_URL, data=json.dumps({'thread_id': thread_id, 'text': MARK + text}).encode(),
                                  headers={'Content-Type': 'application/json', header: secret}, method='POST')
     with urllib.request.urlopen(req, timeout=20) as r:
         body = json.load(r)

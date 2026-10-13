@@ -35,7 +35,19 @@ TEXT = ('Скучаю 🥲\n\n'
         '<pre>{code}</pre>\n'
         'Открой Mognu на сайте или в приложении, нажми «Продлить» и введи код при оплате — могнём, как раньше 👑')
 SITE = 'https://mognu.app/login.html'
-BUTTON = json.dumps({'inline_keyboard': [[{'text': '👑 Вернуться в Mognu', 'url': SITE}]]}, ensure_ascii=False)
+BUTTON_TEXT = '👑 Вернуться в Mognu'
+
+
+def button(token):
+    """Open the bot's own mini app (the «Меню» button URL) right in Telegram; plain site link as fallback."""
+    try:
+        r = json.load(urllib.request.urlopen(f'https://api.telegram.org/bot{token}/getChatMenuButton', timeout=20))
+        url = r['result'].get('web_app', {}).get('url') if r['result'].get('type') == 'web_app' else None
+    except Exception:  # noqa: BLE001
+        url = None
+    print('кнопка: мини-апп ' + url if url else 'кнопка: ссылка на сайт (мини-апп в «Меню» не найден)')
+    b = {'text': BUTTON_TEXT, 'web_app': {'url': url}} if url else {'text': BUTTON_TEXT, 'url': SITE}
+    return json.dumps({'inline_keyboard': [[b]]}, ensure_ascii=False)
 
 
 def bot_token():
@@ -141,13 +153,14 @@ def main():
         return
     token = bot_token()
     push = push_sender()
+    markup = button(token)
     rw = sqlite3.connect(DB, timeout=15)
     ok = pushed = 0
     os.makedirs(os.path.dirname(SENT), exist_ok=True)
     for uid, tg, _ended in todo:
         line = f'  user {uid}:'
         data = urllib.parse.urlencode({'chat_id': tg, 'text': TEXT.format(code=code), 'parse_mode': 'HTML',
-                                       'reply_markup': BUTTON}).encode()
+                                       'reply_markup': markup}).encode()
         try:
             urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=20).read()
             ok += 1; line += ' ✓ Telegram'

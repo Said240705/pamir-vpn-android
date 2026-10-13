@@ -28,26 +28,15 @@ DB = '/root/YadrenoVPN/database/vpn_bot.db'
 CONFIG_PY = '/root/YadrenoVPN/config.py'
 SENT = '/var/lib/mognu-watch/winback_sent.json'
 PUSH_TITLE = 'Скучаю 🥲'
-PUSH_BODY = 'Вот −30% на возвращение: код {code}, 14 дней. Нажми «Продлить», введи код — и могнём, как раньше 👑'
+PUSH_BODY = 'Вот −30% на возвращение: код {code}, 14 дней. Открой Mognu, введи код и продли ключ — могнём, как раньше 👑'
 
 TEXT = ('Скучаю 🥲\n\n'
         'Без тебя тут как-то тихо. Вот <b>−30%</b> на возвращение — код действует 14 дней:\n'
         '<pre>{code}</pre>\n'
-        'Открой Mognu на сайте или в приложении, нажми «Продлить» и введи код при оплате — могнём, как раньше 👑')
-SITE = 'https://mognu.app/login.html'
-BUTTON_TEXT = '👑 Вернуться в Mognu'
-
-
-def button(token):
-    """Open the bot's own mini app (the «Меню» button URL) right in Telegram; plain site link as fallback."""
-    try:
-        r = json.load(urllib.request.urlopen(f'https://api.telegram.org/bot{token}/getChatMenuButton', timeout=20))
-        url = r['result'].get('web_app', {}).get('url') if r['result'].get('type') == 'web_app' else None
-    except Exception:  # noqa: BLE001
-        url = None
-    print('кнопка: мини-апп ' + url if url else 'кнопка: ссылка на сайт (мини-апп в «Меню» не найден)')
-    b = {'text': BUTTON_TEXT, 'web_app': {'url': url}} if url else {'text': BUTTON_TEXT, 'url': SITE}
-    return json.dumps({'inline_keyboard': [[b]]}, ensure_ascii=False)
+        'Нажми «Открыть Mognu», введи код в поле промокода и продли ключ — могнём, как раньше 👑')
+# index.html is the Telegram mini app (signs in via initData); web_app buttons open it inside Telegram
+MINI_APP = 'https://mognu.app/index.html'
+MARKUP = json.dumps({'inline_keyboard': [[{'text': '👑 Открыть Mognu', 'web_app': {'url': MINI_APP}}]]}, ensure_ascii=False)
 
 
 def bot_token():
@@ -153,14 +142,13 @@ def main():
         return
     token = bot_token()
     push = push_sender()
-    markup = button(token)
     rw = sqlite3.connect(DB, timeout=15)
     ok = pushed = 0
     os.makedirs(os.path.dirname(SENT), exist_ok=True)
     for uid, tg, _ended in todo:
         line = f'  user {uid}:'
         data = urllib.parse.urlencode({'chat_id': tg, 'text': TEXT.format(code=code), 'parse_mode': 'HTML',
-                                       'reply_markup': markup}).encode()
+                                       'reply_markup': MARKUP}).encode()
         try:
             urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=20).read()
             ok += 1; line += ' ✓ Telegram'

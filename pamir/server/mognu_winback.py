@@ -28,12 +28,14 @@ DB = '/root/YadrenoVPN/database/vpn_bot.db'
 CONFIG_PY = '/root/YadrenoVPN/config.py'
 SENT = '/var/lib/mognu-watch/winback_sent.json'
 PUSH_TITLE = 'Скучаю 🥲'
-PUSH_BODY = 'Вот −30% на возвращение: код {code}, действует 14 дней. Продли ключ — и могнём, как раньше 👑'
+PUSH_BODY = 'Вот −30% на возвращение: код {code}, 14 дней. Нажми «Продлить», введи код — и могнём, как раньше 👑'
 
 TEXT = ('Скучаю 🥲\n\n'
         'Без тебя тут как-то тихо. Вот <b>−30%</b> на возвращение — код действует 14 дней:\n'
         '<pre>{code}</pre>\n'
-        'Открой «🔑 Мои ключи», нажми «Продлить» и введи код — могнём, как раньше 👑')
+        'Открой Mognu на сайте или в приложении, нажми «Продлить» и введи код при оплате — могнём, как раньше 👑')
+SITE = 'https://mognu.app/login.html'
+BUTTON = json.dumps({'inline_keyboard': [[{'text': '👑 Вернуться в Mognu', 'url': SITE}]]}, ensure_ascii=False)
 
 
 def bot_token():
@@ -144,7 +146,8 @@ def main():
     os.makedirs(os.path.dirname(SENT), exist_ok=True)
     for uid, tg, _ended in todo:
         line = f'  user {uid}:'
-        data = urllib.parse.urlencode({'chat_id': tg, 'text': TEXT.format(code=code), 'parse_mode': 'HTML'}).encode()
+        data = urllib.parse.urlencode({'chat_id': tg, 'text': TEXT.format(code=code), 'parse_mode': 'HTML',
+                                       'reply_markup': BUTTON}).encode()
         try:
             urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=20).read()
             ok += 1; line += ' ✓ Telegram'

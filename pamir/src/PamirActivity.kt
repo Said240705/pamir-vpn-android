@@ -3356,6 +3356,8 @@ class PamirActivity : AppCompatActivity() {
         }
         fun ask(q: String, score: Int = 0) {
             if (q.isBlank()) { toast("Введите сообщение"); return }
+            // 3–5: Mognu thanks and closes the ticket — show the goodbye at once, the server closes it in the background
+            if (score >= 3) rated = score
             sendSupport(q) {
                 text = ""
                 if (score > 0) rated = score else waitingSince = System.currentTimeMillis()
@@ -3367,7 +3369,7 @@ class PamirActivity : AppCompatActivity() {
         val handed = msgs.any { (m, t) -> PamirSupport.isMognu(m) && (t.contains("позвал", true) || t.contains("Передал админу")) }
         val status = when {
             waiting -> "Могну печатает…"
-            !s.open && rated > 0 -> "Обращение закрыто — пиши, я тут"
+            rated >= 3 || (!s.open && rated > 0) -> "Обращение закрыто — пиши, я тут"
             humans -> "Админ на связи — отвечает здесь"
             handed -> "Позвал админа — он ответит здесь"
             else -> "Отвечаю сразу · админ рядом"
@@ -3395,7 +3397,7 @@ class PamirActivity : AppCompatActivity() {
                 }
             }
             Spacer(Modifier.height(Gap.m))
-            if (s.open && msgs.isNotEmpty()) {
+            if (s.open && msgs.isNotEmpty() && rated < 3) {
                 msgs.forEachIndexed { i, (m, body) ->
                     val mine = m.optString("sender_type") == "user"
                     val bot = PamirSupport.isMognu(m)
@@ -3473,7 +3475,7 @@ class PamirActivity : AppCompatActivity() {
                 }
                 Spacer(Modifier.height(Gap.m))
             } else {
-                if (!s.open && rated > 0) {
+                if (rated >= 3 || (!s.open && rated > 0)) {
                     NoteCard(
                         PamirIcons.Check, "Спасибо за оценку " + "⭐".repeat(rated),
                         "Обращение закрыто — если понадоблюсь, просто напиши 👑", Tone.ACCENT

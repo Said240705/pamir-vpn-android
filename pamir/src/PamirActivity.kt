@@ -3419,6 +3419,29 @@ class PamirActivity : AppCompatActivity() {
                                 .then(if (!mine && !bot) Modifier.border(1.dp, c.warn.copy(alpha = 0.4f), RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)) else Modifier)
                                 .padding(horizontal = Gap.m, vertical = Gap.s)
                         )
+                        // buttons Mognu chose for this reply («Скачать приложение» makes no sense inside the app)
+                        val acts = if (bot) PamirSupport.actions(m).filter { it != "app" } else emptyList()
+                        if (acts.isNotEmpty()) {
+                            Spacer(Modifier.height(Gap.s))
+                            Row(horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
+                                acts.forEach { a ->
+                                    val (label, go) = when (a) {
+                                        "connect" -> "📲 Подключить" to { onDismiss(); tab = Tab.HOME }
+                                        "renew" -> "💳 Тарифы и оплата" to { onDismiss(); openRenew() }
+                                        else -> "📊 Статус серверов" to { openUrl("https://mognu.app/status.html") }
+                                    }
+                                    Text(
+                                        label, style = PamirType.label, color = c.text,
+                                        modifier = Modifier
+                                            .clip(Radius.s)
+                                            .background(c.accentSoft)
+                                            .border(1.dp, c.accent.copy(alpha = 0.35f), Radius.s)
+                                            .clickable(role = Role.Button) { go() }
+                                            .padding(horizontal = Gap.m, vertical = Gap.s)
+                                    )
+                                }
+                            }
+                        }
                         // five stars under the newest «Как я справился?» while it is still a question
                         if (bot && i == msgs.lastIndex && PamirSupport.isRate(m) && !waiting) {
                             Spacer(Modifier.height(Gap.s))

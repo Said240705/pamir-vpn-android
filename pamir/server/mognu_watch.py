@@ -99,7 +99,7 @@ def cert_days(host='mognu.app'):
         ctx = ssl.create_default_context()
         with socket.create_connection((host, 443), timeout=15) as s, ctx.wrap_socket(s, server_hostname=host) as t:
             end = dt.datetime.strptime(t.getpeercert()['notAfter'], '%b %d %H:%M:%S %Y %Z')
-            return (end - dt.datetime.utcnow()).days
+            return (end - dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)).days
     except Exception:  # noqa: BLE001
         return None
 

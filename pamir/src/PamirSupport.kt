@@ -25,6 +25,15 @@ object PamirSupport {
     private const val K_THREAD = "pamir_support_thread"   // open ticket being watched, 0 — none
     private const val K_SEEN = "pamir_support_seen"       // "thread:lastAdminMessageId" already shown or notified
     private const val NOTIFY_ID = 7316
+    /** Replies of the Mognu assistant (server: mognu_assistant.py) start with this invisible character… */
+    private const val MOGNU = '\u2063'
+    /** …and a request for a 1–5 score has this one right after it. */
+    private const val RATE = '\u2064'
+
+    fun isMognu(m: JSONObject): Boolean =
+        m.optString("sender_type") == "admin" && m.optString("text").let { it.startsWith(MOGNU) || it.startsWith("Привет! Я Могну") }
+
+    fun isRate(m: JSONObject): Boolean = m.optString("text").let { it.length > 1 && it[0] == MOGNU && it[1] == RATE }
 
     data class State(val threadId: Int, val status: String?, val messages: List<JSONObject>) {
         val open get() = status == "open"
@@ -91,8 +100,10 @@ object PamirSupport {
             val last = s.lastAdminId
             if (last > (seen(watched) ?: last)) {
                 setSeen(watched, last)
-                val answer = s.messages.lastOrNull { it.optInt("id") == last }?.let { plain(it) }.orEmpty()
-                notify(ctx, "Поддержка ответила", answer.ifBlank { "Обращение №$watched — откройте, чтобы прочитать ответ" }, "Открыть")
+                val msg = s.messages.lastOrNull { it.optInt("id") == last }
+                val answer = msg?.let { plain(it) }.orEmpty()
+                notify(ctx, if (msg != null && isMognu(msg)) "Могну ответил" else "Поддержка ответила",
+                    answer.ifBlank { "Обращение №$watched — откройте, чтобы прочитать ответ" }, "Открыть")
             }
             return true
         }
@@ -103,10 +114,14 @@ object PamirSupport {
         return false
     }
 
-    /** Message text without HTML; a photo without a caption becomes «Фото». */
-    fun plain(m: JSONObject): String =
-        runCatching { Html.fromHtml(m.optString("text"), Html.FROM_HTML_MODE_COMPACT).toString().trim() }.getOrDefault(m.optString("text"))
+    /** Message text without HTML and without Mognu's invisible marks; a photo without a caption becomes «Фото». */
+    fun plain(m: JSONObject): String {
+        val raw = m.optString("text").trimStart(MOGNU, RATE)
+        // FROM_HTML_MODE_COMPACT drops line breaks; keep Mognu's paragraphs
+        val html = raw.replace("\n", "<br>")
+        return runCatching { Html.fromHtml(html, Html.FROM_HTML_MODE_COMPACT).toString().trim() }.getOrDefault(raw)
             .ifBlank { if (m.optString("media_type") == "photo") "Фото" else "" }
+    }
 
     private fun notify(ctx: Context, title: String, text: String, action: String?) = PamirWatch.notify(
         ctx, title, text, EXTRA_SUPPORT, action, NOTIFY_ID,

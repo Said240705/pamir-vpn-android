@@ -1273,7 +1273,6 @@ class PamirActivity : AppCompatActivity() {
             if (r != null) {
                 onSent()
                 loadSupport(viewed = true)
-                toast(if (opening) "Обращение${if (support.threadId > 0) " №${support.threadId}" else ""} открыто. Ответ придёт уведомлением" else "Отправлено")
             }
             cabBusy = null
         }
@@ -3287,15 +3286,17 @@ class PamirActivity : AppCompatActivity() {
     }
 
     /**
-     * Support as tickets: a topic and a description open a numbered ticket; while it is open, the chat
-     * and further messages go to it; the user or support can close it. Answers also come as notifications.
+     * Support with Mognu: the assistant (server: mognu_assistant.py) answers first, a live admin when it hands over.
+     * Mognu's face on top (straining while it types), quick questions while no ticket is open, «Могну»/«Админ» over
+     * the bubbles, five stars under its «Как я справился?» and a goodbye when the ticket closes after a score.
      */
     @Composable
     private fun SupportSheet(onDismiss: () -> Unit) {
         val c = Pamir.colors
         val s = support
         var text by remember { mutableStateOf("") }
-        var topic by remember { mutableStateOf<String?>(null) }
+        var waitingSince by remember { mutableLongStateOf(0L) }   // a question sent, Mognu's answer not here yet
+        var rated by remember { mutableStateOf(0) }              // score just given (goodbye after the ticket closes)
         // Refresh while the sheet is open, so an answer appears without reopening it.
         LaunchedEffect(Unit) {
             while (true) {
@@ -3303,96 +3304,165 @@ class PamirActivity : AppCompatActivity() {
                 delay(20_000)
             }
         }
-        PamirSheet(
-            onDismiss = onDismiss,
-            title = if (s.open) "Обращение №${s.threadId}" else "Поддержка",
-            subtitle = if (s.open) "Ответ придёт уведомлением и появится здесь" else "Опишите проблему — откроем обращение и ответим здесь",
-            headerAction = if (s.open) ({ Chip("открыто", Tone.ACCENT) }) else null
-        ) {
-            if (s.open) {
-                PamirCard {
-                    val msgs = s.messages.map { it to PamirSupport.plain(it) }.filter { it.second.isNotBlank() }.takeLast(30)
-                    msgs.forEach { (m, body) ->
-                        val mine = m.optString("sender_type") == "user"
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 3.dp),
-                            horizontalAlignment = if (mine) Alignment.End else Alignment.Start
-                        ) {
-                            if (!mine) Text("Поддержка", style = PamirType.caption, color = c.accentText, modifier = Modifier.padding(start = Gap.xs, bottom = 2.dp))
-                            Text(
-                                body, style = PamirType.support, color = if (mine) c.onAccent else c.text,
-                                modifier = Modifier
-                                    .fillMaxWidth(0.85f)
-                                    .wrapContentWidth(if (mine) Alignment.End else Alignment.Start)
-                                    .clip(RoundedCornerShape(16.dp, 16.dp, if (mine) 4.dp else 16.dp, if (mine) 16.dp else 4.dp))
-                                    .background(if (mine) c.accent else c.surfaceHigh)
-                                    .padding(horizontal = Gap.m, vertical = Gap.s)
-                            )
-                        }
-                    }
-                    if (msgs.none { it.first.optString("sender_type") == "admin" }) {
-                        Spacer(Modifier.height(Gap.xs))
-                        Text("Обращение у поддержки. Обычно отвечаем в течение часа.", style = PamirType.caption, color = c.textDim)
-                    }
-                    Spacer(Modifier.height(Gap.m))
-                    OutlinedTextField(
-                        value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Добавить сообщение", style = PamirType.support) },
-                        textStyle = PamirType.bodyRegular.copy(color = c.text),
-                        shape = Radius.m, colors = pamirFieldColors(), maxLines = 4
-                    )
-                    Spacer(Modifier.height(Gap.m))
-                    PrimaryButton("Отправить", loading = cabBusy == "support") {
-                        if (text.isBlank()) toast("Введите сообщение") else sendSupport(text) { text = "" }
+        // Mognu answers in a few seconds: look every 2 s for up to 30 s after a question
+        LaunchedEffect(waitingSince) {
+            if (waitingSince == 0L) return@LaunchedEffect
+            repeat(15) {
+                delay(2_000)
+                loadSupport(viewed = true)
+                if (support.messages.lastOrNull()?.optString("sender_type") == "admin") { waitingSince = 0L; return@LaunchedEffect }
+            }
+            waitingSince = 0L
+        }
+        fun ask(q: String, score: Int = 0) {
+            if (q.isBlank()) { toast("Введите сообщение"); return }
+            sendSupport(q) {
+                text = ""
+                if (score > 0) rated = score else waitingSince = System.currentTimeMillis()
+            }
+        }
+        val waiting = waitingSince > 0L
+        val msgs = s.messages.map { it to PamirSupport.plain(it) }.filter { it.second.isNotBlank() }.takeLast(30)
+        val humans = msgs.any { (m, _) -> m.optString("sender_type") == "admin" && !PamirSupport.isMognu(m) }
+        val handed = msgs.any { (m, t) -> PamirSupport.isMognu(m) && (t.contains("позвал", true) || t.contains("Передал админу")) }
+        val status = when {
+            waiting -> "Могну печатает…"
+            !s.open && rated > 0 -> "Обращение закрыто — пиши, я тут"
+            humans -> "Админ на связи — отвечает здесь"
+            handed -> "Позвал админа — он ответит здесь"
+            else -> "Отвечаю сразу · админ рядом"
+        }
+        PamirSheet(onDismiss = onDismiss, title = "Поддержка", subtitle = if (s.open) "Обращение №${s.threadId}" else null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(Radius.l)
+                    .background(c.surface)
+                    .padding(horizontal = Gap.m, vertical = Gap.s),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                MognuMascot(
+                    if (waiting) PowerState.CONNECTING else PowerState.ON, "Могну", status, onClick = {}, width = 64.dp
+                )
+                Spacer(Modifier.width(Gap.m))
+                Column(Modifier.weight(1f)) {
+                    Text("Могну", style = PamirType.headline, color = c.text)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(c.accent))
+                        Spacer(Modifier.width(6.dp))
+                        Text(status, style = PamirType.support, color = c.textDim)
                     }
                 }
+            }
+            Spacer(Modifier.height(Gap.m))
+            if (s.open && msgs.isNotEmpty()) {
+                msgs.forEachIndexed { i, (m, body) ->
+                    val mine = m.optString("sender_type") == "user"
+                    val bot = PamirSupport.isMognu(m)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        horizontalAlignment = if (mine) Alignment.End else Alignment.Start
+                    ) {
+                        if (!mine) Text(
+                            if (bot) "Могну" else "Админ · живой человек", style = PamirType.caption,
+                            color = if (bot) c.accentText else c.warn, modifier = Modifier.padding(start = Gap.xs, bottom = 2.dp)
+                        )
+                        Text(
+                            body, style = PamirType.support, color = if (mine) c.onAccent else c.text,
+                            modifier = Modifier
+                                .fillMaxWidth(0.85f)
+                                .wrapContentWidth(if (mine) Alignment.End else Alignment.Start)
+                                .clip(RoundedCornerShape(16.dp, 16.dp, if (mine) 4.dp else 16.dp, if (mine) 16.dp else 4.dp))
+                                .background(if (mine) c.accent else c.surfaceHigh)
+                                .then(if (!mine && !bot) Modifier.border(1.dp, c.warn.copy(alpha = 0.4f), RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp)) else Modifier)
+                                .padding(horizontal = Gap.m, vertical = Gap.s)
+                        )
+                        // five stars under the newest «Как я справился?» while it is still a question
+                        if (bot && i == msgs.lastIndex && PamirSupport.isRate(m) && !waiting) {
+                            Spacer(Modifier.height(Gap.s))
+                            Row(horizontalArrangement = Arrangement.spacedBy(Gap.xs)) {
+                                (1..5).forEach { n ->
+                                    Box(
+                                        Modifier
+                                            .size(44.dp)
+                                            .clip(Radius.s)
+                                            .background(c.surface)
+                                            .clickable(role = Role.Button) { if (cabBusy == null) ask("$n ⭐", score = n) }
+                                            .semantics { contentDescription = "$n из 5" },
+                                        contentAlignment = Alignment.Center
+                                    ) { Text("★", style = PamirType.title, color = Color(0xFFFFC93C)) }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (waiting) {
+                    Text(
+                        "• • •", style = PamirType.body, color = c.textDim,
+                        modifier = Modifier
+                            .padding(vertical = 3.dp)
+                            .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
+                            .background(c.surfaceHigh)
+                            .padding(horizontal = Gap.l, vertical = Gap.s)
+                    )
+                }
+                Spacer(Modifier.height(Gap.m))
+            } else {
+                if (!s.open && rated > 0) {
+                    NoteCard(
+                        PamirIcons.Check, "Спасибо за оценку " + "⭐".repeat(rated),
+                        "Обращение закрыто — если понадоблюсь, просто напиши 👑", Tone.ACCENT
+                    ) {}
+                } else {
+                    Text(
+                        "Привет! Спроси что угодно — отвечу сразу, а сложное передам админу 👑",
+                        style = PamirType.bodyRegular, color = c.text, modifier = Modifier.padding(horizontal = Gap.xs)
+                    )
+                }
+                Spacer(Modifier.height(Gap.m))
+                val quick = listOf(
+                    "📲 Как подключиться?" to "Как подключиться после покупки?",
+                    "📶 Не работает на мобильном" to "На мобильном интернете ничего не работает",
+                    "🐢 Медленно грузит" to "Всё медленно грузит, что делать?",
+                    "🔁 Как продлить?" to "Как продлить подписку?",
+                    "🎟️ Промокод" to "Как ввести промокод?",
+                    "🙋 Позвать человека" to "Позови, пожалуйста, живого админа"
+                )
+                quick.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(Gap.s), modifier = Modifier.padding(bottom = Gap.s)) {
+                        row.forEach { (label, q) ->
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 52.dp)
+                                    .clip(Radius.m)
+                                    .background(c.surface)
+                                    .border(1.dp, c.line, Radius.m)
+                                    .clickable(role = Role.Button) { if (cabBusy == null) { rated = 0; ask(q) } }
+                                    .padding(horizontal = Gap.m, vertical = Gap.s),
+                                contentAlignment = Alignment.CenterStart
+                            ) { Text(label, style = PamirType.label, color = c.text, maxLines = 2) }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(Gap.xs))
+            }
+            OutlinedTextField(
+                value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text(if (s.open) "Написать Могну" else "Или опиши своими словами", style = PamirType.support) },
+                textStyle = PamirType.bodyRegular.copy(color = c.text),
+                shape = Radius.m, colors = pamirFieldColors(), maxLines = 4
+            )
+            Spacer(Modifier.height(Gap.m))
+            PrimaryButton("Отправить", loading = cabBusy == "support") { rated = 0; ask(text) }
+            if (s.open) {
                 Spacer(Modifier.height(Gap.s))
                 TextAction(
                     if (cabBusy == "support_close") "Закрываем…" else "Вопрос решён — закрыть обращение",
                     Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Check
                 ) { closeTicket() }
-            } else {
-                if (s.status == "closed" && s.threadId > 0) {
-                    NoteCard(PamirIcons.Check, "Обращение №${s.threadId} закрыто", "Если вопрос остался или появился новый — откройте новое обращение.", Tone.NEUTRAL) {}
-                    Spacer(Modifier.height(Gap.m))
-                }
-                Text("Тема", style = PamirType.label, color = c.textDim, modifier = Modifier.padding(start = Gap.xs, bottom = Gap.s))
-                val topics = listOf("Не подключается", "Медленно работает", "Оплата и подписка", "Другое")
-                topics.chunked(2).forEach { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(Gap.s), modifier = Modifier.padding(bottom = Gap.s)) {
-                        row.forEach { t ->
-                            val on = topic == t
-                            Box(
-                                Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 48.dp)
-                                    .clip(Radius.m)
-                                    .background(if (on) c.accent else c.surface)
-                                    .border(1.dp, if (on) c.accent else c.line, Radius.m)
-                                    .clickable(role = Role.RadioButton) { topic = t }
-                                    .padding(horizontal = Gap.s),
-                                contentAlignment = Alignment.Center
-                            ) { Text(t, style = PamirType.label, color = if (on) c.onAccent else c.text, maxLines = 1) }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(Gap.xs))
-                OutlinedTextField(
-                    value = text, onValueChange = { text = it.take(1500) }, modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Что случилось? Например: не подключается на мобильном интернете", style = PamirType.support) },
-                    textStyle = PamirType.bodyRegular.copy(color = c.text),
-                    shape = Radius.m, colors = pamirFieldColors(), minLines = 3, maxLines = 6
-                )
-                Spacer(Modifier.height(Gap.m))
-                PrimaryButton("Открыть обращение", loading = cabBusy == "support") {
-                    when {
-                        topic == null -> toast("Выберите тему")
-                        text.isBlank() -> toast("Опишите проблему")
-                        else -> sendSupport(text, topic) { text = ""; topic = null }
-                    }
-                }
             }
             Spacer(Modifier.height(Gap.s))
             TextAction("Написать в Telegram", Modifier.align(Alignment.CenterHorizontally), icon = PamirIcons.Telegram) { openUrl(BOT_URL) }

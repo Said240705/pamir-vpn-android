@@ -75,6 +75,7 @@ private const val ART_TOP = -40f
 @Composable
 fun MognuMascot(
     state: PowerState, label: String, stateLabel: String, onClick: () -> Unit, modifier: Modifier = Modifier, width: Dp = 240.dp,
+    nudge: Int = 0,   // bump it to make the crown hop once (the greeting on app start)
 ) {
     val c = Pamir.colors
     val haptic = LocalHapticFeedback.current
@@ -99,6 +100,11 @@ fun MognuMascot(
     // with the glasses on: now and then the crown hops and a shine sweeps across the lenses
     val hop = remember { Animatable(0f) }
     val shine = remember { Animatable(0f) }
+    LaunchedEffect(nudge) {
+        if (nudge == 0) return@LaunchedEffect
+        hop.animateTo(1f, tween(160))
+        hop.animateTo(0f, spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessMediumLow))
+    }
     LaunchedEffect(state) {
         if (state != PowerState.ON) return@LaunchedEffect
         while (true) {

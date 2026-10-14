@@ -515,16 +515,15 @@ _sticker_ids = {}
 
 
 def send_sticker(tid, which):
-    """A Mognu sticker for a person who writes from Telegram (not from the site — a sticker in Telegram would
-    puzzle them there). Best effort: no token, no pack or any error — just no sticker."""
+    """A Mognu sticker in the bot chat of a person with a real Telegram account — the bot already copies support
+    answers and «🔒 Обращение закрыто» there. People signed in by e-mail only (no Telegram id) get none.
+    Best effort: no token, no pack or any error — just no sticker."""
     token = bot_token()
     if not token:
         return
     with ro() as db:
         t = db.execute('SELECT user_telegram_id FROM support_threads WHERE id = ?', (tid,)).fetchone()
-        last = db.execute("SELECT origin_type FROM support_messages WHERE thread_id = ? AND sender_type = 'user' "
-                          'ORDER BY id DESC LIMIT 1', (tid,)).fetchone()
-    if not t or not t[0] or int(t[0]) <= 0 or not last or last[0] != 'telegram':
+    if not t or not t[0] or int(t[0]) <= 0:
         return
     try:
         if not _sticker_ids:

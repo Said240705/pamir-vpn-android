@@ -87,7 +87,9 @@ def main():
             problems.append('решил, что вопрос закрыт')
         bad += bool(problems)
         mark = '✗' if problems else '✓'
+        acts = getattr(brain, 'actions', [])
         lines.append(f'{mark} {n:>2}. {q}\n      → {"АДМИН" if esc else "сам"}: {reply}'
+                     + (f'\n      [кнопки: {", ".join(acts)}]' if acts else '')
                      + (f'\n      !! {"; ".join(problems)}' if problems else ''))
         print(lines[-1], flush=True)
     total = len(lines)

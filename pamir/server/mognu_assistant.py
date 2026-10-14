@@ -124,10 +124,13 @@ def api_key():
 
 
 def bot_token():
-    for line in open(CONFIG_PY, encoding='utf-8'):
-        m = re.match(r'\s*(BOT_TOKEN|TELEGRAM_BOT_TOKEN|TOKEN)\s*=\s*["\']([0-9]+:[A-Za-z0-9_-]+)', line)
-        if m:
-            return m.group(2)
+    try:
+        for line in open(CONFIG_PY, encoding='utf-8'):
+            m = re.match(r'\s*(BOT_TOKEN|TELEGRAM_BOT_TOKEN|TOKEN)\s*=\s*["\']([0-9]+:[A-Za-z0-9_-]+)', line)
+            if m:
+                return m.group(2)
+    except OSError:
+        pass
     return None
 
 
@@ -505,16 +508,50 @@ def our_message_ids(db, thread_id, before):
         "AND sender_telegram_id IS NULL AND id > ?", (thread_id, before))}
 
 
+STICKER_SET = 'mognu_stickers'
+# position in the pack (uploaded in this order: 01 «Я тебя могну» … 16 big Mognu) → the moment it fits
+STICKERS = {'thanks': 13, 'oops': 14}
+_sticker_ids = {}
+
+
+def send_sticker(tid, which):
+    """A Mognu sticker for a person who writes from Telegram (not from the site — a sticker in Telegram would
+    puzzle them there). Best effort: no token, no pack or any error — just no sticker."""
+    token = bot_token()
+    if not token:
+        return
+    with ro() as db:
+        t = db.execute('SELECT user_telegram_id FROM support_threads WHERE id = ?', (tid,)).fetchone()
+        last = db.execute("SELECT origin_type FROM support_messages WHERE thread_id = ? AND sender_type = 'user' "
+                          'ORDER BY id DESC LIMIT 1', (tid,)).fetchone()
+    if not t or not t[0] or int(t[0]) <= 0 or not last or last[0] != 'telegram':
+        return
+    try:
+        if not _sticker_ids:
+            q = urllib.parse.urlencode({'name': STICKER_SET})
+            pack = json.load(urllib.request.urlopen(f'https://api.telegram.org/bot{token}/getStickerSet?{q}', timeout=20))
+            _sticker_ids.update({i: x['file_id'] for i, x in enumerate(pack['result']['stickers'])})
+        sid = _sticker_ids.get(STICKERS[which])
+        if sid:
+            data = urllib.parse.urlencode({'chat_id': int(t[0]), 'sticker': sid}).encode()
+            urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendSticker', data, timeout=20).read()
+    except Exception as e:  # noqa: BLE001
+        log.warning('sticker %s: %s', which, type(e).__name__)
+
+
 def rate(auth, st, th, tid, score, question):
     """A score for Mognu: thank and close, or apologise and hand over on 1–2."""
     st.setdefault('journal', []).append({'t': int(time.time()), 'th': tid, 'rate': score})
     th['phase'] = 'rated'
     if score >= 3:
         post_reply(auth, tid, RATE_THANKS[score])
+        if score >= 4:
+            send_sticker(tid, 'thanks')
         close_thread(auth, tid)
         th['phase'] = 'closed'
     else:
         post_reply(auth, tid, RATE_SORRY)
+        send_sticker(tid, 'oops')
         th['handed_over'] = True
         tell_admins(f'⭐ Могну получил {score}/5 в обращении <b>#{tid}</b>.\nВопрос: {html.escape(question)}\n\n'
                     'Загляни в переписку — что пошло не так.')

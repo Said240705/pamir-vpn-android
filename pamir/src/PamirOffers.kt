@@ -31,10 +31,13 @@ object PamirOffers {
         if (MmkvManager.decodeSettingsString(K_NOTIFIED, "") == code) return
         MmkvManager.encodeSettings(K_NOTIFIED, code)
         val pct = o.optInt("discount_percent")
+        // «comeback» — a personal coupon for someone who left a while ago (the bot's lapsed / win-back coupons)
+        val comeback = o.optString("kind") == "comeback"
         PamirWatch.notify(
-            ctx, "Скидка $pct% на продление Mognu",
-            "Подписка закончилась — вернитесь со скидкой $pct%. Предложение действует недолго.",
-            EXTRA_OFFER, "Забрать скидку", NOTIFY_ID
+            ctx, if (comeback) "Скучаю 🥲 −$pct% на возвращение" else "Скидка $pct% на продление Mognu",
+            if (comeback) "Без тебя тут тихо. Возвращайся — скидка $pct% уже ждёт, код ${o.optString("code")}."
+            else "Подписка закончилась — вернитесь со скидкой $pct%. Предложение действует недолго.",
+            EXTRA_OFFER, if (comeback) "Вернуться" else "Забрать скидку", NOTIFY_ID
         )
     }
 

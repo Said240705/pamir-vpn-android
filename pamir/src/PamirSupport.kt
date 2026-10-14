@@ -35,6 +35,16 @@ object PamirSupport {
 
     fun isRate(m: JSONObject): Boolean = m.optString("text").let { it.length > 1 && it[0] == MOGNU && it[1] == RATE }
 
+    /** Buttons Mognu chose for its reply: invisible characters right after the marks (server: ACTION_MARKS). */
+    private val ACTIONS = mapOf('\u2060' to "connect", '\u2061' to "renew", '\u2062' to "status", '\u206f' to "app")
+    private val HIDDEN = charArrayOf(MOGNU, RATE, *ACTIONS.keys.toCharArray())
+
+    fun actions(m: JSONObject): List<String> {
+        val t = m.optString("text")
+        if (t.isEmpty() || t[0] != MOGNU) return emptyList()
+        return t.drop(1).takeWhile { it in HIDDEN }.mapNotNull { ACTIONS[it] }
+    }
+
     data class State(val threadId: Int, val status: String?, val messages: List<JSONObject>) {
         val open get() = status == "open"
         val lastAdminId get() = messages.filter { it.optString("sender_type") == "admin" }.maxOfOrNull { it.optInt("id") } ?: 0
@@ -116,7 +126,7 @@ object PamirSupport {
 
     /** Message text without HTML and without Mognu's invisible marks; a photo without a caption becomes «Фото». */
     fun plain(m: JSONObject): String {
-        val raw = m.optString("text").trimStart(MOGNU, RATE)
+        val raw = m.optString("text").trimStart(*HIDDEN)
         // FROM_HTML_MODE_COMPACT drops line breaks; keep Mognu's paragraphs
         val html = raw.replace("\n", "<br>")
         return runCatching { Html.fromHtml(html, Html.FROM_HTML_MODE_COMPACT).toString().trim() }.getOrDefault(raw)

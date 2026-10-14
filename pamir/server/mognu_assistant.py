@@ -41,8 +41,17 @@ STATE = '/var/lib/mognu-assistant/state.json'
 MODEL = 'claude-haiku-5-5'
 POLL_SECONDS = 3
 QUIET_SECONDS = 4          # wait until the person stops typing a burst of messages
-MAX_REPLIES_PER_THREAD = 6  # after that, hand over to a human
+MAX_REPLIES_PER_THREAD = 8  # after that, hand over to a human
 MARK = '\u2063'  # invisible first character: the cabinet shows these replies as Mognu, not as a live admin
+RATE_MARK = '\u2064'  # second invisible character: «rate me» — the cabinet shows five stars under such a message
+SILENCE_MINUTES = 60      # no answer after Mognu's reply → «похоже, всё решилось» + rating
+RATE_WAIT_MINUTES = 30    # no rating after the request → close the thread
+RATE_ASK = 'Как я справился? Поставь оценку от 1 до 5 — нажми на звёздочку или просто пришли цифру ⭐'
+SILENCE_TEXT = 'Похоже, всё решилось 🙂 Если нет — просто напиши, продолжим.'
+RATE_THANKS = {5: 'Спасибо! Ты лучший 🥰', 4: 'Спасибо! Буду стараться ещё лучше 👑',
+               3: 'Спасибо за честность! Буду расти 💪'}
+RATE_SORRY = 'Ой, прости 🥲 Передал админу — он посмотрит, что пошло не так, и ответит здесь.'
+CLOSE_URL = 'http://127.0.0.1:8088/mini-app-api/admin-support/close'
 HANDOFF_TEXT = 'Тут лучше разберётся живой админ — я его позвал, он ответит прямо здесь 👑'
 
 log = logging.getLogger('mognu-assistant')
@@ -77,7 +86,11 @@ PERSONA = """Ты — Могну, маскот и помощник в подде
 и он ответит прямо здесь; если можешь — добавь, что админу пригодится (например, время оплаты и способ).
 Если вопрос простой и ответ есть в базе — escalate = false.
 
-Ответ верни строго в JSON: {"reply": "текст для человека", "escalate": true/false}.
+resolved = true, если человек благодарит или подтверждает, что всё получилось («спасибо», «заработало», «понял,
+всё ок») и нового вопроса в сообщении нет. Тогда в reply — коротко и тепло порадуйся вместе с ним (без «закрываю»
+и без просьбы об оценке — её добавят сами). Иначе resolved = false.
+
+Ответ верни строго в JSON: {"reply": "текст для человека", "escalate": true/false, "resolved": true/false}.
 
 База знаний:
 """
@@ -87,8 +100,9 @@ SCHEMA = {
     'properties': {
         'reply': {'type': 'string'},
         'escalate': {'type': 'boolean'},
+        'resolved': {'type': 'boolean'},
     },
-    'required': ['reply', 'escalate'],
+    'required': ['reply', 'escalate', 'resolved'],
     'additionalProperties': False,
 }
 
@@ -165,6 +179,7 @@ class Brain:
         """history: chat turns ending with the person → (reply, escalate). context: today's account/service note,
         sent as a trailing system message so the cached knowledge-base prefix stays intact."""
         messages = list(history)
+        self.resolved = False
         if context:
             messages.append({'role': 'system', 'content': context})
         response = self.client.messages.create(
@@ -186,6 +201,7 @@ class Brain:
             data = json.loads(text)
             reply = str(data.get('reply') or '').strip()
             escalate = bool(data.get('escalate'))
+            self.resolved = bool(data.get('resolved')) and not escalate
         except ValueError:
             return HANDOFF_TEXT, True
         if not reply:
@@ -397,14 +413,38 @@ def context_note(db, thread_id, first=False):
 
 # ---------- delivery ----------
 
-def post_reply(auth, thread_id, text):
+def post_reply(auth, thread_id, text, rate=False):
     header, secret = auth
-    req = urllib.request.Request(REPLY_URL, data=json.dumps({'thread_id': thread_id, 'text': MARK + text}).encode(),
+    text = MARK + (RATE_MARK if rate else '') + text
+    req = urllib.request.Request(REPLY_URL, data=json.dumps({'thread_id': thread_id, 'text': text}).encode(),
                                  headers={'Content-Type': 'application/json', header: secret}, method='POST')
     with urllib.request.urlopen(req, timeout=20) as r:
         body = json.load(r)
     if not body.get('ok'):
         raise RuntimeError(f"reply rejected: {body.get('reason')}")
+
+
+def close_thread(auth, thread_id):
+    """The bot's own close: marks the thread closed and tells a Telegram user «🔒 Обращение №N закрыто»."""
+    header, secret = auth
+    req = urllib.request.Request(CLOSE_URL, data=json.dumps({'thread_id': thread_id}).encode(),
+                                 headers={'Content-Type': 'application/json', header: secret}, method='POST')
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = json.load(r)
+    if not body.get('ok'):
+        raise RuntimeError(f"close rejected: {body.get('reason')}")
+
+
+def rating_of(text):
+    """«5», «5⭐», «⭐⭐⭐⭐», «4 из 5» → the score; anything else → None."""
+    t = (text or '').strip().replace('\u20e3', '')  # keycap digits «5️⃣» → «5»
+    stars = t.count('⭐')
+    m = re.fullmatch(r'([1-5])\s*(?:⭐+|из\s*5|/\s*5|звезд\w*)?[!.]?', t.replace('\ufe0f', ''))
+    if m:
+        return int(m.group(1))
+    if 1 <= stars <= 5 and not re.sub(r'[⭐\ufe0f\s]', '', t):
+        return stars
+    return None
 
 
 def tell_admins(text):
@@ -432,7 +472,7 @@ def pending(db, st):
     out = []
     for r in rows:
         th = st['threads'].get(str(r['thread_id']), {})
-        if th.get('handed_over') or r['last_user'] <= th.get('answered_upto', 0):
+        if th.get('handed_over') or th.get('phase') in ('closed', 'rated') or r['last_user'] <= th.get('answered_upto', 0):
             continue
         if r['age'] is not None and r['age'] < QUIET_SECONDS:
             continue
@@ -465,6 +505,54 @@ def our_message_ids(db, thread_id, before):
         "AND sender_telegram_id IS NULL AND id > ?", (thread_id, before))}
 
 
+def rate(auth, st, th, tid, score, question):
+    """A score for Mognu: thank and close, or apologise and hand over on 1–2."""
+    st.setdefault('journal', []).append({'t': int(time.time()), 'th': tid, 'rate': score})
+    th['phase'] = 'rated'
+    if score >= 3:
+        post_reply(auth, tid, RATE_THANKS[score])
+        close_thread(auth, tid)
+        th['phase'] = 'closed'
+    else:
+        post_reply(auth, tid, RATE_SORRY)
+        th['handed_over'] = True
+        tell_admins(f'⭐ Могну получил {score}/5 в обращении <b>#{tid}</b>.\nВопрос: {html.escape(question)}\n\n'
+                    'Загляни в переписку — что пошло не так.')
+    log.info('thread %s: rated %s', tid, score)
+
+
+def sweep_silent(auth, st):
+    """Threads where Mognu spoke last: after SILENCE_MINUTES ask for a score, RATE_WAIT_MINUTES later close."""
+    now = time.time()
+    with ro() as db:
+        rows = db.execute('''SELECT t.id, t.status, MAX(m.id) AS last_id,
+                                    (julianday('now') - julianday(MAX(m.created_at))) * 1440 AS idle_min
+                             FROM support_threads t JOIN support_messages m ON m.thread_id = t.id
+                             WHERE t.last_message_at >= datetime('now', '-2 days') GROUP BY t.id''').fetchall()
+    for r in rows:
+        th = st['threads'].get(str(r['id']))
+        if not th or not th.get('mine') or th.get('handed_over') or th.get('phase') in ('closed', 'rated'):
+            continue
+        if r['status'] != 'open':
+            th['phase'] = 'closed'; continue
+        if r['last_id'] not in th['mine']:
+            continue              # the person spoke last — pending() answers it
+        if th.get('phase') == 'rating':
+            if now - th.get('rate_asked', now) >= RATE_WAIT_MINUTES * 60:
+                close_thread(auth, r['id'])
+                th['phase'] = 'closed'
+                log.info('thread %s: closed, no score', r['id'])
+        elif (r['idle_min'] or 0) >= SILENCE_MINUTES:
+            with ro() as db:
+                before = db.execute('SELECT COALESCE(MAX(id), 0) FROM support_messages WHERE thread_id = ?',
+                                    (r['id'],)).fetchone()[0]
+            post_reply(auth, r['id'], f'{SILENCE_TEXT}\n\n{RATE_ASK}', rate=True)
+            with ro() as db:
+                th['mine'] += sorted(our_message_ids(db, r['id'], before))
+            th['phase'], th['rate_asked'] = 'rating', int(now)
+            log.info('thread %s: silent, asked for a score', r['id'])
+
+
 def handle(brain, auth, st, row):
     tid = row['thread_id']
     th = st['threads'].setdefault(str(tid), {'answered_upto': 0, 'mine': []})
@@ -477,12 +565,27 @@ def handle(brain, auth, st, row):
                                 (tid,)).fetchone()[0]
     if not turns:
         th['answered_upto'] = row['last_user']; return
+    if th.get('phase') == 'rating':
+        with ro() as db:
+            last = db.execute("SELECT text_html FROM support_messages WHERE id = ?", (row['last_user'],)).fetchone()
+        score = rating_of(html.unescape(last['text_html'] or '')) if last else None
+        if score:
+            rate(auth, st, th, tid, score, first_q)
+            with ro() as db:
+                th['mine'] += sorted(our_message_ids(db, tid, max_before))
+            th['answered_upto'] = row['last_user']
+            return
+        th['phase'] = None   # not a score — a new question in the same thread: answer it as usual
     usage = {}
     if len(th['mine']) >= MAX_REPLIES_PER_THREAD:
         reply, escalate = HANDOFF_TEXT, True
     else:
         reply, escalate = brain.answer(turns, context, usage)
-    post_reply(auth, tid, reply)
+    resolved = getattr(brain, 'resolved', False) and not escalate
+    if resolved:
+        reply = f'{reply}\n\n{RATE_ASK}'
+        th['phase'], th['rate_asked'] = 'rating', int(time.time())
+    post_reply(auth, tid, reply, rate=resolved)
     with ro() as db:
         th['mine'] += sorted(our_message_ids(db, tid, max_before))
     th['answered_upto'] = row['last_user']
@@ -513,14 +616,19 @@ def cost(j):
 
 def weekly_report(brain, st):
     week = [j for j in st.get('journal', []) if j['t'] >= time.time() - 7 * 86400]
+    scores = [j['rate'] for j in week if 'rate' in j]
+    week = [j for j in week if 'rate' not in j]
     threads = {j['th'] for j in week}
-    handed = sorted({j['th'] for j in week if j['esc']})
+    handed = sorted({j['th'] for j in week if j.get('esc')})
     solo = len(threads) - len(handed)
     spent = sum(cost(j) for j in week)
     lines = [f'📊 <b>Могну за неделю</b>',
              f'Обращений: {len(threads)} · ответов: {len(week)}',
              f'Закрыл сам: {solo} · позвал тебя: {len(handed)}',
-             f'Потрачено на Claude: ${spent:.2f}']
+             f'Потрачено на Claude: ${spent:.2f}',
+             (f'Оценка Могну: {sum(scores) / len(scores):.1f} ⭐ ({len(scores)} оценок'
+              + (f', из них 1–2⭐: {sum(1 for x in scores if x <= 2)}' if any(x <= 2 for x in scores) else '') + ')'
+              if scores else 'Оценок пока нет')]
     questions = [st['threads'].get(str(t), {}).get('q', '') for t in sorted(threads)]
     questions = [q for q in questions if q]
     if questions:
@@ -588,6 +696,12 @@ def run():
                     save_state(st)
         except sqlite3.Error as e:
             log.warning('db: %s', e)
+        try:
+            sweep_silent(auth, st)
+        except (urllib.error.URLError, RuntimeError, sqlite3.Error) as e:
+            log.warning('silence sweep: %s', e)
+        finally:
+            save_state(st)
         try:
             maybe_weekly_report(brain, st)
         except Exception as e:  # noqa: BLE001 — a failed report must not stop answering people

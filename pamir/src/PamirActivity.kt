@@ -151,6 +151,9 @@ private const val PREF_RU_DIRECT = "pamir_ru_direct"
 private const val PREF_ROUTING_INIT = "pamir_routing_init"
 private const val PREF_AUTO_BEST = "pamir_auto_best"
 private const val PREF_LAST_SUB_UPDATE = "pamir_last_sub_update"
+private const val K_GREET_AT = "pamir_greet_at"        // last greeting on start (once every 3 hours)
+private const val K_GREET_SEEN = "pamir_greet_seen"    // the very first greeting has been shown
+private const val K_LAST_SEEN = "pamir_last_seen"      // last time the home screen was opened
 private const val PREF_USER_CHOSE = "pamir_user_chose"
 private const val PREF_SMART_LTE = "pamir_smart_lte"
 private const val PREF_TV_BOOT_INIT = "pamir_tv_boot_init"
@@ -230,6 +233,10 @@ class PamirActivity : AppCompatActivity() {
     private var connectedAt by mutableLongStateOf(0L)
     private var ipInfo by mutableStateOf("")
     private var daysLeft by mutableStateOf<Int?>(null)
+    /** Mognu's greeting under the mascot for a few seconds after start (see [greet]); null — the usual line. */
+    private var greeting by mutableStateOf<String?>(null)
+    private var greetNudge by mutableStateOf(0)
+    private var skipGreeting = false   // opened from a notification: straight to the point
     private var lastUpdate by mutableLongStateOf(0L)
     private var whitelist by mutableStateOf(false)
     private var autoSwitched = false
@@ -416,6 +423,7 @@ class PamirActivity : AppCompatActivity() {
             i.removeExtra(PamirOffers.EXTRA_OFFER)
             lifecycleScope.launch { loadLastChance(); if (lastChance != null) applyLastChance() else openRenew() }
         }
+        if (i.extras?.keySet()?.any { it.startsWith("pamir_") } == true) skipGreeting = true
         if (i.getBooleanExtra(PamirSupport.EXTRA_SUPPORT, false)) {
             i.removeExtra(PamirSupport.EXTRA_SUPPORT)
             PamirSupport.cancelNotification(this)
@@ -2168,6 +2176,36 @@ class PamirActivity : AppCompatActivity() {
 
     // ---------- home ----------
 
+    /**
+     * Greeting on start (like mognu.app): the crown hops and the line under the mascot fits the moment for a few
+     * seconds — first launch, a long absence, time of day. At most once every 3 hours,
+     * never when the app was opened from a notification.
+     */
+    private suspend fun greet() {
+        val now = System.currentTimeMillis()
+        val lastSeen = MmkvManager.decodeSettingsLong(K_LAST_SEEN, 0L)
+        MmkvManager.encodeSettings(K_LAST_SEEN, now)
+        if (skipGreeting || now - MmkvManager.decodeSettingsLong(K_GREET_AT, 0L) < 3 * 3_600_000L) return
+        MmkvManager.encodeSettings(K_GREET_AT, now)
+        val first = !MmkvManager.decodeSettingsBool(K_GREET_SEEN, false)
+        MmkvManager.encodeSettings(K_GREET_SEEN, true)
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        // the subscription's end is already on the home screen as a notice — the greeting stays about the person
+        val line = when {
+            first -> "Привет! Я Могну 👑"
+            lastSeen > 0 && now - lastSeen > 7 * 86_400_000L -> "О! Сколько лет! 🥲"
+            hour in 5..10 -> "Доброе утро ☀️"
+            hour >= 23 || hour < 5 -> "Не спится? 🌙"
+            hour >= 17 -> "Добрый вечер ✨"
+            else -> listOf("Привет! Могну тут 👑", "Рад тебя видеть 👑").random()
+        }
+        delay(350)
+        greeting = line
+        greetNudge++
+        delay(4_500)
+        greeting = null
+    }
+
     @Composable
     private fun Home(onPick: () -> Unit) {
         val c = Pamir.colors
@@ -2194,9 +2232,10 @@ class PamirActivity : AppCompatActivity() {
             }
             val say = when (power) {
                 PowerState.CONNECTING -> "Могу… могу…"
-                PowerState.ON -> "Ты всех могнул"
-                PowerState.OFF -> "Нажми — и всех могни"
+                PowerState.ON -> greeting ?: "Ты всех могнул"
+                PowerState.OFF -> greeting ?: "Нажми — и всех могни"
             }
+            LaunchedEffect(Unit) { if (!tv) greet() }
             val powerFocus = remember { FocusRequester() }
             LaunchedEffect(Unit) { if (tv) runCatching { powerFocus.requestFocus() } }
             // Mascot as in the Mognu sticker mockup: ~62% of the phone width; TV keeps it compact (short screen).
@@ -2207,9 +2246,10 @@ class PamirActivity : AppCompatActivity() {
                 state = power,
                 label = if (running) "Отключить VPN" else "Подключить VPN",
                 stateLabel = say,
-                onClick = { toggle() },
+                onClick = { greeting = null; toggle() },
                 modifier = Modifier.focusRequester(powerFocus),
-                width = mascotW
+                width = mascotW,
+                nudge = greetNudge
             )
             Spacer(Modifier.height(Gap.m))
             AnimatedContent(targetState = say, transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(150)) }, label = "say") { t ->

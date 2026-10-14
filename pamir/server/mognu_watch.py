@@ -3,6 +3,7 @@
 (упало / восстановилось), плюс напоминает об оплате российского сервера-посредника.
 
 Проверки (через обычный DNS, как у людей; mognu.app ведёт на VPS AdminVPS):
+  • nginx основного сервера — запас по соединениям и отказы «worker_connections are not enough»;
   • mognu.app — страница и API;   • mognu.net — страница;
   • сертификат mognu.app на VPS — предупредить, если осталось меньше 10 дней.
 Сбой считается сбоем после 2 неудачных проверок подряд (чтобы не будить из-за одной потерянной секунды).
@@ -103,6 +104,47 @@ def cert_days(host='mognu.app'):
         return None
 
 
+NGINX_CONF = '/etc/nginx/nginx.conf'
+NGINX_ERR = '/var/log/nginx/error.log'
+CONN_WARN = 0.7  # warn when established TCP connections pass 70% of what nginx can proxy
+
+
+def nginx_capacity():
+    """How many client connections nginx can proxy: worker_connections × workers, halved (client + upstream)."""
+    try:
+        conf = open(NGINX_CONF, encoding='utf-8').read()
+        wc = int(re.search(r'^\s*worker_connections\s+(\d+)', conf, re.M).group(1))
+        wp = re.search(r'^\s*worker_processes\s+(\w+)', conf, re.M)
+        workers = (os.cpu_count() or 1) if not wp or wp.group(1) == 'auto' else int(wp.group(1))
+        return wc * workers // 2
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def established():
+    try:
+        out = subprocess.run(['ss', '-Htn', 'state', 'established'], capture_output=True, text=True, timeout=15).stdout
+        return sum(1 for line in out.splitlines() if line.strip())
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def nginx_overflows(st):
+    """New «worker_connections are not enough» lines in the nginx error log since the last check."""
+    try:
+        size = os.path.getsize(NGINX_ERR)
+    except OSError:
+        return 0
+    pos = st.get('err_pos', size)
+    if pos > size:  # log rotated
+        pos = 0
+    with open(NGINX_ERR, 'rb') as f:
+        f.seek(pos)
+        chunk = f.read(20_000_000)
+    st['err_pos'] = pos + len(chunk)
+    return chunk.count(b'worker_connections are not enough')
+
+
 def load():
     try:
         return json.load(open(STATE, encoding='utf-8'))
@@ -132,6 +174,21 @@ def run(dry=False):
         elif ok and s['down']:
             s['down'] = False
             send(f'🟢 <b>{name}</b> снова работает (не работал с {s.get("since", "?").replace("T", " ")}).')
+    # nginx on the main server: connection headroom (the 14.10 outage was nginx running out of connections)
+    cap, conns, over = nginx_capacity(), established(), nginx_overflows(st)
+    if dry:
+        print(f'  соединений: {conns if conns is not None else "?"} из ~{cap or "?"} (nginx), переполнений в логе: {over}')
+    else:
+        hour = now.strftime('%Y-%m-%d %H')
+        if over and st.get('over_warned') != hour:
+            st['over_warned'] = hour
+            send(f'🔴 nginx упёрся в лимит соединений ({over} отказов за 5 мин) — сайты и подписки могут не открываться.\n'
+                 f'Сейчас соединений: {conns}. Подними <code>worker_connections</code> в /etc/nginx/nginx.conf '
+                 'и посмотри <code>tail /var/log/nginx/error.log</code> — кто открывает соединения.')
+        elif cap and conns is not None and conns > cap * CONN_WARN and st.get('conn_warned') != hour:
+            st['conn_warned'] = hour
+            send(f'🟡 Много соединений: {conns} из ~{cap}, которые держит nginx ({conns * 100 // cap}%). '
+                 'Если рост продолжится — поднять <code>worker_connections</code> или добавить памяти/сервер.')
     days = cert_days()
     if dry:
         print(f'  сертификат mognu.app: {days if days is not None else "?"} дн.')

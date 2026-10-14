@@ -39,7 +39,7 @@ REPLY_URL = 'http://127.0.0.1:8088/mini-app-api/admin-support/reply'
 KB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mognu_assistant_kb.md')
 STATE = '/var/lib/mognu-assistant/state.json'
 MODEL = 'claude-haiku-5-5'
-POLL_SECONDS = 3
+POLL_SECONDS = 2
 QUIET_SECONDS = 4          # wait until the person stops typing a burst of messages
 MAX_REPLIES_PER_THREAD = 8  # after that, hand over to a human
 MARK = '\u2063'  # invisible first character: the cabinet shows these replies as Mognu, not as a live admin
@@ -500,7 +500,8 @@ def pending(db, st):
         th = st['threads'].get(str(r['thread_id']), {})
         if th.get('handed_over') or th.get('phase') in ('closed', 'rated') or r['last_user'] <= th.get('answered_upto', 0):
             continue
-        if r['age'] is not None and r['age'] < QUIET_SECONDS:
+        # a burst of messages is answered together — but a score after «Как я справился?» goes through at once
+        if r['age'] is not None and r['age'] < QUIET_SECONDS and th.get('phase') != 'rating':
             continue
         # any admin-side message that isn't our own reply means a human stepped in: stay quiet in this thread
         mine = set(th.get('mine', []))

@@ -7,6 +7,7 @@
 
     python3 mognu_cdn_test.py            вход 2056 (LTE Обход, Яндекс)
     python3 mognu_cdn_test.py 2057       вход 2057 (LTE Обход 2, Билайн)
+    python3 mognu_cdn_test.py 2056 --tune   сравнить через CDN текущие настройки клиента с ускоренными (xmux, интервал)
 Трафик проверки (~5 МБ на прогон) засчитается первому активному клиенту этого входа.
 """
 import json
@@ -19,7 +20,9 @@ import time
 
 DB = '/etc/x-ui/x-ui.db'
 XRAY = '/usr/local/x-ui/bin/xray-linux-amd64'
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 2056
+ARGS = [a for a in sys.argv[1:] if not a.startswith('--')]
+TUNE = '--tune' in sys.argv
+PORT = int(ARGS[0]) if ARGS else 2056
 ORIGIN = {2056: 'o-ya.pamirlink.ru', 2057: 'o-bee.pamirlink.ru', 2058: 'o-bg.pamirlink.ru'}
 
 
@@ -65,6 +68,24 @@ def run(label, xhttp, addr=addr):
     p = subprocess.Popen([XRAY, 'run', '-c', f.name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     time.sleep(1.5)
     out = []
+    pings = []
+    for _ in range(5):
+        r = subprocess.run(['curl', '-s', '-o', '/dev/null', '--max-time', '10', '--socks5-hostname', '127.0.0.1:10899',
+                            '-w', '%{time_total}', 'https://www.google.com/generate_204'], capture_output=True, text=True)
+        try:
+            pings.append(float(r.stdout) * 1000)
+        except ValueError:
+            pass
+    pings.sort()
+    out.append(f'пинг: {pings[len(pings) // 2]:.0f} мс (лучший {pings[0]:.0f})' if pings else 'пинг: 000 —')
+    r = subprocess.run(['curl', '-s', '-o', '/dev/null', '--max-time', '25', '--socks5-hostname', '127.0.0.1:10899',
+                        '--data-binary', '@-', '-w', '%{http_code} %{speed_upload}', 'https://speed.cloudflare.com/__up'],
+                       input=b'0' * 1_000_000, capture_output=True)
+    uc, us = (r.stdout.decode().split() + ['000', '0'])[:2]
+    try:
+        out.append(f'отдача: {uc} ({float(us) * 8 / 1e6:.1f} Мбит/с)')
+    except ValueError:
+        out.append(f'отдача: {uc}')
     for name, url in (('YouTube', 'https://www.youtube.com/'),
                       ('5 МБ', 'https://speed.cloudflare.com/__down?bytes=5000000')):
         r = subprocess.run(['curl', '-s', '-o', '/dev/null', '--max-time', '25', '--socks5-hostname', '127.0.0.1:10899',
@@ -78,7 +99,7 @@ def run(label, xhttp, addr=addr):
     except subprocess.TimeoutExpired:
         p.kill(); log = ''
     os.unlink(f.name)
-    ok = all(o.split(': ')[1].startswith('200') for o in out)
+    ok = all(o.split(': ')[1].startswith('200') for o in out if o.split(': ')[0] in ('YouTube', '5 МБ'))
     print(f'{"✅" if ok else "❌"} {label}: ' + ' · '.join(out))
     errs = [l for l in log.splitlines() if 'failed' in l.lower() or 'error' in l.lower()]
     for l in errs[-3:]:
@@ -86,6 +107,12 @@ def run(label, xhttp, addr=addr):
 
 
 run(f'через CDN {addr}', {**xs, 'path': path, 'host': addr})
+if TUNE:
+    XMUX = {'maxConcurrency': '16-32', 'maxConnections': 0, 'cMaxReuseTimes': 0,
+            'hMaxRequestTimes': '600-900', 'hMaxReusableSecs': '1800-3000', 'hKeepAlivePeriod': 0}
+    run('через CDN + xmux', {**xs, 'path': path, 'host': addr, 'xmux': XMUX})
+    run('через CDN + xmux + интервал 10 мс', {**xs, 'path': path, 'host': addr, 'xmux': XMUX, 'scMinPostsIntervalMs': '10-20'})
+    sys.exit(0)
 if PORT in ORIGIN:
     o = ORIGIN[PORT]
     run(f'напрямую {o} (мимо CDN)', {**xs, 'path': path, 'host': o}, addr=o)

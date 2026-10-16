@@ -8,6 +8,7 @@
     python3 mognu_cdn_test.py            вход 2056 (LTE Обход, Яндекс)
     python3 mognu_cdn_test.py 2057       вход 2057 (LTE Обход 2, Билайн)
     python3 mognu_cdn_test.py 2056 --tune   сравнить через CDN текущие настройки клиента с ускоренными (xmux, интервал)
+    python3 mognu_cdn_test.py 2058 --dump /root/lte3_client.json   только сохранить конфиг клиента (для проверки из России)
 Трафик проверки (~5 МБ на прогон) засчитается первому активному клиенту этого входа.
 """
 import json
@@ -22,6 +23,8 @@ DB = '/etc/x-ui/x-ui.db'
 XRAY = '/usr/local/x-ui/bin/xray-linux-amd64'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('--')]
 TUNE = '--tune' in sys.argv
+DUMP = sys.argv[sys.argv.index('--dump') + 1] if '--dump' in sys.argv else None
+ARGS = [a for a in ARGS if a != DUMP]
 PORT = int(ARGS[0]) if ARGS else 2056
 ORIGIN = {2056: 'o-ya.pamirlink.ru', 2057: 'o-bee.pamirlink.ru', 2058: 'o-bg.pamirlink.ru'}
 
@@ -54,8 +57,8 @@ print(f'вход: {inb["remark"]} (:{PORT})  →  CDN {addr}{path}  alpn={",".jo
 print(f'xhttp сервера: {json.dumps(xs, ensure_ascii=False)}')
 
 
-def run(label, xhttp, addr=addr):
-    cfg = {
+def config(xhttp, addr=addr):
+    return {
         'log': {'loglevel': 'warning'},
         'inbounds': [{'listen': '127.0.0.1', 'port': 10899, 'protocol': 'socks', 'settings': {'udp': False}}],
         'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': addr, 'port': 443,
@@ -63,6 +66,18 @@ def run(label, xhttp, addr=addr):
                        'streamSettings': {'network': 'xhttp', 'xhttpSettings': xhttp, 'security': 'tls',
                                           'tlsSettings': {'serverName': addr, 'alpn': alpn, 'fingerprint': fp}}}],
     }
+
+
+if DUMP:
+    with open(DUMP, 'w') as f:
+        json.dump(config({**xs, 'path': path, 'host': addr}), f, ensure_ascii=False, indent=1)
+    os.chmod(DUMP, 0o600)
+    print(f'конфиг клиента сохранён в {DUMP} (в нём ключ клиента — не публикуй)')
+    sys.exit(0)
+
+
+def run(label, xhttp, addr=addr):
+    cfg = config(xhttp, addr)
     with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
         json.dump(cfg, f)
     p = subprocess.Popen([XRAY, 'run', '-c', f.name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

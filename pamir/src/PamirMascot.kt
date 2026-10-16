@@ -243,59 +243,43 @@ fun MognuMascot(
 private val BulbColors = listOf(Color(0xFFE5323F), Color(0xFFFFC83D), Color(0xFF7FD4FF), Color(0xFFB79CFF), Color(0xFFFF7BB8))
 
 /**
- * The New Year garland (PamirSeason): a string of lights draped in two swags over the bottom of the sticker, with the
+ * The New Year garland (PamirSeason): a string of lights slung across the lower right corner of the sticker, like a ribbon on a gift, with the
  * light following the button's state — asleep the bulbs barely glow, connecting a light runs along the string, on they
  * all shine and twinkle. Drawn in artboard units, so it tilts and squashes with the sticker.
  */
-internal var garlandStyle = 1
-
 private fun DrawScope.drawGarland(s: Float, t: Float, off: Float, busy: Float, on: Float) {
     fun o(x: Float, y: Float) = Offset(x * s, (y - ART_TOP) * s)
-    val frame = garlandStyle == 3
     val wire = Path().apply {
         fun m(x: Float, y: Float) = o(x, y).let { moveTo(it.x, it.y) }
         fun c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) {
             val a = o(x1, y1); val b = o(x2, y2); val e = o(x, y); cubicTo(a.x, a.y, b.x, b.y, e.x, e.y)
         }
-        when (garlandStyle) {
-            1 -> { m(40f, 232f); c(100f, 232f, 196f, 196f, 240f, 100f) }          // sash over the lower right corner
-            2 -> { m(6f, 150f); c(30f, 262f, 210f, 262f, 234f, 150f) }            // one necklace swag
-            else -> addRoundRect(androidx.compose.ui.geometry.RoundRect(o(23f, 35f).x, o(23f, 35f).y, o(217f, 229f).x, o(217f, 229f).y, CornerRadius(53 * s)))
-        }
+        m(40f, 232f); c(100f, 232f, 196f, 196f, 240f, 100f)
     }
     drawPath(wire, Color.White, style = Stroke(7 * s, cap = StrokeCap.Round))
     drawPath(wire, Ink, style = Stroke(3 * s, cap = StrokeCap.Round))
     val measure = PathMeasure().apply { setPath(wire, false) }
-    val n = if (frame) 18 else 8
-    val k = if (frame) 0.8f else 1f
-    val center = o(120f, 132f)
+    val n = 8
     for (i in 0 until n) {
         val d = measure.length * (i + 0.5f) / n
         val at = measure.getPosition(d)
-        var tan = measure.getTangent(d)
+        val tan = measure.getTangent(d)
         val wave = sin(2 * PI.toFloat() * (t * 2 + i * 0.61f))
         val doze = 0.22f + 0.12f * (0.5f + 0.5f * sin(2 * PI.toFloat() * (t + i * 0.37f)))
         val chase = 0.25f + 0.75f * (1f - ((t * 2 - i.toFloat() / n) % 1f + 1f) % 1f).pow(3)
         val lit = (off * doze + busy * chase + on * (0.82f + 0.18f * wave)).coerceIn(0f, 1f)
         val color = BulbColors[i % BulbColors.size]
-        val angle = if (frame) {
-            var nx = -tan.y; var ny = tan.x
-            if (nx * (at.x - center.x) + ny * (at.y - center.y) < 0) { nx = -nx; ny = -ny }
-            atan2(ny, nx) * 180f / PI.toFloat() - 90f
-        } else {
-            if (tan.x < 0) tan = Offset(-tan.x, -tan.y)
-            atan2(tan.y, tan.x) * 180f / PI.toFloat() * 0.35f
-        }
-        rotate(angle, at) {
-            val bulb = Offset(at.x, at.y + 12 * s * k)
+        // bulbs hang from the wire, leaning a little with it
+        rotate(atan2(tan.y, tan.x) * 180f / PI.toFloat() * 0.35f, at) {
+            val bulb = Offset(at.x, at.y + 12 * s)
             if (lit > 0.4f) drawCircle(
-                Brush.radialGradient(listOf(color.copy(alpha = 0.6f * (lit - 0.4f) / 0.6f), Color.Transparent), bulb, 24 * s * k),
-                24 * s * k, bulb
+                Brush.radialGradient(listOf(color.copy(alpha = 0.6f * (lit - 0.4f) / 0.6f), Color.Transparent), bulb, 24 * s),
+                24 * s, bulb
             )
-            drawOval(Color.White, Offset(bulb.x - 10 * s * k, bulb.y - 11 * s * k), Size(20 * s * k, 26 * s * k))
-            drawOval(lerp(lerp(color, Ink, 0.55f), color, lit), Offset(bulb.x - 7 * s * k, bulb.y - 8 * s * k), Size(14 * s * k, 20 * s * k))
-            drawCircle(Color.White.copy(alpha = 0.25f + 0.5f * lit), 2.8f * s * k, Offset(bulb.x - 2.4f * s * k, bulb.y - 3 * s * k))
-            drawRoundRect(Ink, Offset(at.x - 5 * s * k, at.y - 1 * s * k), Size(10 * s * k, 7 * s * k), CornerRadius(2 * s * k))
+            drawOval(Color.White, Offset(bulb.x - 10 * s, bulb.y - 11 * s), Size(20 * s, 26 * s))
+            drawOval(lerp(lerp(color, Ink, 0.55f), color, lit), Offset(bulb.x - 7 * s, bulb.y - 8 * s), Size(14 * s, 20 * s))
+            drawCircle(Color.White.copy(alpha = 0.25f + 0.5f * lit), 2.8f * s, Offset(bulb.x - 2.4f * s, bulb.y - 3 * s))
+            drawRoundRect(Ink, Offset(at.x - 5 * s, at.y - 1 * s), Size(10 * s, 7 * s), CornerRadius(2 * s))
         }
     }
 }

@@ -96,6 +96,8 @@ fun MognuMascot(
     // only the connecting pose moves on its own: a quick shake while it strains
     val shake = if (state == PowerState.CONNECTING) loop.animateFloat(-1.6f, 1.6f, infiniteRepeatable(tween(90, easing = LinearEasing), RepeatMode.Reverse), label = "shake").value else 0f
     val zDrift = if (state == PowerState.OFF) loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing)), label = "z").value else 0f
+    val newYear = PamirSeason.newYear
+    val pomSway = if (newYear) loop.animateFloat(-6f, 8f, infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pom").value else 0f
     val breathe = if (state == PowerState.OFF) loop.animateFloat(1f, 1.025f, infiniteRepeatable(tween(1600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe").value else 1f
     // with the glasses on: now and then the crown hops and a shine sweeps across the lenses
     val hop = remember { Animatable(0f) }
@@ -163,13 +165,16 @@ fun MognuMascot(
         if (focused) drawRoundRect(c.accent, p(12f, 24f), Size(216 * s, 216 * s), CornerRadius(62 * s), style = Stroke(4.dp.toPx()))
         drawRoundRect(lerp(LimeAsleep, Lime, 1f - off), p(28f, 40f), Size(184 * s, 184 * s), CornerRadius(50 * s))
 
-        // crown: askew while asleep, straight and lifted, golden when on
+        // crown: askew while asleep, straight and lifted, golden when on (in the New Year — a Santa hat, PamirSeason)
         val crown = path(84f to 44f, 80f to 2f, 104f to 22f, 120f to -10f, 136f to 22f, 160f to 2f, 156f to 44f)
         val pivot = p(120f, 30f)
         translate(-8 * s * off, (6 * off - 6 * on - 14 * hop.value) * s) {
             rotate(-16f * off - 6f * hop.value, pivot) {
-                drawPath(crown, Color.White, style = Stroke(14 * s, join = StrokeJoin.Round))
-                drawPath(crown, lerp(Ink, Gold, on))
+                if (newYear) drawSantaHat(s, pomSway)
+                else {
+                    drawPath(crown, Color.White, style = Stroke(14 * s, join = StrokeJoin.Round))
+                    drawPath(crown, lerp(Ink, Gold, on))
+                }
             }
         }
 
@@ -224,6 +229,60 @@ fun MognuMascot(
             drawLine(glint, p(150f, 116f), p(166f, 116f), 5 * s, StrokeCap.Round)
             drawPath(quad(98f, 180f, 124f, 196f, 150f, 172f), ink, style = stroke)
         }
+    }
+}
+
+private val HatRed = Color(0xFFE5323F)
+private val HatFold = Color(0xFFB8202D)
+private val Fur = Color(0xFFF4F2FA)
+private val FurDent = Color(0xFFD9D4EA)
+
+/**
+ * The New Year outfit (same drawing as mognu-season.js on the site): a red Santa hat over the head, white fur band,
+ * pompom swaying on the flopped tip and a small golden crown pinned to the hat. Drawn in artboard units inside the
+ * crown's translate/rotate, so it hops and tilts exactly like the crown.
+ */
+private fun DrawScope.drawSantaHat(s: Float, pomSway: Float) {
+    fun o(x: Float, y: Float) = Offset(x * s, (y - ART_TOP) * s)
+    fun Path.m(x: Float, y: Float) = o(x, y).let { moveTo(it.x, it.y) }
+    fun Path.l(x: Float, y: Float) = o(x, y).let { lineTo(it.x, it.y) }
+    fun Path.c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) {
+        val a = o(x1, y1); val b = o(x2, y2); val e = o(x, y); cubicTo(a.x, a.y, b.x, b.y, e.x, e.y)
+    }
+    val cone = Path().apply {
+        m(66f, 32f); c(70f, -6f, 104f, -40f, 150f, -42f); c(182f, -43f, 204f, -26f, 214f, -2f)
+        c(206f, -12f, 192f, -18f, 178f, -16f); c(164f, -14f, 158f, -2f, 160f, 14f); l(172f, 32f); close()
+    }
+    val fold = Path().apply {
+        m(150f, -42f); c(182f, -43f, 204f, -26f, 214f, -2f); c(206f, -12f, 192f, -18f, 178f, -16f)
+        c(170f, -15f, 164f, -10f, 161f, -2f); c(166f, -22f, 160f, -36f, 150f, -42f); close()
+    }
+    val gleam = Path().apply { m(86f, 10f); c(100f, -14f, 122f, -28f, 146f, -32f) }
+    drawPath(cone, Color.White, style = Stroke(16 * s, join = StrokeJoin.Round))
+    drawPath(cone, HatRed)
+    drawPath(fold, HatFold)
+    drawPath(gleam, Color.White.copy(alpha = 0.28f), style = Stroke(7 * s, cap = StrokeCap.Round))
+    // the fur band
+    drawRoundRect(Color.White, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s), style = Stroke(8 * s))
+    drawRoundRect(Fur, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s))
+    listOf(70f to 30f, 92f to 38f, 114f to 28f, 136f to 38f, 158f to 30f).forEach { (x, y) ->
+        drawLine(FurDent, o(x, y), o(x + 8f, y), 5 * s, StrokeCap.Round)
+    }
+    // the small golden crown pinned to the hat
+    fun k(x: Float, y: Float) = (102f + 0.36f * (x - 120f)) to (-22f + 0.36f * (y - 17f))
+    val pin = Path().apply {
+        listOf(84f to 44f, 80f to 2f, 104f to 22f, 120f to -10f, 136f to 22f, 160f to 2f, 156f to 44f).forEachIndexed { i, (x, y) ->
+            val (a, b) = k(x, y); if (i == 0) m(a, b) else l(a, b)
+        }
+        close()
+    }
+    drawPath(pin, Color.White, style = Stroke(8 * s, join = StrokeJoin.Round))
+    drawPath(pin, Gold)
+    // the pompom sways on the tip
+    rotate(pomSway, o(214f, -17f)) {
+        drawCircle(Color.White, 21 * s, o(214f, 0f))
+        drawCircle(Fur, 17 * s, o(214f, 0f))
+        drawCircle(Color.White, 5 * s, o(209f, -5f))
     }
 }
 

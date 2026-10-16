@@ -3654,8 +3654,18 @@ class PamirActivity : AppCompatActivity() {
                 LinkRow(PamirIcons.Report, "Сообщить о проблеме", "Отправим описание и журнал разработчикам") { reportOpen = true }
                 RowDivider()
                 LinkRow(PamirIcons.Info, "О приложении", if (newVersion != null) "Версия ${appVersion()} · доступна $newVersion" else "Версия ${appVersion()} · актуальная") {
-                    updCheck = if (newVersion != null) "new" else "checking"
-                    if (newVersion == null) checkAppUpdate(manual = true)
+                    // 7 быстрых нажатий переключают новогодний режим на этом телефоне (PamirSeason); проверка обновления — по первому
+                    val now = System.currentTimeMillis()
+                    nyTaps = if (now - nyTapAt < 1500) nyTaps + 1 else 1
+                    nyTapAt = now
+                    if (nyTaps >= 7) {
+                        nyTaps = 0
+                        val on = PamirSeason.toggle()
+                        toast(if (on) "🎄 Новогодний режим включён" else "Новогодний режим выключен")
+                    } else if (nyTaps == 1) {
+                        updCheck = if (newVersion != null) "new" else "checking"
+                        if (newVersion == null) checkAppUpdate(manual = true)
+                    }
                 }
             }
             Spacer(Modifier.height(Gap.m))
@@ -3664,6 +3674,9 @@ class PamirActivity : AppCompatActivity() {
             }
         }
     }
+
+    private var nyTaps = 0
+    private var nyTapAt = 0L
 
     private fun appVersion(): String =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""

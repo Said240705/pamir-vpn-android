@@ -41,6 +41,35 @@ object PamirSeason {
         else -> inSeason()
     }
 
+    private val LINES = listOf("С наступающим! 🎄 Я уже в шапке", "Хо-хо-хо! Могну на связи 🎅",
+        "Ёлку нарядил, интернет разогнал ✨", "Мандарины есть, скорость есть 🍊", "В этом году ты был хорошим. Наверное 😏",
+        "Снег идёт — интернет летит ❄️", "Корона под шапкой, но я всё ещё король 👑")
+
+    private fun hours(n: Int) = when {
+        n % 10 == 1 && n % 100 != 11 -> "час"
+        n % 10 in 2..4 && n % 100 !in 12..14 -> "часа"
+        else -> "часов"
+    }
+
+    /**
+     * Праздничная фраза Могну на текущий момент, как MognuNY.line на mognu.app: 31 декабря — отсчёт, в полночь и
+     * 1 января — поздравление, на каникулах — про сериалы, в остальные дни — случайная из списка.
+     */
+    fun line(now: Calendar = Calendar.getInstance()): String {
+        val m = now.get(Calendar.MONTH); val d = now.get(Calendar.DAY_OF_MONTH); val h = now.get(Calendar.HOUR_OF_DAY)
+        val happy = "С Новым годом! 🎉 Пусть ничего не тормозит"
+        return when {
+            m == Calendar.DECEMBER && d == 31 -> when {
+                h >= 23 -> happy
+                h >= 17 -> "До Нового года ${23 - h} ${hours(23 - h)}! Успеешь всех могнуть 🎆"
+                else -> "Последний день года — давай без тормозов 🥂"
+            }
+            m == Calendar.JANUARY && d == 1 -> if (h < 3) happy else "С Новым годом! Как самочувствие? 😅"
+            m == Calendar.JANUARY && d in 2..10 -> "Каникулы — время сериалов. Я готов 🍿"
+            else -> LINES.random()
+        }
+    }
+
     /** Переключает режим на этом телефоне и возвращает новое состояние. */
     fun toggle(): Boolean {
         val next = !newYear

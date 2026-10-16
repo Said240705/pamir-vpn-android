@@ -2194,6 +2194,7 @@ class PamirActivity : AppCompatActivity() {
         // the subscription's end is already on the home screen as a notice — the greeting stays about the person
         val line = when {
             first -> "Привет! Я Могну 👑"
+            PamirSeason.newYear -> PamirSeason.line()
             lastSeen > 0 && now - lastSeen > 7 * 86_400_000L -> "О! Сколько лет! 🥲"
             hour in 5..10 -> "Доброе утро ☀️"
             hour >= 23 || hour < 5 -> "Не спится? 🌙"
@@ -2233,8 +2234,8 @@ class PamirActivity : AppCompatActivity() {
             }
             val say = when (power) {
                 PowerState.CONNECTING -> "Могу… могу…"
-                PowerState.ON -> greeting ?: "Ты всех могнул"
-                PowerState.OFF -> greeting ?: "Нажми — и всех могни"
+                PowerState.ON -> greeting ?: if (PamirSeason.newYear) "Ты всех могнул 🎅" else "Ты всех могнул"
+                PowerState.OFF -> greeting ?: if (PamirSeason.newYear) "Нажми — и всех могни 🎄" else "Нажми — и всех могни"
             }
             LaunchedEffect(Unit) { if (!tv) greet() }
             val powerFocus = remember { FocusRequester() }

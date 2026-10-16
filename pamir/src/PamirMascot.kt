@@ -26,7 +26,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -52,6 +54,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.pow
+import kotlin.math.sin
 import kotlin.random.Random
 
 private val Lime = Color(0xFFC8FF2E)
@@ -99,6 +105,8 @@ fun MognuMascot(
     val zDrift = if (state == PowerState.OFF) loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing)), label = "z").value else 0f
     val newYear = PamirSeason.newYear
     val pomSway = if (newYear) loop.animateFloat(-6f, 8f, infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pom").value else 0f
+    // the garland's lights run on one clock: they doze while off, chase while connecting, twinkle when on
+    val lights = if (newYear) loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "lights").value else 0f
     val breathe = if (state == PowerState.OFF) loop.animateFloat(1f, 1.025f, infiniteRepeatable(tween(1600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe").value else 1f
     // with the glasses on: now and then the crown hops and a shine sweeps across the lenses
     val hop = remember { Animatable(0f) }
@@ -227,6 +235,52 @@ fun MognuMascot(
             drawLine(glint, p(78f, 116f), p(96f, 116f), 5 * s, StrokeCap.Round)
             drawLine(glint, p(150f, 116f), p(166f, 116f), 5 * s, StrokeCap.Round)
             drawPath(quad(98f, 180f, 124f, 196f, 150f, 172f), ink, style = stroke)
+        }
+        if (newYear) drawGarland(s, lights, off, busy, on)
+    }
+}
+
+private val BulbColors = listOf(Color(0xFFE5323F), Color(0xFFFFC83D), Color(0xFF7FD4FF), Color(0xFFB79CFF), Color(0xFFFF7BB8))
+
+/**
+ * The New Year garland (PamirSeason): a string of lights draped in two swags over the bottom of the sticker, with the
+ * light following the button's state — asleep the bulbs barely glow, connecting a light runs along the string, on they
+ * all shine and twinkle. Drawn in artboard units, so it tilts and squashes with the sticker.
+ */
+private fun DrawScope.drawGarland(s: Float, t: Float, off: Float, busy: Float, on: Float) {
+    fun o(x: Float, y: Float) = Offset(x * s, (y - ART_TOP) * s)
+    val wire = Path().apply {
+        o(8f, 176f).let { moveTo(it.x, it.y) }
+        fun c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) {
+            val a = o(x1, y1); val b = o(x2, y2); val e = o(x, y); cubicTo(a.x, a.y, b.x, b.y, e.x, e.y)
+        }
+        c(30f, 238f, 96f, 244f, 120f, 214f)
+        c(144f, 244f, 210f, 238f, 232f, 176f)
+    }
+    drawPath(wire, Color.White, style = Stroke(7 * s, cap = StrokeCap.Round))
+    drawPath(wire, Ink, style = Stroke(3 * s, cap = StrokeCap.Round))
+    val measure = PathMeasure().apply { setPath(wire, false) }
+    val n = 9
+    for (i in 0 until n) {
+        val d = measure.length * (i + 0.5f) / n
+        val at = measure.getPosition(d)
+        val tan = measure.getTangent(d)
+        val wave = sin(2 * PI.toFloat() * (t * 2 + i * 0.61f))
+        val doze = 0.22f + 0.12f * (0.5f + 0.5f * sin(2 * PI.toFloat() * (t + i * 0.37f)))
+        val chase = 0.25f + 0.75f * (1f - ((t * 2 - i.toFloat() / n) % 1f + 1f) % 1f).pow(3)
+        val lit = (off * doze + busy * chase + on * (0.82f + 0.18f * wave)).coerceIn(0f, 1f)
+        val color = BulbColors[i % BulbColors.size]
+        // bulbs hang from the wire, leaning a little with it
+        rotate(atan2(tan.y, tan.x) * 180f / PI.toFloat() * 0.35f, at) {
+            val bulb = Offset(at.x, at.y + 12 * s)
+            if (lit > 0.4f) drawCircle(
+                Brush.radialGradient(listOf(color.copy(alpha = 0.6f * (lit - 0.4f) / 0.6f), Color.Transparent), bulb, 24 * s),
+                24 * s, bulb
+            )
+            drawOval(Color.White, Offset(bulb.x - 10 * s, bulb.y - 11 * s), Size(20 * s, 26 * s))
+            drawOval(lerp(lerp(color, Ink, 0.55f), color, lit), Offset(bulb.x - 7 * s, bulb.y - 8 * s), Size(14 * s, 20 * s))
+            drawCircle(Color.White.copy(alpha = 0.25f + 0.5f * lit), 2.8f * s, Offset(bulb.x - 2.4f * s, bulb.y - 3 * s))
+            drawRoundRect(Ink, Offset(at.x - 5 * s, at.y - 1 * s), Size(10 * s, 7 * s), CornerRadius(2 * s))
         }
     }
 }

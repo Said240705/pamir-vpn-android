@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -165,16 +166,14 @@ fun MognuMascot(
         if (focused) drawRoundRect(c.accent, p(12f, 24f), Size(216 * s, 216 * s), CornerRadius(62 * s), style = Stroke(4.dp.toPx()))
         drawRoundRect(lerp(LimeAsleep, Lime, 1f - off), p(28f, 40f), Size(184 * s, 184 * s), CornerRadius(50 * s))
 
-        // crown: askew while asleep, straight and lifted, golden when on (in the New Year — a Santa hat, PamirSeason)
+        // crown: askew while asleep, straight and lifted, golden when on (in the New Year a Santa hat sits on it, PamirSeason)
         val crown = path(84f to 44f, 80f to 2f, 104f to 22f, 120f to -10f, 136f to 22f, 160f to 2f, 156f to 44f)
         val pivot = p(120f, 30f)
         translate(-8 * s * off, (6 * off - 6 * on - 14 * hop.value) * s) {
             rotate(-16f * off - 6f * hop.value, pivot) {
+                drawPath(crown, Color.White, style = Stroke(14 * s, join = StrokeJoin.Round))
+                drawPath(crown, lerp(Ink, Gold, on))
                 if (newYear) drawSantaHat(s, pomSway)
-                else {
-                    drawPath(crown, Color.White, style = Stroke(14 * s, join = StrokeJoin.Round))
-                    drawPath(crown, lerp(Ink, Gold, on))
-                }
             }
         }
 
@@ -238,12 +237,13 @@ private val Fur = Color(0xFFF4F2FA)
 private val FurDent = Color(0xFFD9D4EA)
 
 /**
- * The New Year outfit (same drawing as mognu-season.js on the site): a red Santa hat over the head, white fur band,
- * pompom swaying on the flopped tip and a small golden crown pinned to the hat. Drawn in artboard units inside the
- * crown's translate/rotate, so it hops and tilts exactly like the crown.
+ * The New Year outfit (same drawing as mognu-season.js on the site): a red Santa hat worn askew over the left part of
+ * the crown, the right part of the crown peeking out, white fur band and a swaying pompom on the tip flopped to the
+ * left. The hat is drawn in artboard units with its tip to the right, then mirrored, shrunk and tilted onto the head;
+ * it sits inside the crown's translate/rotate, so it hops and tilts exactly like the crown.
  */
 private fun DrawScope.drawSantaHat(s: Float, pomSway: Float) {
-    fun o(x: Float, y: Float) = Offset(x * s, (y - ART_TOP) * s)
+    fun o(x: Float, y: Float) = Offset(x * s, y * s)
     fun Path.m(x: Float, y: Float) = o(x, y).let { moveTo(it.x, it.y) }
     fun Path.l(x: Float, y: Float) = o(x, y).let { lineTo(it.x, it.y) }
     fun Path.c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) {
@@ -258,31 +258,29 @@ private fun DrawScope.drawSantaHat(s: Float, pomSway: Float) {
         c(170f, -15f, 164f, -10f, 161f, -2f); c(166f, -22f, 160f, -36f, 150f, -42f); close()
     }
     val gleam = Path().apply { m(86f, 10f); c(100f, -14f, 122f, -28f, 146f, -32f) }
-    drawPath(cone, Color.White, style = Stroke(16 * s, join = StrokeJoin.Round))
-    drawPath(cone, HatRed)
-    drawPath(fold, HatFold)
-    drawPath(gleam, Color.White.copy(alpha = 0.28f), style = Stroke(7 * s, cap = StrokeCap.Round))
-    // the fur band
-    drawRoundRect(Color.White, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s), style = Stroke(8 * s))
-    drawRoundRect(Fur, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s))
-    listOf(70f to 30f, 92f to 38f, 114f to 28f, 136f to 38f, 158f to 30f).forEach { (x, y) ->
-        drawLine(FurDent, o(x, y), o(x + 8f, y), 5 * s, StrokeCap.Round)
-    }
-    // the small golden crown pinned to the hat
-    fun k(x: Float, y: Float) = (102f + 0.36f * (x - 120f)) to (-22f + 0.36f * (y - 17f))
-    val pin = Path().apply {
-        listOf(84f to 44f, 80f to 2f, 104f to 22f, 120f to -10f, 136f to 22f, 160f to 2f, 156f to 44f).forEachIndexed { i, (x, y) ->
-            val (a, b) = k(x, y); if (i == 0) m(a, b) else l(a, b)
+    // svg: translate(74 26) rotate(-28) scale(.82) translate(-120 -34) mirror — the mirror folded into a negative scale
+    withTransform({
+        translate(74 * s, (26 - ART_TOP) * s)
+        rotate(-28f, Offset.Zero)
+        scale(-0.82f, 0.82f, Offset.Zero)
+        translate(-120 * s, -34 * s)
+    }) {
+        drawPath(cone, Color.White, style = Stroke(20 * s, join = StrokeJoin.Round))
+        drawPath(cone, HatRed)
+        drawPath(fold, HatFold)
+        drawPath(gleam, Color.White.copy(alpha = 0.28f), style = Stroke(7 * s, cap = StrokeCap.Round))
+        // the fur band
+        drawRoundRect(Color.White, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s), style = Stroke(10 * s))
+        drawRoundRect(Fur, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s))
+        listOf(70f to 30f, 92f to 38f, 114f to 28f, 136f to 38f, 158f to 30f).forEach { (x, y) ->
+            drawLine(FurDent, o(x, y), o(x + 8f, y), 5 * s, StrokeCap.Round)
         }
-        close()
-    }
-    drawPath(pin, Color.White, style = Stroke(8 * s, join = StrokeJoin.Round))
-    drawPath(pin, Gold)
-    // the pompom sways on the tip
-    rotate(pomSway, o(214f, -17f)) {
-        drawCircle(Color.White, 21 * s, o(214f, 0f))
-        drawCircle(Fur, 17 * s, o(214f, 0f))
-        drawCircle(Color.White, 5 * s, o(209f, -5f))
+        // the pompom sways on the tip
+        rotate(pomSway, o(214f, -17f)) {
+            drawCircle(Color.White, 22 * s, o(214f, 0f))
+            drawCircle(Fur, 17 * s, o(214f, 0f))
+            drawCircle(Color.White, 5 * s, o(219f, -5f))
+        }
     }
 }
 

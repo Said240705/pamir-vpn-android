@@ -1865,6 +1865,7 @@ class PamirActivity : AppCompatActivity() {
                         .graphicsLayer { alpha = glow }
                         .background(Brush.radialGradient(listOf(c.accent.copy(alpha = if (dark) 0.15f else 0.22f), Color.Transparent)))
                 )
+                if (PamirSeason.newYear && !animationsOff) SnowLayer()
                 if (startScreen) {
                     Box(Modifier.align(Alignment.TopCenter).then(if (tv) Modifier.widthIn(max = 960.dp) else Modifier)) { Onboarding() }
                 } else {
@@ -3673,6 +3674,11 @@ class PamirActivity : AppCompatActivity() {
                 startActivity(Intent(this@PamirActivity, MainActivity::class.java))
             }
         }
+    }
+
+    // system animations switched off (accessibility) — no falling snow
+    private val animationsOff by lazy {
+        runCatching { android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }.getOrDefault(false)
     }
 
     private var nyTaps = 0

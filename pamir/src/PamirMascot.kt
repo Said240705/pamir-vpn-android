@@ -26,7 +26,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -34,6 +36,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -51,6 +54,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.pow
+import kotlin.math.sin
 import kotlin.random.Random
 
 private val Lime = Color(0xFFC8FF2E)
@@ -96,6 +103,10 @@ fun MognuMascot(
     // only the connecting pose moves on its own: a quick shake while it strains
     val shake = if (state == PowerState.CONNECTING) loop.animateFloat(-1.6f, 1.6f, infiniteRepeatable(tween(90, easing = LinearEasing), RepeatMode.Reverse), label = "shake").value else 0f
     val zDrift = if (state == PowerState.OFF) loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing)), label = "z").value else 0f
+    val newYear = PamirSeason.newYear
+    val pomSway = if (newYear) loop.animateFloat(-6f, 8f, infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pom").value else 0f
+    // the garland's lights run on one clock: they doze while off, chase while connecting, twinkle when on
+    val lights = if (newYear) loop.animateFloat(0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "lights").value else 0f
     val breathe = if (state == PowerState.OFF) loop.animateFloat(1f, 1.025f, infiniteRepeatable(tween(1600, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe").value else 1f
     // with the glasses on: now and then the crown hops and a shine sweeps across the lenses
     val hop = remember { Animatable(0f) }
@@ -163,13 +174,14 @@ fun MognuMascot(
         if (focused) drawRoundRect(c.accent, p(12f, 24f), Size(216 * s, 216 * s), CornerRadius(62 * s), style = Stroke(4.dp.toPx()))
         drawRoundRect(lerp(LimeAsleep, Lime, 1f - off), p(28f, 40f), Size(184 * s, 184 * s), CornerRadius(50 * s))
 
-        // crown: askew while asleep, straight and lifted, golden when on
+        // crown: askew while asleep, straight and lifted, golden when on (in the New Year a Santa hat sits on it, PamirSeason)
         val crown = path(84f to 44f, 80f to 2f, 104f to 22f, 120f to -10f, 136f to 22f, 160f to 2f, 156f to 44f)
         val pivot = p(120f, 30f)
         translate(-8 * s * off, (6 * off - 6 * on - 14 * hop.value) * s) {
             rotate(-16f * off - 6f * hop.value, pivot) {
                 drawPath(crown, Color.White, style = Stroke(14 * s, join = StrokeJoin.Round))
                 drawPath(crown, lerp(Ink, Gold, on))
+                if (newYear) drawSantaHat(s, pomSway)
             }
         }
 
@@ -223,6 +235,104 @@ fun MognuMascot(
             drawLine(glint, p(78f, 116f), p(96f, 116f), 5 * s, StrokeCap.Round)
             drawLine(glint, p(150f, 116f), p(166f, 116f), 5 * s, StrokeCap.Round)
             drawPath(quad(98f, 180f, 124f, 196f, 150f, 172f), ink, style = stroke)
+        }
+        if (newYear) drawGarland(s, lights, off, busy, on)
+    }
+}
+
+private val BulbColors = listOf(Color(0xFFE5323F), Color(0xFFFFC83D), Color(0xFF7FD4FF), Color(0xFFB79CFF), Color(0xFFFF7BB8))
+
+/**
+ * The New Year garland (PamirSeason): a string of lights slung across the lower right corner of the sticker, like a ribbon on a gift, with the
+ * light following the button's state — asleep the bulbs barely glow, connecting a light runs along the string, on they
+ * all shine and twinkle. Drawn in artboard units, so it tilts and squashes with the sticker.
+ */
+private fun DrawScope.drawGarland(s: Float, t: Float, off: Float, busy: Float, on: Float) {
+    fun o(x: Float, y: Float) = Offset(x * s, (y - ART_TOP) * s)
+    val wire = Path().apply {
+        fun m(x: Float, y: Float) = o(x, y).let { moveTo(it.x, it.y) }
+        fun c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) {
+            val a = o(x1, y1); val b = o(x2, y2); val e = o(x, y); cubicTo(a.x, a.y, b.x, b.y, e.x, e.y)
+        }
+        m(40f, 232f); c(100f, 232f, 196f, 196f, 240f, 100f)
+    }
+    drawPath(wire, Color.White, style = Stroke(7 * s, cap = StrokeCap.Round))
+    drawPath(wire, Ink, style = Stroke(3 * s, cap = StrokeCap.Round))
+    val measure = PathMeasure().apply { setPath(wire, false) }
+    val n = 8
+    for (i in 0 until n) {
+        val d = measure.length * (i + 0.5f) / n
+        val at = measure.getPosition(d)
+        val tan = measure.getTangent(d)
+        val wave = sin(2 * PI.toFloat() * (t * 2 + i * 0.61f))
+        val doze = 0.22f + 0.12f * (0.5f + 0.5f * sin(2 * PI.toFloat() * (t + i * 0.37f)))
+        val chase = 0.25f + 0.75f * (1f - ((t * 2 - i.toFloat() / n) % 1f + 1f) % 1f).pow(3)
+        val lit = (off * doze + busy * chase + on * (0.82f + 0.18f * wave)).coerceIn(0f, 1f)
+        val color = BulbColors[i % BulbColors.size]
+        // bulbs hang from the wire, leaning a little with it
+        rotate(atan2(tan.y, tan.x) * 180f / PI.toFloat() * 0.35f, at) {
+            val bulb = Offset(at.x, at.y + 12 * s)
+            if (lit > 0.4f) drawCircle(
+                Brush.radialGradient(listOf(color.copy(alpha = 0.6f * (lit - 0.4f) / 0.6f), Color.Transparent), bulb, 24 * s),
+                24 * s, bulb
+            )
+            drawOval(Color.White, Offset(bulb.x - 10 * s, bulb.y - 11 * s), Size(20 * s, 26 * s))
+            drawOval(lerp(lerp(color, Ink, 0.55f), color, lit), Offset(bulb.x - 7 * s, bulb.y - 8 * s), Size(14 * s, 20 * s))
+            drawCircle(Color.White.copy(alpha = 0.25f + 0.5f * lit), 2.8f * s, Offset(bulb.x - 2.4f * s, bulb.y - 3 * s))
+            drawRoundRect(Ink, Offset(at.x - 5 * s, at.y - 1 * s), Size(10 * s, 7 * s), CornerRadius(2 * s))
+        }
+    }
+}
+
+private val HatRed = Color(0xFFE5323F)
+private val HatFold = Color(0xFFB8202D)
+private val Fur = Color(0xFFF4F2FA)
+private val FurDent = Color(0xFFD9D4EA)
+
+/**
+ * The New Year outfit (same drawing as mognu-season.js on the site): a red Santa hat worn askew over the left part of
+ * the crown, the right part of the crown peeking out, white fur band and a swaying pompom on the tip flopped to the
+ * left. The hat is drawn in artboard units with its tip to the right, then mirrored, shrunk and tilted onto the head;
+ * it sits inside the crown's translate/rotate, so it hops and tilts exactly like the crown.
+ */
+private fun DrawScope.drawSantaHat(s: Float, pomSway: Float) {
+    fun o(x: Float, y: Float) = Offset(x * s, y * s)
+    fun Path.m(x: Float, y: Float) = o(x, y).let { moveTo(it.x, it.y) }
+    fun Path.l(x: Float, y: Float) = o(x, y).let { lineTo(it.x, it.y) }
+    fun Path.c(x1: Float, y1: Float, x2: Float, y2: Float, x: Float, y: Float) {
+        val a = o(x1, y1); val b = o(x2, y2); val e = o(x, y); cubicTo(a.x, a.y, b.x, b.y, e.x, e.y)
+    }
+    val cone = Path().apply {
+        m(66f, 32f); c(70f, -6f, 104f, -40f, 150f, -42f); c(182f, -43f, 204f, -26f, 214f, -2f)
+        c(206f, -12f, 192f, -18f, 178f, -16f); c(164f, -14f, 158f, -2f, 160f, 14f); l(172f, 32f); close()
+    }
+    val fold = Path().apply {
+        m(150f, -42f); c(182f, -43f, 204f, -26f, 214f, -2f); c(206f, -12f, 192f, -18f, 178f, -16f)
+        c(170f, -15f, 164f, -10f, 161f, -2f); c(166f, -22f, 160f, -36f, 150f, -42f); close()
+    }
+    val gleam = Path().apply { m(86f, 10f); c(100f, -14f, 122f, -28f, 146f, -32f) }
+    // svg: translate(74 26) rotate(-28) scale(.82) translate(-120 -34) mirror — the mirror folded into a negative scale
+    withTransform({
+        translate(74 * s, (26 - ART_TOP) * s)
+        rotate(-28f, Offset.Zero)
+        scale(-0.82f, 0.82f, Offset.Zero)
+        translate(-120 * s, -34 * s)
+    }) {
+        drawPath(cone, Color.White, style = Stroke(20 * s, join = StrokeJoin.Round))
+        drawPath(cone, HatRed)
+        drawPath(fold, HatFold)
+        drawPath(gleam, Color.White.copy(alpha = 0.28f), style = Stroke(7 * s, cap = StrokeCap.Round))
+        // the fur band
+        drawRoundRect(Color.White, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s), style = Stroke(10 * s))
+        drawRoundRect(Fur, o(54f, 18f), Size(132 * s, 32 * s), CornerRadius(16 * s))
+        listOf(70f to 30f, 92f to 38f, 114f to 28f, 136f to 38f, 158f to 30f).forEach { (x, y) ->
+            drawLine(FurDent, o(x, y), o(x + 8f, y), 5 * s, StrokeCap.Round)
+        }
+        // the pompom sways on the tip
+        rotate(pomSway, o(214f, -17f)) {
+            drawCircle(Color.White, 22 * s, o(214f, 0f))
+            drawCircle(Fur, 17 * s, o(214f, 0f))
+            drawCircle(Color.White, 5 * s, o(219f, -5f))
         }
     }
 }

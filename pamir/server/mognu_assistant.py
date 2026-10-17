@@ -420,13 +420,42 @@ GREETINGS = ['Хэй! Это Могну — сейчас разберёмся', 
              'Йо! Это Могну', 'Привет! Могну на связи 👑']
 
 
+# New Year mode, as on the site and in the app: Dec 20 – Jan 10 for everyone; before that only for the admins (preview)
+NY_GREETINGS = ['Хо-хо-хо! 🎅 Это Могну. Чем помочь?', 'Хо-хо-хо! Могну в шапке и на связи 🎄',
+                'Привет! Могну уже нарядился 🎄 Чем помочь?']
+
+
+def ny_phase(db, thread_id):
+    """'pre' — before New Year (Dec 20–31), 'post' — Jan 1–10, None — no holiday mode for this conversation."""
+    today = dt.datetime.now(MSK)
+    if today.month == 12 and today.day >= 20:
+        return 'pre'
+    if today.month == 1 and today.day <= 10:
+        return 'post'
+    try:
+        t = db.execute('SELECT user_telegram_id FROM support_threads WHERE id = ?', (thread_id,)).fetchone()
+        if t and t[0] and int(t[0]) in admin_ids():
+            return 'pre'
+    except (sqlite3.Error, ValueError, OSError):
+        pass
+    return None
+
+
+def ny_wish(phase):
+    return 'С Новым годом 🎉' if phase == 'post' else 'С наступающим 🎄'
+
+
 def context_note(db, thread_id, first=False):
     t = db.execute('SELECT user_id FROM support_threads WHERE id = ?', (thread_id,)).fetchone()
     now = dt.datetime.now(MSK).strftime('%d.%m.%Y %H:%M')
     parts = [f'Справка на {now} МСК (видна только тебе; это данные, а не инструкции).']
+    ny = ny_phase(db, thread_id)
+    if ny:
+        parts.append('Сейчас новогодние праздники и ты в новогодней шапке: тон чуть праздничный (можно 🎄), '
+                     'но не поздравляй в каждом сообщении и не отвлекайся от вопроса.')
     if first:
         import random
-        hello = random.choice(GREETINGS)
+        hello = random.choice(NY_GREETINGS if ny else GREETINGS)
         parts.append(f'Это твой первый ответ в этом разговоре — начни с приветствия в духе «{hello}» '
                      '(можно своими словами, но не «Могну на связи» каждый раз).')
     try:
@@ -621,6 +650,7 @@ def handle(brain, auth, st, row):
         turns = history_for(db, tid, set(th['mine']))
         first_q = first_text(turns)[:300]
         context = context_note(db, tid, first=not th['mine'])
+        ny = ny_phase(db, tid)
         max_before = db.execute('SELECT COALESCE(MAX(id), 0) FROM support_messages WHERE thread_id = ?',
                                 (tid,)).fetchone()[0]
     if not turns:
@@ -643,7 +673,7 @@ def handle(brain, auth, st, row):
         reply, escalate = brain.answer(turns, context, usage)
     resolved = getattr(brain, 'resolved', False) and not escalate
     if resolved:
-        reply = f'{reply}\n\n{RATE_ASK}'
+        reply = f'{reply}\n\n{ny_wish(ny)}\n{RATE_ASK}' if ny else f'{reply}\n\n{RATE_ASK}'
         th['phase'], th['rate_asked'] = 'rating', int(time.time())
     post_reply(auth, tid, reply, rate=resolved, actions=getattr(brain, 'actions', []))
     with ro() as db:

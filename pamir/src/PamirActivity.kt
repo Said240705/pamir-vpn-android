@@ -1865,6 +1865,7 @@ class PamirActivity : AppCompatActivity() {
                         .graphicsLayer { alpha = glow }
                         .background(Brush.radialGradient(listOf(c.accent.copy(alpha = if (dark) 0.15f else 0.22f), Color.Transparent)))
                 )
+                if (PamirSeason.newYear && !animationsOff) SnowLayer()
                 if (startScreen) {
                     Box(Modifier.align(Alignment.TopCenter).then(if (tv) Modifier.widthIn(max = 960.dp) else Modifier)) { Onboarding() }
                 } else {
@@ -2193,6 +2194,7 @@ class PamirActivity : AppCompatActivity() {
         // the subscription's end is already on the home screen as a notice — the greeting stays about the person
         val line = when {
             first -> "Привет! Я Могну 👑"
+            PamirSeason.newYear -> PamirSeason.line()
             lastSeen > 0 && now - lastSeen > 7 * 86_400_000L -> "О! Сколько лет! 🥲"
             hour in 5..10 -> "Доброе утро ☀️"
             hour >= 23 || hour < 5 -> "Не спится? 🌙"
@@ -2232,8 +2234,8 @@ class PamirActivity : AppCompatActivity() {
             }
             val say = when (power) {
                 PowerState.CONNECTING -> "Могу… могу…"
-                PowerState.ON -> greeting ?: "Ты всех могнул"
-                PowerState.OFF -> greeting ?: "Нажми — и всех могни"
+                PowerState.ON -> greeting ?: if (PamirSeason.newYear) "Ты всех могнул 🎅" else "Ты всех могнул"
+                PowerState.OFF -> greeting ?: if (PamirSeason.newYear) "Нажми — и всех могни 🎄" else "Нажми — и всех могни"
             }
             LaunchedEffect(Unit) { if (!tv) greet() }
             val powerFocus = remember { FocusRequester() }
@@ -3654,8 +3656,18 @@ class PamirActivity : AppCompatActivity() {
                 LinkRow(PamirIcons.Report, "Сообщить о проблеме", "Отправим описание и журнал разработчикам") { reportOpen = true }
                 RowDivider()
                 LinkRow(PamirIcons.Info, "О приложении", if (newVersion != null) "Версия ${appVersion()} · доступна $newVersion" else "Версия ${appVersion()} · актуальная") {
-                    updCheck = if (newVersion != null) "new" else "checking"
-                    if (newVersion == null) checkAppUpdate(manual = true)
+                    // 7 быстрых нажатий переключают новогодний режим на этом телефоне (PamirSeason); проверка обновления — по первому
+                    val now = System.currentTimeMillis()
+                    nyTaps = if (now - nyTapAt < 1500) nyTaps + 1 else 1
+                    nyTapAt = now
+                    if (nyTaps >= 7) {
+                        nyTaps = 0
+                        val on = PamirSeason.toggle()
+                        toast(if (on) "🎄 Новогодний режим включён" else "Новогодний режим выключен")
+                    } else if (nyTaps == 1) {
+                        updCheck = if (newVersion != null) "new" else "checking"
+                        if (newVersion == null) checkAppUpdate(manual = true)
+                    }
                 }
             }
             Spacer(Modifier.height(Gap.m))
@@ -3664,6 +3676,14 @@ class PamirActivity : AppCompatActivity() {
             }
         }
     }
+
+    // system animations switched off (accessibility) — no falling snow
+    private val animationsOff by lazy {
+        runCatching { android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }.getOrDefault(false)
+    }
+
+    private var nyTaps = 0
+    private var nyTapAt = 0L
 
     private fun appVersion(): String =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""

@@ -1,0 +1,392 @@
+"""Новогодний сезон Mognu на стороне бота: цена со скидкой в списках тарифов, адвент-календарь и «Твой год с Mognu».
+
+Ставится в /root/YadrenoVPN/bot/services/mognu_season.py (patch_mognu_newyear.py), вызывается из mini_app_api.py
+и page_button_items.py. Даты и «видят заранее» берутся из настроек расширения mognu_newyear (админка → Расширения),
+так что скидка, календарь и итоги года включаются и выключаются в одном месте.
+
+  • Скидка: сама цена при оплате считается политикой расширения; здесь — только показ «было → стало» в списках.
+  • Адвент-календарь 20–31 декабря: одна коробка в день, подарок выдаёт сервер и запоминает (повторно не выдаётся).
+    Дни к подписке получают только те, кто хоть раз платил и у кого есть действующий ключ, остальным — промокод.
+  • Итоги года: трафик за год по ежедневным снимкам, лучший месяц и день, место среди всех пользователей,
+    приглашённые друзья, чаты с поддержкой, вращения колеса, оплаты.
+"""
+from __future__ import annotations
+
+import datetime
+import logging
+import secrets
+import string
+import time
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+MSK = datetime.timezone(datetime.timedelta(hours=3))
+EXT_ID = 'mognu_newyear'
+POLICY_NAME = 'ext_mognu_newyear'
+
+# Подарки календаря по дням декабря: (вид, значение). promo — скидка %, days — дни к подписке, card — открытка.
+ADVENT = {
+    20: ('promo', 10), 21: ('days', 1), 22: ('promo', 15), 23: ('days', 1),
+    24: ('card', 0), 25: ('days', 2), 26: ('promo', 20), 27: ('days', 1),
+    28: ('promo', 20), 29: ('days', 2), 30: ('promo', 25), 31: ('days', 7),
+}
+ADVENT_FIRST, ADVENT_LAST = 20, 31
+# Кому дни не положены (ни одной оплаты или нет действующего ключа) — промокод вместо дней.
+ADVENT_DAYS_FALLBACK_PROMO = 15
+ADVENT_DAYS_FALLBACK_PROMO_BIG = 30   # вместо главного подарка 31 декабря
+
+
+# ── настройки и даты ──────────────────────────────────────────────────────────
+
+def _config() -> dict[str, Any]:
+    try:
+        from bot.utils.extension_settings import get_extension_config
+        return dict(get_extension_config(EXT_ID) or {})
+    except Exception as error:
+        logger.warning('mognu_season: extension config unavailable: %s', error)
+        return {}
+
+
+def _date(value: Any, fallback: datetime.date) -> datetime.date:
+    try:
+        return datetime.date.fromisoformat(str(value).strip())
+    except Exception:
+        return fallback
+
+
+def _window(config: dict[str, Any]) -> tuple[datetime.date, datetime.date]:
+    return (_date(config.get('start'), datetime.date(2026, 12, 20)),
+            _date(config.get('end'), datetime.date(2027, 1, 10)))
+
+
+def _today() -> datetime.date:
+    return datetime.datetime.now(MSK).date()
+
+
+def _preview_telegram_ids(config: dict[str, Any]) -> set[int]:
+    raw = str(config.get('preview_telegram_ids') or '')
+    return {int(p) for p in raw.replace(';', ',').split(',') if p.strip().isdigit()}
+
+
+def season(telegram_id: int | None) -> str | None:
+    """'on' during the New Year window, 'preview' for preview Telegram IDs before it, None otherwise."""
+    config = _config()
+    if not config.get('enabled'):
+        return None
+    start, end = _window(config)
+    today = _today()
+    if start <= today <= end:
+        return 'on'
+    if today < start and telegram_id and int(telegram_id) in _preview_telegram_ids(config):
+        return 'preview'
+    return None
+
+
+def _user(conn, telegram_id: int):
+    return conn.execute("SELECT id, created_at FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+
+
+# ── скидка в списках тарифов ──────────────────────────────────────────────────
+
+def sale_for(tariff: dict[str, Any], user_id: int | None) -> dict[str, Any] | None:
+    """The New Year price for a tariff list, from the same pricing policy that charges it; None — no sale."""
+    try:
+        from bot.utils.policy_registry import PRICING_POLICIES
+        policy = PRICING_POLICIES.get(POLICY_NAME)
+        price = int(tariff.get('price_minor') or 0)
+        if policy is None or price <= 0:
+            return None
+        decision = policy({
+            'tariff': dict(tariff), 'user_id': user_id, 'purpose': 'display', 'payment_type': 'display',
+            'quote': {'original_amount': price, 'final_amount': price},
+        })
+    except Exception as error:
+        logger.warning('mognu_season: sale preview failed tariff=%s: %s', tariff.get('id'), error)
+        return None
+    if not decision or 'final_amount' not in decision:
+        return None
+    final = int(decision['final_amount'])
+    if final >= price:
+        return None
+    meta = dict(decision.get('metadata') or {})
+    return {
+        'sale_price_minor': final,
+        'sale_percent': meta.get('percent'),
+        'sale_until': meta.get('until'),
+        'sale_label': decision.get('label'),
+    }
+
+
+def user_id_for_telegram(telegram_id: Any) -> int | None:
+    try:
+        tid = int(telegram_id)
+    except (TypeError, ValueError):
+        return None
+    from database.connection import get_db
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM users WHERE telegram_id = ?", (tid,)).fetchone()
+    return int(row['id']) if row else None
+
+
+# ── адвент-календарь ──────────────────────────────────────────────────────────
+
+def _ensure_advent_table(conn) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS mognu_advent ("
+        "user_id INTEGER NOT NULL, season INTEGER NOT NULL, day INTEGER NOT NULL, "
+        "prize TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, code TEXT, note TEXT, "
+        "opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, season, day))"
+    )
+
+
+def _advent_today(state: str, opened: dict[int, dict], start: datetime.date) -> int | None:
+    """Which box can be opened now: the date's box in December; in preview — the next unopened, one per day."""
+    today = _today()
+    if state == 'on':
+        if today.month == 12 and ADVENT_FIRST <= today.day <= ADVENT_LAST and today.year == start.year:
+            return today.day
+        return None
+    # preview: boxes in order, at most one a day
+    for row in opened.values():
+        if str(row.get('opened_at') or '')[:10] == datetime.datetime.utcnow().strftime('%Y-%m-%d'):
+            return None
+    for day in range(ADVENT_FIRST, ADVENT_LAST + 1):
+        if day not in opened:
+            return day
+    return None
+
+
+def advent_status(telegram_id: int) -> dict[str, Any]:
+    state = season(telegram_id)
+    if not state:
+        return {'available': False}
+    start, _ = _window(_config())
+    from database.connection import get_db
+    with get_db() as conn:
+        _ensure_advent_table(conn)
+        user = _user(conn, telegram_id)
+        rows = [] if not user else conn.execute(
+            "SELECT day, prize, value, code, note, opened_at FROM mognu_advent WHERE user_id = ? AND season = ?",
+            (user['id'], start.year),
+        ).fetchall()
+    opened = {int(r['day']): dict(r) for r in rows}
+    today = _advent_today(state, opened, start)
+    days = []
+    for day in range(ADVENT_FIRST, ADVENT_LAST + 1):
+        if day in opened:
+            r = opened[day]
+            days.append({'day': day, 'state': 'opened', 'prize': r['prize'], 'value': r['value'],
+                         'code': r['code'], 'note': r['note']})
+        elif day == today:
+            days.append({'day': day, 'state': 'today'})
+        elif state == 'on' and _today().month == 12 and day < _today().day:
+            days.append({'day': day, 'state': 'missed'})
+        else:
+            days.append({'day': day, 'state': 'locked'})
+    return {'available': True, 'state': state, 'today': today, 'days': days}
+
+
+def _new_code(prefix: str) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return prefix + ''.join(secrets.choice(alphabet) for _ in range(6))
+
+
+def _paid_and_active(conn, user_id: int) -> bool:
+    paid = conn.execute(
+        "SELECT 1 FROM payments WHERE user_id = ? AND status = 'paid' AND payable_amount_minor > 0 LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    active = conn.execute(
+        "SELECT 1 FROM vpn_keys WHERE user_id = ? AND expires_at IS NOT NULL AND expires_at > datetime('now') LIMIT 1",
+        (user_id,),
+    ).fetchone()
+    return bool(paid and active)
+
+
+async def advent_open(telegram_id: int) -> dict[str, Any]:
+    """Opens today's box once: records it first (so a double tap gives nothing twice), then hands out the prize."""
+    status = advent_status(telegram_id)
+    if not status.get('available'):
+        return {'ok': False, 'reason': 'not_available'}
+    day = status.get('today')
+    if not day:
+        return {'ok': False, 'reason': 'no_box_today'}
+    config = _config()
+    start, end = _window(config)
+    # promo codes live until the last day of the New Year window (MSK end of day, stored in UTC)
+    promo_until = (datetime.datetime.combine(end, datetime.time(23, 59, 59), MSK)
+                   .astimezone(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
+
+    from database.connection import get_db
+    from database.db_users import get_or_create_user
+
+    user, _ = get_or_create_user(telegram_id)
+    user_id = int(user['id'])
+    prize, value = ADVENT[day]
+    with get_db() as conn:
+        _ensure_advent_table(conn)
+        if prize == 'days' and not _paid_and_active(conn, user_id):
+            prize, value = 'promo', (ADVENT_DAYS_FALLBACK_PROMO_BIG if day == ADVENT_LAST else ADVENT_DAYS_FALLBACK_PROMO)
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO mognu_advent (user_id, season, day, prize, value) VALUES (?, ?, ?, ?, ?)",
+            (user_id, start.year, day, prize, value),
+        )
+        if cur.rowcount == 0:
+            return {'ok': False, 'reason': 'already_opened'}
+
+    code = None
+    note = None
+    try:
+        if prize == 'promo':
+            from database.db_promotions import create_promo_code
+            from bot.services.promotions import activate_promo_code_for_user, get_active_promo_discount_percent
+            code = _new_code('ELKA')
+            create_promo_code(
+                code=code, discount_percent=int(value), expires_at=promo_until, activation_limit=1,
+                source=f'mognu_advent:{start.year}:{user_id}:{day}', code_type='promo', issued_to_user_id=user_id,
+            )
+            # apply it to the next payment unless a bigger discount is already waiting
+            if get_active_promo_discount_percent(user_id) < int(value):
+                activate_promo_code_for_user(user_id, code)
+                note = 'applied'
+        elif prize == 'days':
+            from bot.services.rewards import grant_days_to_first_active_key
+            result = await grant_days_to_first_active_key(
+                user_id, int(value), source='mognu_advent', reason=f'Адвент-календарь, {day} декабря',
+                reference_type='mognu_advent', reference_id=f'{start.year}:{user_id}:{day}',
+            )
+            note = str(result.get('status') or ('applied' if result.get('ok') else 'failed'))
+            if not result.get('ok'):
+                logger.warning('mognu_season: advent days not granted user=%s day=%s: %s',
+                               user_id, day, result.get('reason'))
+    except Exception as error:
+        logger.exception('mognu_season: advent prize failed user=%s day=%s: %s', user_id, day, error)
+        note = 'failed'
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE mognu_advent SET code = ?, note = ? WHERE user_id = ? AND season = ? AND day = ?",
+            (code, note, user_id, start.year, day),
+        )
+    return {'ok': True, 'day': day, 'prize': prize, 'value': value, 'code': code, 'note': note}
+
+
+# ── итоги года ────────────────────────────────────────────────────────────────
+
+_RANK_CACHE: dict[str, Any] = {'at': 0.0, 'year': None, 'totals': []}
+
+
+def _key_year_traffic(rows, year: int) -> tuple[int, dict[int, int], dict[str, int]]:
+    """Traffic of one key in a year from its daily snapshots of a cumulative counter that may reset."""
+    total, months, days = 0, {}, {}
+    prev = None
+    for row in rows:
+        date = str(row['snapshot_date'])[:10]
+        used = int(row['traffic_used'] or 0)
+        delta = used if prev is None or used < prev else used - prev
+        prev = used
+        if not date.startswith(str(year)) or delta <= 0:
+            continue
+        total += delta
+        months[int(date[5:7])] = months.get(int(date[5:7]), 0) + delta
+        days[date] = days.get(date, 0) + delta
+    return total, months, days
+
+
+def _all_totals(conn, year: int) -> list[int]:
+    """Every user's traffic for the year (sorted), cached for 6 hours — for the «more than N% of users» line."""
+    if _RANK_CACHE['year'] == year and time.time() - _RANK_CACHE['at'] < 6 * 3600:
+        return _RANK_CACHE['totals']
+    per_user: dict[int, int] = {}
+    keys = conn.execute("SELECT id, user_id FROM vpn_keys").fetchall()
+    for key in keys:
+        rows = conn.execute(
+            "SELECT snapshot_date, traffic_used FROM traffic_history WHERE key_id = ? ORDER BY snapshot_date",
+            (key['id'],),
+        ).fetchall()
+        total, _, _ = _key_year_traffic(rows, year)
+        if total:
+            per_user[int(key['user_id'])] = per_user.get(int(key['user_id']), 0) + total
+    totals = sorted(per_user.values())
+    _RANK_CACHE.update(at=time.time(), year=year, totals=totals)
+    return totals
+
+
+def wrapped(telegram_id: int) -> dict[str, Any]:
+    state = season(telegram_id)
+    if not state:
+        return {'available': False}
+    start, _ = _window(_config())
+    year = start.year
+    from database.connection import get_db
+    with get_db() as conn:
+        user = _user(conn, telegram_id)
+        if not user:
+            return {'available': False}
+        uid = int(user['id'])
+        joined = str(user['created_at'] or '')[:10]
+        try:
+            days_with_us = max(1, (_today() - datetime.date.fromisoformat(joined)).days)
+        except ValueError:
+            days_with_us = None
+
+        total, months, days = 0, {}, {}
+        for key in conn.execute("SELECT id FROM vpn_keys WHERE user_id = ?", (uid,)).fetchall():
+            rows = conn.execute(
+                "SELECT snapshot_date, traffic_used FROM traffic_history WHERE key_id = ? ORDER BY snapshot_date",
+                (key['id'],),
+            ).fetchall()
+            t, m, d = _key_year_traffic(rows, year)
+            total += t
+            for k, v in m.items():
+                months[k] = months.get(k, 0) + v
+            for k, v in d.items():
+                days[k] = days.get(k, 0) + v
+
+        totals = _all_totals(conn, year)
+        beat = None
+        if total and totals:
+            below = sum(1 for v in totals if v < total)
+            beat = int(round(100 * below / len(totals)))
+
+        def count(sql: str, *args) -> int:
+            try:
+                row = conn.execute(sql, args).fetchone()
+                return int(row[0] or 0) if row else 0
+            except Exception:
+                return 0
+
+        y0, y1 = f'{year}-01-01', f'{year + 1}-01-01'
+        referrals = count("SELECT COUNT(*) FROM referral_stats WHERE referrer_id = ? AND level = 1", uid)
+        chats = count("SELECT COUNT(*) FROM support_threads WHERE user_id = ? AND created_at >= ? AND created_at < ?",
+                      uid, y0, y1)
+        spins = count("SELECT total_spins FROM wheel_spins WHERE user_id = ?", uid)
+        payments = count("SELECT COUNT(*) FROM payments WHERE user_id = ? AND status = 'paid' "
+                         "AND paid_at >= ? AND paid_at < ?", uid, y0, y1)
+        try:
+            _ensure_advent_table(conn)
+            advent = count("SELECT COUNT(*) FROM mognu_advent WHERE user_id = ? AND season = ?", uid, year)
+        except Exception:
+            advent = 0
+
+    top_month = max(months, key=months.get) if months else None
+    best_day = max(days, key=days.get) if days else None
+    return {
+        'available': True,
+        'state': state,
+        'year': year,
+        'joined': joined,
+        'days_with_us': days_with_us,
+        'traffic_bytes': total,
+        'top_month': top_month,
+        'top_month_bytes': months.get(top_month, 0) if top_month else 0,
+        'best_day': best_day,
+        'best_day_bytes': days.get(best_day, 0) if best_day else 0,
+        'beat_percent': beat,
+        'referrals': referrals,
+        'support_chats': chats,
+        'wheel_spins': spins,
+        'payments': payments,
+        'advent_opened': advent,
+    }

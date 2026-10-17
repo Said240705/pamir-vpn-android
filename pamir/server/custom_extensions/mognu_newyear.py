@@ -136,6 +136,8 @@ def newyear_price(context: dict) -> dict | None:
     if original <= 0:
         return None
     target = original - original * percent // 100
+    if original % 100 == 0:
+        target -= target % 100   # whole rubles: 1 499 ₽ −25% → 1 124 ₽, not 1 124,25 ₽
     if current <= target:
         return None   # the promo code already gives as much or more
     end = _date(config.get('end'), datetime.date(2027, 1, 10))

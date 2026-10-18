@@ -31,6 +31,11 @@ SOCKS = 10898
 # идентификатор сессии в путь (/api/stream/<uuid>/<номер>). Поэтому из пути убираем всё случайное, а сам
 # идентификатор делаем не UUID (UUID с дефисами Beget режет и в заголовках, и в cookie) — sessionIDLength.
 VARIANTS = [
+    # stream-one: the whole tunnel is one long POST on /api/stream/ — no session id at all (so no UUID);
+    # padding in a header with random characters. Works only if the CDN streams the request body both ways.
+    ('F stream-one, набивка в заголовке',
+     {'mode': 'stream-one', 'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad',
+      'xPaddingMethod': 'tokenish'}),
     # WebSocket / HTTPUpgrade: one connection on a fixed path, no per-session UUIDs in the request at all;
     # every client understands them (Happ and Incy on iPhone too). Works only if the CDN passes the Upgrade.
     ('D WebSocket', {'_network': 'ws'}),
@@ -290,6 +295,8 @@ def main():
     print('Поток через Beget (5 частей по секунде): ' + stream_check(addr), flush=True)
     print('   ≈1 с до первого байта — Beget отдаёт по частям (хорошо); ≈5 с — копит весь ответ (для туннеля плохо)\n', flush=True)
     for name, extra in VARIANTS:
+        if 'sessionIDPlacement' in extra and '--all' not in sys.argv:
+            continue   # B/C: blocked on the UUID session id, see the notes above
         print(run_variant(addr, name, extra), flush=True)
         time.sleep(3)
     print('\nВсё временное выключено и удалено. Панель и ключи людей не трогались.')

@@ -11,7 +11,6 @@ Beget режет UUID с дефисами где угодно, случайны�
 этот же VPN, он оборвётся — скрипт это переживёт и доделает сам; итог — в /root/setup_beget_inbound.log.
 
     python3 setup_beget_inbound.py          применить и включить вход
-    python3 setup_beget_inbound.py --link   показать, что получают клиенты в подписке (ключ скрыт)
     python3 setup_beget_inbound.py --undo   вернуть базу из последней копии
 """
 import glob
@@ -100,72 +99,9 @@ def check_with_xray(xs):
         sys.exit('Xray не принял настройки, ничего не менял:\n' + (r.stdout + r.stderr)[-600:])
 
 
-def show_link():
-    """What clients get for this host in the subscription: the vless link with the key masked, and its xhttp extra.
-    Uses the subscription of the first client of the inbound, fetched locally from the panel's sub server."""
-    import base64
-    import re
-    import ssl
-    import urllib.parse
-    import urllib.request
-    db = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)
-    st = dict(db.execute("select key, value from settings where key like 'sub%'").fetchall())
-    settings = json.loads(db.execute('select settings from inbounds where port=?', (PORT,)).fetchone()[0])
-    db.close()
-    now_ms = int(time.time() * 1000)
-    # an active client: a disabled or expired one gets an empty or cut-down subscription
-    live = [c for c in settings.get('clients', []) if c.get('subId') and c.get('enable', True)
-            and (not c.get('expiryTime') or c['expiryTime'] > now_ms)]
-    sub_id = live[0]['subId'] if live else None
-    if not sub_id:
-        sys.exit('у входа нет активного клиента с subId')
-    scheme = 'https' if st.get('subCertFile') else 'http'
-    path = st.get('subPath') or '/sub/'
-    path = path if path.endswith('/') else path + '/'
-    local = f'{scheme}://127.0.0.1:{st.get("subPort", "2096")}{path}'
-    # the sub server may answer 403 to a bare local request: try the public sub URI first, then local with its domain
-    tries = []
-    if st.get('subURI'):
-        tries.append((st['subURI'].rstrip('/') + '/', None))
-    tries.append((local, st.get('subDomain') or None))
-    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-    body, errors = None, []
-    for base, host in tries:
-        req = urllib.request.Request(base + sub_id, headers={'User-Agent': 'v2rayNG/1.10.0', **({'Host': host} if host else {})})
-        try:
-            body = urllib.request.urlopen(req, context=ctx, timeout=10).read().decode('utf-8', 'replace')
-            break
-        except Exception as e:
-            errors.append(f'{base}… — {e}')
-    if body is None:
-        sys.exit('не смог получить подписку:\n  ' + '\n  '.join(errors) + '\nпроверь в приложении: обнови подписку и подключись к «LTE Обход 3»')
-    if '://' not in body:
-        # base64 subscription; b64decode skips stray characters, so only decode what is not already plain links
-        try:
-            body = base64.b64decode(body.strip() + '==').decode('utf-8', 'replace')
-        except Exception:
-            pass
-    lines = [l for l in body.splitlines() if 'begetcdn' in l]
-    if not lines:
-        names = [urllib.parse.unquote(l.rsplit('#', 1)[1]) for l in body.splitlines() if '://' in l and '#' in l]
-        sys.exit(f'в подписке нет ссылки на begetcdn — хост выключен или скрыт. В подписке {len(names)} серверов: '
-                 + ', '.join(names[:30]) + ('' if names else f' (начало ответа: {body[:80]!r})'))
-    for l in lines:
-        masked = re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '***', l)
-        q = urllib.parse.parse_qs(urllib.parse.urlsplit(masked).query)
-        print('ссылка:', masked.split('?')[0] + '?…')
-        print('  type/mode/path:', q.get('type'), q.get('mode'), q.get('path'))
-        extra = json.loads(q['extra'][0]) if 'extra' in q else {}
-        print('  extra:', json.dumps(extra, ensure_ascii=False))
-        missing = [k for k in ('sessionIDPlacement', 'sessionIDTable', 'sessionIDLength', 'seqPlacement', 'xPaddingPlacement') if k not in extra]
-        print('  ✅ всё нужное для Beget есть в ссылке' if not missing else f'  ❌ в ссылке нет: {", ".join(missing)} — клиент пойдёт со старыми настройками')
-
-
 def main():
     if '--undo' in sys.argv:
         return undo()
-    if '--link' in sys.argv:
-        return show_link()
     db = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)
     row = db.execute('select id, remark, stream_settings, enable from inbounds where port=?', (PORT,)).fetchone()
     db.close()

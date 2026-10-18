@@ -149,6 +149,7 @@ import java.net.URL
 private const val BOT_URL = "https://t.me/pamirlink_bot"
 private const val PREF_RU_DIRECT = "pamir_ru_direct"
 private const val PREF_ROUTING_INIT = "pamir_routing_init"
+private const val OWN_SERVICES_RULE = "Mognu: свой сайт и API через VPN"
 private const val PREF_AUTO_BEST = "pamir_auto_best"
 private const val PREF_LAST_SUB_UPDATE = "pamir_last_sub_update"
 private const val K_GREET_AT = "pamir_greet_at"        // last greeting on start (once every 3 hours)
@@ -1380,6 +1381,7 @@ class PamirActivity : AppCompatActivity() {
             MmkvManager.encodeSettings(PREF_RU_DIRECT, true)
             MmkvManager.encodeSettings(PREF_ROUTING_INIT, true)
         }
+        ensureOwnServicesRule()
         if (!MmkvManager.decodeSettingsBool("pamir_speed_init", false)) {
             MmkvManager.encodeSettings(AppConfig.PREF_SPEED_ENABLED, true)
             MmkvManager.encodeSettings("pamir_speed_init", true)
@@ -1675,8 +1677,11 @@ class PamirActivity : AppCompatActivity() {
         }
         updProgress = 0
         lifecycleScope.launch {
+            // through the running VPN first: the app itself is outside the tunnel, and under «white lists» GitHub
+            // and our site are reachable only through it; then directly (VPN off, or the tunnel is the problem)
+            val port = proxyPort()
             val file = withContext(Dispatchers.IO) {
-                newVersionUrls.firstNotNullOfOrNull { url -> downloadApk(url) }
+                newVersionUrls.firstNotNullOfOrNull { url -> port?.let { downloadApk(url, it) } ?: downloadApk(url, null) }
             }
             updProgress = -1
             if (file == null) {
@@ -1695,11 +1700,12 @@ class PamirActivity : AppCompatActivity() {
     }
 
     /** Downloads one source into the cache; null (and logged) when it fails or arrives incomplete. */
-    private suspend fun downloadApk(url: String): java.io.File? = runCatching {
+    private suspend fun downloadApk(url: String, proxyPort: Int?): java.io.File? = runCatching {
         withContext(Dispatchers.Main) { updProgress = 0 }
         val dir = java.io.File(cacheDir, "update").apply { mkdirs() }
         val f = java.io.File(dir, "pamir-vpn.apk")
-        val c = URL(url).openConnection() as HttpURLConnection
+        val c = (if (proxyPort != null) URL(url).openConnection(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", proxyPort)))
+        else URL(url).openConnection()) as HttpURLConnection
         c.connectTimeout = 10000; c.readTimeout = 20000
         val total = c.contentLengthLong
         var done = 0L
@@ -1720,7 +1726,7 @@ class PamirActivity : AppCompatActivity() {
         }
         if (total > 0 && done != total) throw java.io.IOException("incomplete download: $done of $total")
         f
-    }.onFailure { Log.w("Pamir", "update download failed: ${it.message}") }.getOrNull()
+    }.onFailure { Log.w("Pamir", "update download via ${proxyPort ?: "direct"} failed: ${it.message}") }.getOrNull()
 
     private fun updateSubscription(silent: Boolean = false) {
         if (updating) return
@@ -1758,10 +1764,29 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Our own site and API always go through the tunnel. mognu.app sits behind a Russian address and app.pamirlink.ru
+     * is a .ru domain, so the «Russian sites directly» rules would send them past the VPN — and under mobile «white
+     * lists» the direct route is closed, so the cabinet and app updates did not open even with the VPN on.
+     * First in the list, so it wins over those rules; added again after every preset reset.
+     */
+    private fun ensureOwnServicesRule() {
+        runCatching {
+            val rules = MmkvManager.decodeRoutingRulesets().orEmpty()
+            if (rules.any { it.remarks == OWN_SERVICES_RULE }) return
+            SettingsManager.saveRoutingRuleset(-1, com.v2ray.ang.dto.entities.RulesetItem(
+                remarks = OWN_SERVICES_RULE,
+                domain = listOf("domain:mognu.app", "domain:mognu.net", "full:app.pamirlink.ru"),
+                outboundTag = AppConfig.TAG_PROXY,
+            ))
+        }.onFailure { Log.w("Pamir", "own services routing rule: ${it.message}") }
+    }
+
     private fun setRuDirect(on: Boolean) {
         runCatching {
             SettingsManager.resetRoutingRulesetsFromPresets(this, if (on) RoutingType.WHITE_RUSSIA else RoutingType.GLOBAL)
         }
+        ensureOwnServicesRule()
         MmkvManager.encodeSettings(PREF_RU_DIRECT, on)
         if (running) LauncherManager.restartService(this)
     }

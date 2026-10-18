@@ -7,7 +7,8 @@ Beget режет UUID с дефисами где угодно, случайны�
 Остальные настройки входа (xmux, размеры кусков) остаются как были. Ключи людей не меняются.
 
 Панель держит базу открытой, поэтому на пару секунд останавливаем x-ui (Xray перезапустится — у всех переподключение),
-правим базу и запускаем. Перед этим конфиг проверяется самим Xray, а база копируется в /root.
+правим базу и запускаем. Перед этим конфиг проверяется самим Xray, а база копируется в /root. Если SSH идёт через
+этот же VPN, он оборвётся — скрипт это переживёт и доделает сам; итог — в /root/setup_beget_inbound.log.
 
     python3 setup_beget_inbound.py          применить и включить вход
     python3 setup_beget_inbound.py --link   показать, что получают клиенты в подписке (ключ скрыт)
@@ -17,6 +18,7 @@ import glob
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -27,6 +29,7 @@ DB = '/etc/x-ui/x-ui.db'
 XRAY = '/usr/local/x-ui/bin/xray-linux-amd64'
 PORT = 2058
 BAK = '/root/x-ui.db.bak-beget-'
+LOG = '/root/setup_beget_inbound.log'
 
 BEGET = {
     'mode': 'packet-up',
@@ -43,8 +46,22 @@ def sh(*cmd):
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
+def say(text):
+    """Print, and keep a copy in LOG: the SSH session may already be gone (it can run through this very VPN)."""
+    with open(LOG, 'a', encoding='utf-8') as f:
+        f.write(time.strftime('%H:%M:%S ') + text + '\n')
+    try:
+        print(text, flush=True)
+    except OSError:
+        pass
+
+
 def restart_with(apply):
-    """Stop the panel, run apply(), start it again — and start it again even if apply() fails."""
+    """Stop the panel, run apply(), start it again — and start it again even if apply() fails.
+    Stopping the panel drops the VPN, and with it an SSH session that runs through it: the hangup must not kill us
+    before the panel is back up."""
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     if sh('systemctl', 'stop', 'x-ui').returncode != 0:
         sys.exit('не смог остановить x-ui')
     try:
@@ -63,7 +80,7 @@ def undo():
     if not baks:
         sys.exit('нет копии базы')
     restart_with(lambda: shutil.copy2(baks[-1], DB))
-    print(f'Вернул базу из {baks[-1]}.')
+    say(f'Вернул базу из {baks[-1]}.')
 
 
 def check_with_xray(xs):
@@ -151,9 +168,9 @@ def main():
             w.execute('update inbounds set stream_settings=?, enable=1 where id=?', (json.dumps(stream, ensure_ascii=False), inb_id))
         w.close()
     listening = restart_with(apply)
-    print(f'Вход {PORT} ({remark}): xhttp для Beget, включён. Копия базы: {bak}')
-    print('xhttpSettings:', json.dumps(xs, ensure_ascii=False))
-    print('Xray слушает порт 2058 ✅' if listening else '!! порт 2058 не слушается — пришли `systemctl status x-ui` Claude (откат: --undo)')
+    say(f'Вход {PORT} ({remark}): xhttp для Beget, включён. Копия базы: {bak}')
+    say('xhttpSettings: ' + json.dumps(xs, ensure_ascii=False))
+    say('Xray слушает порт 2058 ✅' if listening else '!! порт 2058 не слушается — пришли `systemctl status x-ui` Claude (откат: --undo)')
 
 
 if __name__ == '__main__':

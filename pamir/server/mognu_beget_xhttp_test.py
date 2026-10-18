@@ -2,7 +2,8 @@
 """Проверка xhttp через Beget CDN с разной «набивкой» (padding), без панели и без ключей людей.
 
 Защита Beget отвечает 403 на Referer с параметрами (а стандартный xhttp кладёт туда ?x_padding=XXXX) и на заголовки
-из одинаковых символов. Xray 26 умеет класть набивку в другое место (xPaddingPlacement) и делать её из случайных
+из одинаковых символов, а после серии таких запросов на время банит IP целиком — поэтому стандартный вариант
+здесь не проверяется вовсе, а перед проверкой смотрим, не забанен ли уже этот сервер. Xray 26 умеет класть набивку в другое место (xPaddingPlacement) и делать её из случайных
 символов (xPaddingMethod: tokenish). Скрипт поднимает ВРЕМЕННЫЙ Xray-сервер на 127.0.0.1:2058 (туда nginx уже
 отправляет /api/stream/ для o-bg.pamirlink.ru; вход 2058 в панели должен быть выключен — порт свободен) и временный
 клиент через Beget, с одноразовым ключом, и для каждого варианта открывает YouTube и качает 5 МБ. Потом всё гасит.
@@ -26,7 +27,6 @@ PORT = 2058
 SOCKS = 10898
 
 VARIANTS = [
-    ('A как сейчас: набивка в Referer (?x_padding=XXX)', {}),
     ('B набивка в своём заголовке, случайные символы',
      {'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish'}),
     ('C набивка в cookie, случайные символы',
@@ -171,12 +171,12 @@ def stream_check(addr):
     srv = http.server.HTTPServer(('127.0.0.1', PORT), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        r = subprocess.run(['curl', '-sN', '--max-time', '15', '-w', '\n%{time_starttransfer} %{time_total}',
+        r = subprocess.run(['curl', '-sN', '--max-time', '15', '-w', '\n%{time_starttransfer} %{time_total} %{http_code}',
                             f'https://{addr}/api/stream/streamtest{int(time.time())}'], capture_output=True, text=True)
         body = r.stdout.strip().splitlines()
-        first, total = (body[-1].split() + ['?', '?'])[:2] if body else ('?', '?')
+        first, total, code = (body[-1].split() + ['?', '?', '?'])[:3] if body else ('?', '?', '?')
         chunks = sum(1 for b in body if b.startswith('chunk'))
-        return f'первый байт через {first} с, всё за {total} с, частей {chunks}/5'
+        return f'код {code}, первый байт через {first} с, всё за {total} с, частей {chunks}/5'
     finally:
         srv.shutdown()
 
@@ -186,6 +186,11 @@ def main():
     if not port_free(PORT):
         sys.exit(f'порт {PORT} занят — выключи вход 2058 в панели (LTE Обход 3) и запусти снова')
     print(f'CDN: {addr} → o-bg.pamirlink.ru → временный Xray на 127.0.0.1:{PORT}\n', flush=True)
+    # защита Beget банит IP после подозрительных запросов — с забаненного адреса проверять бессмысленно
+    home = subprocess.run(['curl', '-s', '-o', '/dev/null', '--max-time', '15', '-w', '%{http_code}', f'https://{addr}/'],
+                          capture_output=True, text=True).stdout
+    if home != '200':
+        sys.exit(f'Главная через Beget отвечает {home} — похоже, этот IP сейчас забанен защитой Beget. Подожди и запусти позже.')
     print('Поток через Beget (5 частей по секунде): ' + stream_check(addr), flush=True)
     print('   ≈1 с до первого байта — Beget отдаёт по частям (хорошо); ≈5 с — копит весь ответ (для туннеля плохо)\n', flush=True)
     for name, extra in VARIANTS:

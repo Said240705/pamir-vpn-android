@@ -92,7 +92,9 @@ def run_variant(addr, name, extra):
         'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': addr, 'port': 443,
                        'users': [{'id': uid, 'encryption': 'none'}]}]},
                        'streamSettings': {**cli_stream, 'security': 'tls',
-                                          'tlsSettings': {'serverName': addr, 'alpn': ['h2', 'http/1.1'], 'fingerprint': 'chrome'}}}],
+                                          # WebSocket/HTTPUpgrade live on HTTP/1.1 only: offering h2 lets the CDN pick it and the handshake dies
+                                          'tlsSettings': {'serverName': addr, 'alpn': ['h2', 'http/1.1'] if net == 'xhttp' else ['http/1.1'],
+                                                          'fingerprint': 'chrome'}}}],
     }
     files = []
     procs = []

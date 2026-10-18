@@ -70,15 +70,18 @@ def request(addr, method, path, headers=None, body=b''):
 
 
 def reached(marker):
-    for f in sorted(glob.glob('/var/log/nginx/access.log*')):
-        if f.endswith('.gz'):
-            continue
+    """The nginx log file (any of them: port 80 and 443 servers may log separately) with this request, or ''."""
+    for f in sorted(glob.glob('/var/log/nginx/*.log') + glob.glob('/var/log/nginx/*.log.1')):
         try:
-            if marker in open(f, encoding='utf-8', errors='replace').read():
-                return True
+            for line in open(f, encoding='utf-8', errors='replace'):
+                if marker in line:
+                    parts = line.split('"')
+                    req = parts[1][:60] if len(parts) > 1 else ''
+                    code = parts[2].split()[0] if len(parts) > 2 and parts[2].split() else '?'
+                    return f'{os.path.basename(f)}: {req} → {code}'
         except OSError:
             pass
-    return False
+    return ''
 
 
 def main():
@@ -110,7 +113,8 @@ def main():
     time.sleep(2)
     print()
     for name, status, server, start, marker in out:
-        got = 'ДОШЁЛ до нас' if reached(marker) else 'не дошёл'
+        where = reached(marker)
+        got = f'ДОШЁЛ до нас ({where})' if where else 'не дошёл'
         print(f'• {name}\n    ответ: {status} · Server: {server} · {got}\n    начало ответа: {start[:70]}')
     print('\nКак читать: «не дошёл» + 403 — режет сам Beget (WAF/правила CDN); «дошёл» + 403/4xx — отвечает наш nginx/Xray.')
 

@@ -42,7 +42,7 @@ def host_row():
 def request(addr, method, path, headers=None, body=b''):
     """One raw HTTPS request (HTTP/1.1, our own bytes — no library rewriting headers); status, Server, first bytes."""
     ctx = ssl.create_default_context()
-    raw = socket.create_connection((addr, 443), timeout=15)
+    raw = socket.create_connection((addr, 443), timeout=10)
     s = ctx.wrap_socket(raw, server_hostname=addr)
     lines = [f'{method} {path} HTTP/1.1', f'Host: {addr}', 'User-Agent: Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36',
              'Accept: */*', 'Connection: close']
@@ -69,19 +69,26 @@ def request(addr, method, path, headers=None, body=b''):
     return status, server, body_start
 
 
-def reached(marker):
-    """The nginx log file (any of them: port 80 and 443 servers may log separately) with this request, or ''."""
-    for f in sorted(glob.glob('/var/log/nginx/*.log') + glob.glob('/var/log/nginx/*.log.1')):
+def find_in_logs(markers):
+    """{marker: 'file: request → status'} from every nginx log (port 80 and 443 servers may log separately).
+    Only the tail of each file is read — the logs are big and the probe's requests are the newest lines."""
+    found = {}
+    for f in sorted(glob.glob('/var/log/nginx/*.log')):
         try:
-            for line in open(f, encoding='utf-8', errors='replace'):
-                if marker in line:
+            with open(f, 'rb') as fh:
+                fh.seek(0, os.SEEK_END)
+                fh.seek(max(0, fh.tell() - 8 * 1024 * 1024))
+                tail = fh.read().decode('utf-8', 'replace')
+        except OSError:
+            continue
+        for line in tail.splitlines():
+            for m in markers:
+                if m in line and m not in found:
                     parts = line.split('"')
                     req = parts[1][:60] if len(parts) > 1 else ''
                     code = parts[2].split()[0] if len(parts) > 2 and parts[2].split() else '?'
-                    return f'{os.path.basename(f)}: {req} → {code}'
-        except OSError:
-            pass
-    return ''
+                    found[m] = f'{os.path.basename(f)}: {req} → {code}'
+    return found
 
 
 def main():
@@ -109,11 +116,14 @@ def main():
         except Exception as e:
             status, server, start = f'ошибка: {e}', '-', ''
         out.append((name, status, server, start, sid + 'abcdefgh'[i]))
+        print(f'  {i + 1}/{len(tests)} {name}: {status}', flush=True)
         time.sleep(3)
     time.sleep(2)
+    print('ищу запросы в журналах nginx…', flush=True)
+    seen = find_in_logs([o[4] for o in out])
     print()
     for name, status, server, start, marker in out:
-        where = reached(marker)
+        where = seen.get(marker, '')
         got = f'ДОШЁЛ до нас ({where})' if where else 'не дошёл'
         print(f'• {name}\n    ответ: {status} · Server: {server} · {got}\n    начало ответа: {start[:70]}')
     print('\nКак читать: «не дошёл» + 403 — режет сам Beget (WAF/правила CDN); «дошёл» + 403/4xx — отвечает наш nginx/Xray.')

@@ -11,6 +11,7 @@
     python3 mognu_beget_xhttp_test.py                    адрес CDN из «Hosts» панели (вход 2058)
     python3 mognu_beget_xhttp_test.py ADDRESS            другой адрес CDN
     python3 mognu_beget_xhttp_test.py --dump             только показать, какие запросы шлёт клиент (без CDN)
+    python3 mognu_beget_xhttp_test.py --only=D           только варианты с этими буквами (например --only=DE)
 """
 import json
 import os
@@ -294,8 +295,11 @@ def main():
         return
     print('Поток через Beget (5 частей по секунде): ' + stream_check(addr), flush=True)
     print('   ≈1 с до первого байта — Beget отдаёт по частям (хорошо); ≈5 с — копит весь ответ (для туннеля плохо)\n', flush=True)
+    only = next((a.split('=', 1)[1].upper() for a in sys.argv if a.startswith('--only=')), '')
     for name, extra in VARIANTS:
-        if 'sessionIDPlacement' in extra and '--all' not in sys.argv:
+        if only and name[0] not in only:
+            continue
+        if 'sessionIDPlacement' in extra and '--all' not in sys.argv and not only:
             continue   # B/C: blocked on the UUID session id, see the notes above
         print(run_variant(addr, name, extra), flush=True)
         time.sleep(3)

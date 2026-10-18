@@ -28,14 +28,17 @@ PORT = 2058
 SOCKS = 10898
 
 # Beget режет адреса со случайными идентификаторами (UUID, hex, буквы+цифры), а xhttp по умолчанию кладёт
-# идентификатор сессии в путь (/api/stream/<uuid>/<номер>). Поэтому из пути убираем всё случайное.
+# идентификатор сессии в путь (/api/stream/<uuid>/<номер>). Поэтому из пути убираем всё случайное, а сам
+# идентификатор делаем не UUID (UUID с дефисами Beget режет и в заголовках, и в cookie) — sessionIDLength.
 VARIANTS = [
     ('B набивка, сессия и номер — в заголовках',
      {'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish',
-      'sessionIDPlacement': 'header', 'sessionKey': 'X-Request-Session', 'seqPlacement': 'header', 'seqKey': 'X-Request-Seq'}),
+      'sessionIDPlacement': 'header', 'sessionKey': 'X-Request-Session', 'seqPlacement': 'header', 'seqKey': 'X-Request-Seq',
+      'sessionIDLength': 32}),
     ('C набивка, сессия и номер — в cookie',
      {'xPaddingObfsMode': True, 'xPaddingPlacement': 'cookie', 'xPaddingKey': 'pad', 'xPaddingMethod': 'tokenish',
-      'sessionIDPlacement': 'cookie', 'sessionKey': 'sid', 'seqPlacement': 'cookie', 'seqKey': 'seq'}),
+      'sessionIDPlacement': 'cookie', 'sessionKey': 'sid', 'seqPlacement': 'cookie', 'seqKey': 'seq',
+      'sessionIDLength': 32}),
 ]
 
 

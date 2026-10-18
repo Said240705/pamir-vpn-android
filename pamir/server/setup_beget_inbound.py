@@ -117,12 +117,24 @@ def show_link():
         sys.exit('у клиентов входа нет subId')
     scheme = 'https' if st.get('subCertFile') else 'http'
     path = st.get('subPath') or '/sub/'
-    url = f'{scheme}://127.0.0.1:{st.get("subPort", "2096")}{path if path.endswith("/") else path + "/"}{sub_id}'
+    path = path if path.endswith('/') else path + '/'
+    local = f'{scheme}://127.0.0.1:{st.get("subPort", "2096")}{path}'
+    # the sub server may answer 403 to a bare local request: try the public sub URI first, then local with its domain
+    tries = []
+    if st.get('subURI'):
+        tries.append((st['subURI'].rstrip('/') + '/', None))
+    tries.append((local, st.get('subDomain') or None))
     ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-    try:
-        body = urllib.request.urlopen(url, context=ctx, timeout=10).read().decode('utf-8', 'replace')
-    except Exception as e:
-        sys.exit(f'не смог получить подписку с {scheme}://127.0.0.1:{st.get("subPort")}{path}… — {e}')
+    body, errors = None, []
+    for base, host in tries:
+        req = urllib.request.Request(base + sub_id, headers={'User-Agent': 'v2rayNG/1.10.0', **({'Host': host} if host else {})})
+        try:
+            body = urllib.request.urlopen(req, context=ctx, timeout=10).read().decode('utf-8', 'replace')
+            break
+        except Exception as e:
+            errors.append(f'{base}… — {e}')
+    if body is None:
+        sys.exit('не смог получить подписку:\n  ' + '\n  '.join(errors) + '\nпроверь в приложении: обнови подписку и подключись к «LTE Обход 3»')
     try:
         body = base64.b64decode(body.strip() + '==').decode('utf-8', 'replace')
     except Exception:

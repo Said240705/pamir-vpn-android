@@ -132,6 +132,35 @@ for dens, px in sizes.items():
     canvas.paste(m, ((fg - m.width) // 2, (fg - m.height) // 2 + int(fg * 0.02)), m)
     canvas.save(os.path.join(d, 'ic_launcher_foreground.png'))
 
+# New Year icon (PamirSeason switches the launcher alias to it Dec 20 – Jan 10): the M in a Santa hat instead of the crown
+icon_ny = Image.open(os.path.join(BRAND_DIR, 'icon_ny.png')).convert('RGBA')
+mark_ny = Image.open(os.path.join(BRAND_DIR, 'mark_ny.png')).convert('RGBA')
+if mark_ny.getbbox():
+    mark_ny = mark_ny.crop(mark_ny.getbbox())
+for dens, px in sizes.items():
+    d = os.path.join(MAIN, 'res', 'mipmap-' + dens)
+    sq = icon_ny.resize((px, px), Image.LANCZOS)
+    rmask = Image.new('L', (px, px), 0)
+    ImageDraw.Draw(rmask).rounded_rectangle((0, 0, px - 1, px - 1), radius=int(px * 0.22), fill=255)
+    out = Image.new('RGBA', (px, px), (0, 0, 0, 0)); out.paste(sq, (0, 0), rmask)
+    out.save(os.path.join(d, 'ic_launcher_ny.png'))
+    cmask = Image.new('L', (px, px), 0)
+    ImageDraw.Draw(cmask).ellipse((0, 0, px - 1, px - 1), fill=255)
+    out = Image.new('RGBA', (px, px), (0, 0, 0, 0)); out.paste(sq, (0, 0), cmask)
+    out.save(os.path.join(d, 'ic_launcher_ny_round.png'))
+    fg = int(px * 108 / 48)
+    canvas = Image.new('RGBA', (fg, fg), (0, 0, 0, 0))
+    m = mark_ny.copy(); m.thumbnail((int(fg * 0.5), int(fg * 0.5)), Image.LANCZOS)   # hat and M inside the 66dp safe circle
+    canvas.paste(m, ((fg - m.width) // 2, (fg - m.height) // 2), m)
+    canvas.save(os.path.join(d, 'ic_launcher_ny_foreground.png'))
+for name in ('ic_launcher_ny', 'ic_launcher_ny_round'):
+    with open(os.path.join(MAIN, 'res', 'mipmap-anydpi-v26', name + '.xml'), 'w', encoding='utf-8') as f:
+        # themed (monochrome) icons keep the plain mark: a one-colour hat would read as a blob
+        f.write('<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                '    <background android:drawable="@color/ic_launcher_background" />\n'
+                '    <foreground android:drawable="@mipmap/ic_launcher_ny_foreground" />\n'
+                '    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />\n</adaptive-icon>\n')
+
 # 7. device headers for subscription requests (panel HWID limit + device list in the cabinet)
 HEADERS_FN = r'''    private fun pamirDeviceHeaders(b: Request.Builder) {
         try {
@@ -200,15 +229,35 @@ edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
 ''', ''),
     ('''        <activity
             android:name=".ui.UrlSchemeActivity"''', '''        <activity
-            android:name=".pamir.PamirActivity"
+            android:name=".pamir.PamirHome"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask" />
+        <!-- The launcher entry keeps the name .pamir.PamirActivity it always had, so home-screen shortcuts made
+             before the New Year icon still point at it. PamirSeason swaps it for .pamir.PamirNewYear (the same
+             screen with the hat icon) Dec 20 – Jan 10; one of the two is always enabled. -->
+        <activity-alias
+            android:name=".pamir.PamirActivity"
+            android:targetActivity=".pamir.PamirHome"
+            android:exported="true"
+            android:enabled="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias
+            android:name=".pamir.PamirNewYear"
+            android:targetActivity=".pamir.PamirHome"
+            android:icon="@mipmap/ic_launcher_ny"
+            android:roundIcon="@mipmap/ic_launcher_ny_round"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
         <activity
             android:name=".ui.UrlSchemeActivity"'''),
 ])
@@ -216,10 +265,10 @@ edit(os.path.join(MAIN, 'AndroidManifest.xml'), [
     ('    <application', '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n\n    <application'),
 ])
 edit(os.path.join(PKG, 'ui', 'UrlSchemeActivity.kt'), [
-    ('startActivity(Intent(this, MainActivity::class.java))', 'startActivity(Intent(this, com.v2ray.ang.pamir.PamirActivity::class.java))'),
+    ('startActivity(Intent(this, MainActivity::class.java))', 'startActivity(Intent(this, com.v2ray.ang.pamir.PamirHome::class.java))'),
 ])
 edit(os.path.join(PKG, 'handler', 'NotificationManager.kt'), [
-    ('Intent(service, MainActivity::class.java)', 'Intent(service, com.v2ray.ang.pamir.PamirActivity::class.java)'),
+    ('Intent(service, MainActivity::class.java)', 'Intent(service, com.v2ray.ang.pamir.PamirHome::class.java)'),
 ])
 
 # 10. background features: drop alerts + watchdog, branded tile/widget/status icon, cleaner notification

@@ -28,6 +28,7 @@ class PamirReminderWorker(context: Context, params: WorkerParameters) : Coroutin
         runCatching { PamirOffers.notifyNew(applicationContext) }
         runCatching { PamirApi.pingInstall(applicationContext) }
         runCatching { PamirHosts.refresh() }
+        runCatching { PamirSeason.applyIcon(applicationContext) }   // the New Year icon on Dec 20 and back on Jan 11
         // one-tap update: a new build is downloaded on Wi-Fi and announced «готов — нажми, чтобы установить»
         runCatching { PamirUpdater.background(applicationContext) }
             .onFailure { Log.w("Pamir", "reminder: update step failed ${it.message}") }

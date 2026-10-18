@@ -13,7 +13,7 @@ import com.v2ray.ang.R
 import com.v2ray.ang.core.CoreServiceManager
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.handler.MmkvManager
-import com.v2ray.ang.pamir.PamirActivity
+import com.v2ray.ang.pamir.PamirHome
 import com.v2ray.ang.pamir.PamirWatch
 
 /** Pamir VPN home screen widget: power button + status + server. */
@@ -33,7 +33,7 @@ class WidgetProvider : AppWidgetProvider() {
             // first connection needs the system VPN dialog -> open the app, it connects by itself
             PendingIntent.getActivity(
                 context, R.id.layout_switch,
-                Intent(context, PamirActivity::class.java)
+                Intent(context, PamirHome::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     .putExtra(PamirWatch.EXTRA_RECONNECT, true),
                 flags

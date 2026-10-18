@@ -217,7 +217,7 @@ private val PROMO_ERRORS = mapOf(
     "already_reserved" to "Этот промокод закреплён за другим аккаунтом",
 )
 
-class PamirActivity : AppCompatActivity() {
+open class PamirActivity : AppCompatActivity() {
 
     private var running by mutableStateOf(false)
     private var connecting by mutableStateOf(false)
@@ -451,6 +451,12 @@ class PamirActivity : AppCompatActivity() {
                 pendingReconnect = false
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // the New Year icon follows the date; switching it while the app is in the background is the least visible moment
+        PamirSeason.applyIcon(this)
     }
 
     override fun onResume() {
@@ -3640,7 +3646,8 @@ class PamirActivity : AppCompatActivity() {
                     if (nyTaps >= 7) {
                         nyTaps = 0
                         val on = PamirSeason.toggle()
-                        toast(if (on) "🎄 Новогодний режим включён" else "Новогодний режим выключен")
+                        PamirSeason.applyIcon(this@PamirActivity)
+                        toast(if (on) "🎄 Новогодний режим включён — иконка сменится через пару секунд" else "Новогодний режим выключен")
                     } else if (nyTaps == 1) {
                         updCheck = if (newVersion != null) "new" else "checking"
                         if (newVersion == null) checkAppUpdate(manual = true)

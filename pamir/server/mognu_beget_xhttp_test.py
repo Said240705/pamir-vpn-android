@@ -10,6 +10,7 @@
 
     python3 mognu_beget_xhttp_test.py                    адрес CDN из «Hosts» панели (вход 2058)
     python3 mognu_beget_xhttp_test.py ADDRESS            другой адрес CDN
+    python3 mognu_beget_xhttp_test.py --dump             только показать, какие запросы шлёт клиент (без CDN)
 """
 import json
 import os
@@ -39,8 +40,9 @@ VARIANTS = [
 
 
 def cdn_address():
-    if len(sys.argv) > 1:
-        return sys.argv[1]
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if args:
+        return args[0]
     db = sqlite3.connect(f'file:{DB}?mode=ro', uri=True)
     inb = db.execute('select id from inbounds where port=?', (PORT,)).fetchone()
     row = db.execute('select * from hosts where inbound_id=? order by id limit 1', (inb[0],)).fetchone() if inb else None
@@ -185,6 +187,68 @@ def stream_check(addr):
         srv.shutdown()
 
 
+def dump_requests(name, extra):
+    """What the Xray client really sends with these settings: it connects to a tiny local listener (no TLS, no CDN)
+    that prints the first requests — the request line and headers, body sizes only."""
+    import threading
+    got = []
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(('127.0.0.1', 18080)); srv.listen(8); srv.settimeout(8)
+
+    def accept():
+        end = time.time() + 8
+        while time.time() < end and len(got) < 3:
+            try:
+                c, _ = srv.accept()
+            except socket.timeout:
+                break
+            c.settimeout(2)
+            data = b''
+            try:
+                while b'\r\n\r\n' not in data and len(data) < 16384:
+                    chunk = c.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+            except socket.timeout:
+                pass
+            got.append(data.split(b'\r\n\r\n')[0].decode('latin-1'))
+            c.close()
+
+    t = threading.Thread(target=accept, daemon=True); t.start()
+    uid = str(uuid.uuid4())
+    client = {
+        'log': {'loglevel': 'warning'},
+        'inbounds': [{'listen': '127.0.0.1', 'port': SOCKS, 'protocol': 'socks', 'settings': {'udp': False}}],
+        'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': '127.0.0.1', 'port': 18080,
+                       'users': [{'id': uid, 'encryption': 'none'}]}]},
+                       'streamSettings': {'network': 'xhttp', 'xhttpSettings': {'path': '/api/stream/', 'mode': 'packet-up', 'host': 'example.com', **extra}}}],
+    }
+    f = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False); json.dump(client, f); f.close()
+    p = subprocess.Popen([XRAY, 'run', '-c', f.name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        time.sleep(1.5)
+        subprocess.run(['curl', '-s', '-o', '/dev/null', '--max-time', '6', '--socks5-hostname', f'127.0.0.1:{SOCKS}', 'https://www.google.com/'],
+                       capture_output=True)
+        t.join(9)
+    finally:
+        p.terminate()
+        try:
+            p.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        os.unlink(f.name)
+        srv.close()
+    print(f'— что отправляет клиент ({name}):')
+    for head in got:
+        lines = head.split('\r\n')
+        print('    ' + '\n    '.join(l if len(l) < 140 else l[:137] + '…' for l in lines))
+        print('    ---')
+    if not got:
+        print('    ни одного запроса — клиент не смог собрать запрос с этими настройками')
+
+
 def main():
     addr = cdn_address()
     if not port_free(PORT):
@@ -195,6 +259,10 @@ def main():
                           capture_output=True, text=True).stdout
     if home != '200':
         sys.exit(f'Главная через Beget отвечает {home} — похоже, этот IP сейчас забанен защитой Beget. Подожди и запусти позже.')
+    if '--dump' in sys.argv:
+        for name, extra in VARIANTS:
+            dump_requests(name, extra)
+        return
     print('Поток через Beget (5 частей по секунде): ' + stream_check(addr), flush=True)
     print('   ≈1 с до первого байта — Beget отдаёт по частям (хорошо); ≈5 с — копит весь ответ (для туннеля плохо)\n', flush=True)
     for name, extra in VARIANTS:

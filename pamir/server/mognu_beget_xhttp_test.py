@@ -31,6 +31,10 @@ SOCKS = 10898
 # идентификатор сессии в путь (/api/stream/<uuid>/<номер>). Поэтому из пути убираем всё случайное, а сам
 # идентификатор делаем не UUID (UUID с дефисами Beget режет и в заголовках, и в cookie) — sessionIDLength.
 VARIANTS = [
+    # WebSocket / HTTPUpgrade: one connection on a fixed path, no per-session UUIDs in the request at all;
+    # every client understands them (Happ and Incy on iPhone too). Works only if the CDN passes the Upgrade.
+    ('D WebSocket', {'_network': 'ws'}),
+    ('E HTTPUpgrade', {'_network': 'httpupgrade'}),
     ('B набивка, сессия и номер — в заголовках',
      {'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish',
       'sessionIDPlacement': 'header', 'sessionKey': 'X-Request-Session', 'seqPlacement': 'header', 'seqKey': 'X-Request-Seq',
@@ -66,12 +70,20 @@ def port_free(port):
 
 def run_variant(addr, name, extra):
     uid = str(uuid.uuid4())
-    xs = {'path': '/api/stream/', 'mode': 'packet-up', **extra}
+    net = extra.get('_network', 'xhttp')
+    if net == 'xhttp':
+        xs = {'path': '/api/stream/', 'mode': 'packet-up', **extra}
+        srv_stream = {'network': 'xhttp', 'xhttpSettings': xs}
+        cli_stream = {'network': 'xhttp', 'xhttpSettings': {**xs, 'host': addr}}
+    else:
+        key = 'wsSettings' if net == 'ws' else 'httpupgradeSettings'
+        srv_stream = {'network': net, key: {'path': '/api/stream/'}}
+        cli_stream = {'network': net, key: {'path': '/api/stream/', 'host': addr}}
     server = {
         'log': {'loglevel': 'warning'},
         'inbounds': [{'listen': '127.0.0.1', 'port': PORT, 'protocol': 'vless',
                       'settings': {'clients': [{'id': uid}], 'decryption': 'none'},
-                      'streamSettings': {'network': 'xhttp', 'xhttpSettings': xs}}],
+                      'streamSettings': srv_stream}],
         'outbounds': [{'protocol': 'freedom'}],
     }
     client = {
@@ -79,7 +91,7 @@ def run_variant(addr, name, extra):
         'inbounds': [{'listen': '127.0.0.1', 'port': SOCKS, 'protocol': 'socks', 'settings': {'udp': False}}],
         'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': addr, 'port': 443,
                        'users': [{'id': uid, 'encryption': 'none'}]}]},
-                       'streamSettings': {'network': 'xhttp', 'xhttpSettings': {**xs, 'host': addr}, 'security': 'tls',
+                       'streamSettings': {**cli_stream, 'security': 'tls',
                                           'tlsSettings': {'serverName': addr, 'alpn': ['h2', 'http/1.1'], 'fingerprint': 'chrome'}}}],
     }
     files = []

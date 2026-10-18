@@ -112,9 +112,13 @@ def show_link():
     st = dict(db.execute("select key, value from settings where key like 'sub%'").fetchall())
     settings = json.loads(db.execute('select settings from inbounds where port=?', (PORT,)).fetchone()[0])
     db.close()
-    sub_id = next((c.get('subId') for c in settings.get('clients', []) if c.get('subId')), None)
+    now_ms = int(time.time() * 1000)
+    # an active client: a disabled or expired one gets an empty or cut-down subscription
+    live = [c for c in settings.get('clients', []) if c.get('subId') and c.get('enable', True)
+            and (not c.get('expiryTime') or c['expiryTime'] > now_ms)]
+    sub_id = live[0]['subId'] if live else None
     if not sub_id:
-        sys.exit('у клиентов входа нет subId')
+        sys.exit('у входа нет активного клиента с subId')
     scheme = 'https' if st.get('subCertFile') else 'http'
     path = st.get('subPath') or '/sub/'
     path = path if path.endswith('/') else path + '/'
@@ -135,13 +139,17 @@ def show_link():
             errors.append(f'{base}… — {e}')
     if body is None:
         sys.exit('не смог получить подписку:\n  ' + '\n  '.join(errors) + '\nпроверь в приложении: обнови подписку и подключись к «LTE Обход 3»')
-    try:
-        body = base64.b64decode(body.strip() + '==').decode('utf-8', 'replace')
-    except Exception:
-        pass
+    if '://' not in body:
+        # base64 subscription; b64decode skips stray characters, so only decode what is not already plain links
+        try:
+            body = base64.b64decode(body.strip() + '==').decode('utf-8', 'replace')
+        except Exception:
+            pass
     lines = [l for l in body.splitlines() if 'begetcdn' in l]
     if not lines:
-        sys.exit('в подписке нет ссылки на begetcdn — хост выключен или скрыт')
+        names = [urllib.parse.unquote(l.rsplit('#', 1)[1]) for l in body.splitlines() if '://' in l and '#' in l]
+        sys.exit(f'в подписке нет ссылки на begetcdn — хост выключен или скрыт. В подписке {len(names)} серверов: '
+                 + ', '.join(names[:30]) + ('' if names else f' (начало ответа: {body[:80]!r})'))
     for l in lines:
         masked = re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '***', l)
         q = urllib.parse.parse_qs(urllib.parse.urlsplit(masked).query)

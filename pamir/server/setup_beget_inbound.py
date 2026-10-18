@@ -33,10 +33,12 @@ LOG = '/root/setup_beget_inbound.log'
 BEGET = {
     'mode': 'packet-up',
     'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish',
-    'sessionIDPlacement': 'cookie', 'sessionIDKey': 'sid', 'sessionIDTable': 'hex', 'sessionIDLength': 32,
+    'sessionIDPlacement': 'cookie', 'sessionIDKey': 'sid', 'sessionIDTable': 'hex', 'sessionIDLength': '32-32',
     'seqPlacement': 'cookie', 'seqKey': 'seq',
     'uplinkDataPlacement': 'body',
 }
+# sessionIDLength as a "from-to" string like the panel's other ranges: a plain number is dropped from the share link,
+# and a client without it fails with "sessionIDTable or sessionIDLength is too small".
 # uplinkHTTPMethod GET is not what passed through Beget (POST did); the query padding key is unused with header placement
 DROP = ('uplinkHTTPMethod', 'xPaddingKey')
 

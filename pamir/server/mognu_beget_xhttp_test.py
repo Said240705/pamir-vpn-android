@@ -102,16 +102,83 @@ def run_variant(addr, name, extra):
             mbit = float(sp) * 8 / 1e6 if code == '200' else 0
             out.append(f'{label} {code}' + (f' ({mbit:.1f} Мбит/с)' if label == '5 МБ' and code == '200' else ''))
         ok = all(' 200' in o for o in out if o.startswith(('YouTube', '5 МБ')))
-        return f'{"✅" if ok else "❌"} {name}: ' + ' · '.join(out)
+        line = f'{"✅" if ok else "❌"} {name}: ' + ' · '.join(out)
+        if not ok:
+            line += '\n' + diagnostics(procs, uid)
+        return line
     finally:
         for p in procs:
-            p.terminate()
-            try:
-                p.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                p.kill()
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
         for path in files:
             os.unlink(path)
+
+
+def diagnostics(procs, uid):
+    """Why a variant failed: the last lines of both Xray logs and what nginx saw on /api/stream/ for this run."""
+    lines = []
+    for label, p in (('сервер', procs[0]), ('клиент', procs[1])):
+        p.terminate()
+        try:
+            log = p.communicate(timeout=3)[0]
+        except subprocess.TimeoutExpired:
+            p.kill(); log = ''
+        tail = [l[-170:] for l in log.splitlines() if l.strip()][-4:]
+        lines.append(f'    Xray {label}: ' + ('\n      '.join(tail) if tail else 'пусто'))
+    seen = []
+    try:
+        with open('/var/log/nginx/access.log', 'rb') as fh:
+            fh.seek(0, os.SEEK_END); fh.seek(max(0, fh.tell() - 4 * 1024 * 1024))
+            for l in fh.read().decode('utf-8', 'replace').splitlines():
+                if '/api/stream/' in l and time.strftime('%d/%b/%Y') in l:
+                    parts = l.split('"')
+                    if len(parts) > 2:
+                        seen.append(f'{parts[1][:70]} → {" ".join(parts[2].split()[:2])}')
+    except OSError:
+        pass
+    lines.append('    nginx (/api/stream/, последние): ' + ('\n      '.join(seen[-6:]) if seen else 'ни одного запроса не дошло'))
+    return '\n'.join(lines)
+
+
+def stream_check(addr):
+    """Does Beget pass a long answer bit by bit? A tiny local server sends 5 chunks a second apart."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Transfer-Encoding', 'chunked')
+            self.send_header('X-Accel-Buffering', 'no')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            for i in range(5):
+                part = f'chunk{i}\n'.encode()
+                self.wfile.write(f'{len(part):x}\r\n'.encode() + part + b'\r\n'); self.wfile.flush()
+                time.sleep(1)
+            self.wfile.write(b'0\r\n\r\n')
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(('127.0.0.1', PORT), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        r = subprocess.run(['curl', '-sN', '--max-time', '15', '-w', '\n%{time_starttransfer} %{time_total}',
+                            f'https://{addr}/api/stream/streamtest{int(time.time())}'], capture_output=True, text=True)
+        body = r.stdout.strip().splitlines()
+        first, total = (body[-1].split() + ['?', '?'])[:2] if body else ('?', '?')
+        chunks = sum(1 for b in body if b.startswith('chunk'))
+        return f'первый байт через {first} с, всё за {total} с, частей {chunks}/5'
+    finally:
+        srv.shutdown()
 
 
 def main():
@@ -119,6 +186,8 @@ def main():
     if not port_free(PORT):
         sys.exit(f'порт {PORT} занят — выключи вход 2058 в панели (LTE Обход 3) и запусти снова')
     print(f'CDN: {addr} → o-bg.pamirlink.ru → временный Xray на 127.0.0.1:{PORT}\n', flush=True)
+    print('Поток через Beget (5 частей по секунде): ' + stream_check(addr), flush=True)
+    print('   ≈1 с до первого байта — Beget отдаёт по частям (хорошо); ≈5 с — копит весь ответ (для туннеля плохо)\n', flush=True)
     for name, extra in VARIANTS:
         print(run_variant(addr, name, extra), flush=True)
         time.sleep(3)

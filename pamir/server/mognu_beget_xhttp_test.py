@@ -26,11 +26,15 @@ DB = '/etc/x-ui/x-ui.db'
 PORT = 2058
 SOCKS = 10898
 
+# Beget режет адреса со случайными идентификаторами (UUID, hex, буквы+цифры), а xhttp по умолчанию кладёт
+# идентификатор сессии в путь (/api/stream/<uuid>/<номер>). Поэтому из пути убираем всё случайное.
 VARIANTS = [
-    ('B набивка в своём заголовке, случайные символы',
-     {'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish'}),
-    ('C набивка в cookie, случайные символы',
-     {'xPaddingObfsMode': True, 'xPaddingPlacement': 'cookie', 'xPaddingKey': 'sid', 'xPaddingMethod': 'tokenish'}),
+    ('B набивка, сессия и номер — в заголовках',
+     {'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish',
+      'sessionIDPlacement': 'header', 'sessionKey': 'X-Request-Session', 'seqPlacement': 'header', 'seqKey': 'X-Request-Seq'}),
+    ('C набивка, сессия и номер — в cookie',
+     {'xPaddingObfsMode': True, 'xPaddingPlacement': 'cookie', 'xPaddingKey': 'pad', 'xPaddingMethod': 'tokenish',
+      'sessionIDPlacement': 'cookie', 'sessionKey': 'sid', 'seqPlacement': 'cookie', 'seqKey': 'seq'}),
 ]
 
 

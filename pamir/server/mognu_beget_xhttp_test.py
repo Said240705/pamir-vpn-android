@@ -29,27 +29,27 @@ DB = '/etc/x-ui/x-ui.db'
 PORT = 2058
 SOCKS = 10898
 
-# Beget режет адреса со случайными идентификаторами (UUID, hex, буквы+цифры), а xhttp по умолчанию кладёт
-# идентификатор сессии в путь (/api/stream/<uuid>/<номер>). Поэтому из пути убираем всё случайное, а сам
-# идентификатор делаем не UUID (UUID с дефисами Beget режет и в заголовках, и в cookie) — sessionIDLength.
+# Beget режет адреса со случайными идентификаторами (UUID, hex, буквы+цифры) и UUID с дефисами где угодно, а xhttp
+# по умолчанию кладёт UUID сессии в путь (/api/stream/<uuid>/<номер>). Зато 32 hex-символа в заголовке проходят,
+# и длинный ответ Beget отдаёт по частям. Поэтому packet-up: сессия — 32 hex (sessionIDTable + sessionIDLength;
+# без таблицы длина не действует и остаётся UUID) в заголовке, cookie или параметре, номер — там же, путь без случайного.
+_PAD = {'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish'}
+_HEX = {'sessionIDTable': 'hex', 'sessionIDLength': 32}
 VARIANTS = [
-    # stream-one: the whole tunnel is one long POST on /api/stream/ — no session id at all (so no UUID);
-    # padding in a header with random characters. Works only if the CDN streams the request body both ways.
-    ('F stream-one, набивка в заголовке',
-     {'mode': 'stream-one', 'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad',
-      'xPaddingMethod': 'tokenish'}),
-    # WebSocket / HTTPUpgrade: one connection on a fixed path, no per-session UUIDs in the request at all;
-    # every client understands them (Happ and Incy on iPhone too). Works only if the CDN passes the Upgrade.
+    ('G packet-up, сессия и номер — в заголовках',
+     {'mode': 'packet-up', **_PAD, **_HEX, 'sessionIDPlacement': 'header', 'sessionIDKey': 'X-Request-Session',
+      'seqPlacement': 'header', 'seqKey': 'X-Request-Seq'}),
+    ('H packet-up, сессия и номер — в параметрах адреса',
+     {'mode': 'packet-up', **_PAD, **_HEX, 'sessionIDPlacement': 'query', 'sessionIDKey': 'sid',
+      'seqPlacement': 'query', 'seqKey': 'seq'}),
+    ('C packet-up, сессия и номер — в cookie',
+     {'mode': 'packet-up', **_PAD, **_HEX, 'sessionIDPlacement': 'cookie', 'sessionIDKey': 'sid',
+      'seqPlacement': 'cookie', 'seqKey': 'seq'}),
+    # stream-one: the whole tunnel is one long POST — Beget holds the request body back, so it stalls (kept for --only=F)
+    ('F stream-one, набивка в заголовке', {'mode': 'stream-one', **_PAD}),
+    # WebSocket / HTTPUpgrade: Beget drops Upgrade and never passes the 101 back (kept for --only=DE)
     ('D WebSocket', {'_network': 'ws'}),
     ('E HTTPUpgrade', {'_network': 'httpupgrade'}),
-    ('B набивка, сессия и номер — в заголовках',
-     {'xPaddingObfsMode': True, 'xPaddingPlacement': 'header', 'xPaddingHeader': 'X-Request-Pad', 'xPaddingMethod': 'tokenish',
-      'sessionIDPlacement': 'header', 'sessionKey': 'X-Request-Session', 'seqPlacement': 'header', 'seqKey': 'X-Request-Seq',
-      'sessionIDLength': 32}),
-    ('C набивка, сессия и номер — в cookie',
-     {'xPaddingObfsMode': True, 'xPaddingPlacement': 'cookie', 'xPaddingKey': 'pad', 'xPaddingMethod': 'tokenish',
-      'sessionIDPlacement': 'cookie', 'sessionKey': 'sid', 'seqPlacement': 'cookie', 'seqKey': 'seq',
-      'sessionIDLength': 32}),
 ]
 
 
@@ -300,8 +300,8 @@ def main():
     for name, extra in VARIANTS:
         if only and name[0] not in only:
             continue
-        if 'sessionIDPlacement' in extra and '--all' not in sys.argv and not only:
-            continue   # B/C: blocked on the UUID session id, see the notes above
+        if not only and name[0] in 'FDE' and '--all' not in sys.argv:
+            continue   # known not to pass Beget, see the notes above
         print(run_variant(addr, name, extra), flush=True)
         time.sleep(3)
     print('\nВсё временное выключено и удалено. Панель и ключи людей не трогались.')

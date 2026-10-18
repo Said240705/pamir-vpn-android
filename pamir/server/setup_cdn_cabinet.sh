@@ -6,24 +6,26 @@
 #
 # Что делает: в /etc/nginx/sites-enabled/yacdn.pamirlink.ru заменяет страницу-заглушку («location /») на кабинет;
 # путь VPN /api/sync/ не трогает (у nginx побеждает более длинный префикс, так что /api/ его не перехватит).
-# Копия файла рядом (.bak-cabinet); при ошибке nginx -t всё возвращается.
+# Копия файла — /root/yacdn.pamirlink.ru.bak-cabinet (не в sites-enabled: nginx читает там все файлы подряд);
+# при ошибке nginx -t всё возвращается.
 #     bash setup_cdn_cabinet.sh          применить
 #     bash setup_cdn_cabinet.sh --undo   вернуть заглушку
 set -euo pipefail
 F=/etc/nginx/sites-enabled/yacdn.pamirlink.ru
 [ -L "$F" ] && F=$(readlink -f "$F")
 WEB=/var/www/mognu/frontend
+BAK=/root/yacdn.pamirlink.ru.bak-cabinet
 OLD_FRONT=/var/www/pamir-miniapp/frontend
 
 if [ "${1:-}" = "--undo" ]; then
-  [ -f "$F.bak-cabinet" ] || { echo "Нет копии $F.bak-cabinet"; exit 1; }
-  cp "$F.bak-cabinet" "$F" && nginx -t && systemctl reload nginx && echo "Вернул заглушку."
+  [ -f "$BAK" ] || { echo "Нет копии $BAK"; exit 1; }
+  cp "$BAK" "$F" && nginx -t && systemctl reload nginx && echo "Вернул заглушку."
   exit 0
 fi
 grep -q "Mognu cabinet via CDN" "$F" && { echo "Уже настроено."; exit 0; }
 grep -q "location /api/sync/" "$F" || { echo "В $F нет /api/sync/ — это не тот файл, ничего не меняю."; exit 1; }
 
-cp "$F" "$F.bak-cabinet"
+cp "$F" "$BAK"
 python3 - "$F" "$WEB" "$OLD_FRONT" <<'PY'
 import re, sys
 path, web, old = sys.argv[1:4]
@@ -70,7 +72,7 @@ open(path, 'w', encoding='utf-8').write(out[:first_server] + ip_map + out[first_
 PY
 if ! nginx -t; then
   echo "!! nginx -t не прошёл — возвращаю как было"
-  cp "$F.bak-cabinet" "$F"; nginx -t && systemctl reload nginx; exit 1
+  cp "$BAK" "$F"; nginx -t && systemctl reload nginx; exit 1
 fi
 systemctl reload nginx
 

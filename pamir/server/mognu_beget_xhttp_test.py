@@ -233,12 +233,18 @@ def dump_requests(name, extra):
 
     t = threading.Thread(target=accept, daemon=True); t.start()
     uid = str(uuid.uuid4())
+    net = extra.get('_network', 'xhttp')
+    if net == 'xhttp':
+        stream = {'network': 'xhttp', 'xhttpSettings': {'path': '/api/stream/', 'mode': 'packet-up', 'host': 'example.com', **extra}}
+    else:
+        key = 'wsSettings' if net == 'ws' else 'httpupgradeSettings'
+        stream = {'network': net, key: {'path': '/api/stream/', 'host': 'example.com'}}
     client = {
         'log': {'loglevel': 'warning'},
         'inbounds': [{'listen': '127.0.0.1', 'port': SOCKS, 'protocol': 'socks', 'settings': {'udp': False}}],
         'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [{'address': '127.0.0.1', 'port': 18080,
                        'users': [{'id': uid, 'encryption': 'none'}]}]},
-                       'streamSettings': {'network': 'xhttp', 'xhttpSettings': {'path': '/api/stream/', 'mode': 'packet-up', 'host': 'example.com', **extra}}}],
+                       'streamSettings': stream}],
     }
     f = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False); json.dump(client, f); f.close()
     p = subprocess.Popen([XRAY, 'run', '-c', f.name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -276,7 +282,8 @@ def main():
         sys.exit(f'Главная через Beget отвечает {home} — похоже, этот IP сейчас забанен защитой Beget. Подожди и запусти позже.')
     if '--dump' in sys.argv:
         for name, extra in VARIANTS:
-            dump_requests(name, extra)
+            if extra.get('_network') or '--all' in sys.argv:
+                dump_requests(name, extra)
         return
     print('Поток через Beget (5 частей по секунде): ' + stream_check(addr), flush=True)
     print('   ≈1 с до первого байта — Beget отдаёт по частям (хорошо); ≈5 с — копит весь ответ (для туннеля плохо)\n', flush=True)

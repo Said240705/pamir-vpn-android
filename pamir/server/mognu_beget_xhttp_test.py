@@ -12,6 +12,7 @@
     python3 mognu_beget_xhttp_test.py ADDRESS            другой адрес CDN
     python3 mognu_beget_xhttp_test.py --dump             только показать, какие запросы шлёт клиент (без CDN)
     python3 mognu_beget_xhttp_test.py --only=D           только варианты с этими буквами (например --only=DE)
+    python3 mognu_beget_xhttp_test.py --only=-           только проверка потока, без вариантов
 """
 import json
 import os
@@ -201,7 +202,7 @@ def stream_check(addr):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         r = subprocess.run(['curl', '-sN', '--max-time', '15', '-w', '\n%{time_starttransfer} %{time_total} %{http_code}',
-                            f'https://{addr}/api/stream/streamtest{int(time.time())}'], capture_output=True, text=True)
+                            f'https://{addr}/api/stream/?t={int(time.time())}'], capture_output=True, text=True)
         body = r.stdout.strip().splitlines()
         first, total, code = (body[-1].split() + ['?', '?', '?'])[:3] if body else ('?', '?', '?')
         chunks = sum(1 for b in body if b.startswith('chunk'))

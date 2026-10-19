@@ -277,18 +277,29 @@ async def advent_open(telegram_id: int) -> dict[str, Any]:
 _RANK_CACHE: dict[str, Any] = {'at': 0.0, 'year': None, 'totals': []}
 
 
-def _key_year_traffic(rows, year: int) -> tuple[int, dict[int, int], dict[str, int]]:
-    """Traffic of one key in a year from its daily snapshots of a cumulative counter that may reset."""
+def _history_start(conn) -> str:
+    """The first day the bot recorded traffic snapshots (it started on 2026-09-06)."""
+    row = conn.execute("SELECT MIN(snapshot_date) FROM traffic_history").fetchone()
+    return str(row[0] or '')[:10] if row else ''
+
+
+def _key_year_traffic(rows, year: int, history_start: str = '') -> tuple[int, dict[int, int], dict[str, int]]:
+    """Traffic of one key in a year from its daily snapshots of a cumulative counter that may reset.
+    A key that existed before snapshots began carries everything it used so far in its first snapshot: that goes to
+    the year total only, not to that day or month, or the first recorded day would win «best day» for everyone."""
     total, months, days = 0, {}, {}
     prev = None
     for row in rows:
         date = str(row['snapshot_date'])[:10]
         used = int(row['traffic_used'] or 0)
+        carried = prev is None and date == history_start
         delta = used if prev is None or used < prev else used - prev
         prev = used
         if not date.startswith(str(year)) or delta <= 0:
             continue
         total += delta
+        if carried:
+            continue
         months[int(date[5:7])] = months.get(int(date[5:7]), 0) + delta
         days[date] = days.get(date, 0) + delta
     return total, months, days
@@ -299,13 +310,14 @@ def _all_totals(conn, year: int) -> list[int]:
     if _RANK_CACHE['year'] == year and time.time() - _RANK_CACHE['at'] < 6 * 3600:
         return _RANK_CACHE['totals']
     per_user: dict[int, int] = {}
+    start = _history_start(conn)
     keys = conn.execute("SELECT id, user_id FROM vpn_keys").fetchall()
     for key in keys:
         rows = conn.execute(
             "SELECT snapshot_date, traffic_used FROM traffic_history WHERE key_id = ? ORDER BY snapshot_date",
             (key['id'],),
         ).fetchall()
-        total, _, _ = _key_year_traffic(rows, year)
+        total, _, _ = _key_year_traffic(rows, year, start)
         if total:
             per_user[int(key['user_id'])] = per_user.get(int(key['user_id']), 0) + total
     totals = sorted(per_user.values())
@@ -332,12 +344,13 @@ def wrapped(telegram_id: int) -> dict[str, Any]:
             days_with_us = None
 
         total, months, days = 0, {}, {}
+        start = _history_start(conn)
         for key in conn.execute("SELECT id FROM vpn_keys WHERE user_id = ?", (uid,)).fetchall():
             rows = conn.execute(
                 "SELECT snapshot_date, traffic_used FROM traffic_history WHERE key_id = ? ORDER BY snapshot_date",
                 (key['id'],),
             ).fetchall()
-            t, m, d = _key_year_traffic(rows, year)
+            t, m, d = _key_year_traffic(rows, year, start)
             total += t
             for k, v in m.items():
                 months[k] = months.get(k, 0) + v

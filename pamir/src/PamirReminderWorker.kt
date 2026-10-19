@@ -14,7 +14,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Every 6 hours: refreshes the subscription (fresh "days left"), reminds about renewal
- * notifies about a new news item from the admin panel and about a comeback discount.
+ * notifies about a new news item from the admin panel and about a comeback discount, and gets a new app build
+ * ready on Wi-Fi (PamirUpdater).
  * Runs in the WorkManager process (":bg"), so it works even when the app is closed.
  */
 class PamirReminderWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -27,6 +28,10 @@ class PamirReminderWorker(context: Context, params: WorkerParameters) : Coroutin
         runCatching { PamirOffers.notifyNew(applicationContext) }
         runCatching { PamirApi.pingInstall(applicationContext) }
         runCatching { PamirHosts.refresh() }
+        runCatching { PamirSeason.applyIcon(applicationContext) }   // the New Year icon on Dec 20 and back on Jan 11
+        // one-tap update: a new build is downloaded on Wi-Fi and announced «готов — нажми, чтобы установить»
+        runCatching { PamirUpdater.background(applicationContext) }
+            .onFailure { Log.w("Pamir", "reminder: update step failed ${it.message}") }
         return Result.success()
     }
 

@@ -389,7 +389,7 @@ object PamirWatch {
                 }
             )
         }
-        val open = Intent(ctx, PamirActivity::class.java)
+        val open = Intent(ctx, PamirHome::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             .putExtra(extra, true)
         val pi = PendingIntent.getActivity(

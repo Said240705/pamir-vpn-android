@@ -149,6 +149,7 @@ import java.net.URL
 private const val BOT_URL = "https://t.me/pamirlink_bot"
 private const val PREF_RU_DIRECT = "pamir_ru_direct"
 private const val PREF_ROUTING_INIT = "pamir_routing_init"
+private const val OWN_SERVICES_RULE = "Mognu: свой сайт и API через VPN"
 private const val PREF_AUTO_BEST = "pamir_auto_best"
 private const val PREF_LAST_SUB_UPDATE = "pamir_last_sub_update"
 private const val K_GREET_AT = "pamir_greet_at"        // last greeting on start (once every 3 hours)
@@ -160,7 +161,6 @@ private const val PREF_TV_BOOT_INIT = "pamir_tv_boot_init"
 private const val PREF_AUTO_LTE_ACTIVE = "pamir_auto_lte_active"
 private const val PREF_PREFERRED = "pamir_preferred"
 /** Latest non-prerelease build; AppConfig.APP_URL is github.com/<owner>/pamir-vpn-android after branding. */
-private val GITHUB_LATEST = AppConfig.APP_URL.replace("https://github.com/", "https://api.github.com/repos/") + "/releases/latest"
 private const val PREF_THEME = "pamir_theme"
 /** Id of the account key whose subscription this phone uses (an account can hold keys for several people). */
 private const val PREF_DEVICE_KEY = "pamir_device_key"
@@ -217,7 +217,7 @@ private val PROMO_ERRORS = mapOf(
     "already_reserved" to "Этот промокод закреплён за другим аккаунтом",
 )
 
-class PamirActivity : AppCompatActivity() {
+open class PamirActivity : AppCompatActivity() {
 
     private var running by mutableStateOf(false)
     private var connecting by mutableStateOf(false)
@@ -433,6 +433,10 @@ class PamirActivity : AppCompatActivity() {
             i.removeExtra(PamirNews.EXTRA_NEWS)
             openNews()
         }
+        if (i.getBooleanExtra(PamirUpdater.EXTRA_INSTALL, false)) {
+            i.removeExtra(PamirUpdater.EXTRA_INSTALL)
+            lifecycleScope.launch { openReadyUpdate() }
+        }
         if (i.getBooleanExtra(PamirWatch.EXTRA_RENEW, false)) {
             i.removeExtra(PamirWatch.EXTRA_RENEW)
             openRenew()
@@ -447,6 +451,12 @@ class PamirActivity : AppCompatActivity() {
                 pendingReconnect = false
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // the New Year icon follows the date; switching it while the app is in the background is the least visible moment
+        PamirSeason.applyIcon(this)
     }
 
     override fun onResume() {
@@ -1380,6 +1390,7 @@ class PamirActivity : AppCompatActivity() {
             MmkvManager.encodeSettings(PREF_RU_DIRECT, true)
             MmkvManager.encodeSettings(PREF_ROUTING_INIT, true)
         }
+        ensureOwnServicesRule()
         if (!MmkvManager.decodeSettingsBool("pamir_speed_init", false)) {
             MmkvManager.encodeSettings(AppConfig.PREF_SPEED_ENABLED, true)
             MmkvManager.encodeSettings("pamir_speed_init", true)
@@ -1598,50 +1609,15 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
-    /** A published app build: version and where its APK for this device can be downloaded. */
-    private class UpdateSource(val version: String, val url: String, val minVersion: String)
-
-    private fun httpGet(url: String, accept: String? = null): String {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 6000; c.readTimeout = 6000
-        c.setRequestProperty("Cache-Control", "no-cache")
-        if (accept != null) c.setRequestProperty("Accept", accept)
-        return c.inputStream.bufferedReader().use { it.readText() }
-    }
-
-    private fun prefersArm64() = android.os.Build.SUPPORTED_ABIS.contains("arm64-v8a")
-
-    /** GitHub releases: fixed-name copies (pamir-vpn.apk, pamir-vpn-universal.apk) or the versioned APKs. */
-    private fun updateFromGithub(): UpdateSource? {
-        val o = JSONObject(httpGet(GITHUB_LATEST, "application/vnd.github+json"))
-        val v = o.optString("tag_name").removePrefix("v")
-        val assets = o.optJSONArray("assets") ?: return null
-        val urls = (0 until assets.length()).associate { assets.getJSONObject(it).let { a -> a.optString("name") to a.optString("browser_download_url") } }
-        fun pick(fixed: String, suffix: String) = urls[fixed] ?: urls.entries.firstOrNull { it.key.endsWith(suffix) }?.value
-        val url = (if (prefersArm64()) pick("pamir-vpn.apk", "_arm64-v8a.apk") else null) ?: pick("pamir-vpn-universal.apk", "_universal.apk")
-        // The build workflow writes "<!-- pamir-min-version: 1.6.1 -->" into the release notes.
-        val min = Regex("""pamir-min-version:\s*([\d.]+)""").find(o.optString("body"))?.groupValues?.get(1).orEmpty()
-        return if (v.isNotBlank() && url != null) UpdateSource(v, url, min) else null
-    }
-
-    /** The site mirror (download/android.json), kept for when GitHub is slow or blocked; the first host that answers. */
-    private fun updateFromSite(): UpdateSource? {
-        for (h in PamirHosts.ordered()) {
-            val o = runCatching { JSONObject(httpGet("$h/download/android.json")) }.getOrNull() ?: continue
-            val v = o.optString("version")
-            val abi = if (prefersArm64() && o.has("arm64-v8a")) "arm64-v8a" else "universal"
-            val file = o.optJSONObject(abi)?.optString("file") ?: "pamir-vpn-universal.apk"
-            return if (v.isNotBlank()) UpdateSource(v, "$h/download/$file", o.optString("min_version")) else null
-        }
-        return null
-    }
+    private fun prefersArm64() = PamirUpdater.prefersArm64()
 
     /** Asks GitHub and the site in parallel; offers the newest version and every source that has it. */
     private fun checkAppUpdate(manual: Boolean = false) {
         lifecycleScope.launch {
             val found = withContext(Dispatchers.IO) {
-                val gh = async { runCatching { updateFromGithub() }.onFailure { Log.w("Pamir", "update github: ${it.message}") }.getOrNull() }
-                val site = async { runCatching { updateFromSite() }.onFailure { Log.w("Pamir", "update site: ${it.message}") }.getOrNull() }
+                val port = PamirUpdater.livePort()
+                val gh = async { runCatching { PamirUpdater.fromGithub(port) }.onFailure { Log.w("Pamir", "update github: ${it.message}") }.getOrNull() }
+                val site = async { runCatching { PamirUpdater.fromSite(port) }.onFailure { Log.w("Pamir", "update site: ${it.message}") }.getOrNull() }
                 listOfNotNull(gh.await(), site.await())
             }
             if (found.isNotEmpty()) {
@@ -1664,8 +1640,23 @@ class PamirActivity : AppCompatActivity() {
 
     private fun isNewer(remote: String, local: String): Boolean = PamirWatch.versionNewer(remote, local)
 
+    /** The «Mognu N готов» notification: install the downloaded build; if it is gone, check and offer it again. */
+    private suspend fun openReadyUpdate() {
+        val v = PamirUpdater.announcedVersion()
+        val ready = v != null && isNewer(v, appVersion()) && withContext(Dispatchers.IO) { PamirUpdater.ready(this@PamirActivity, v) } != null
+        if (ready) {
+            newVersion = v
+            installUpdate()
+        } else checkAppUpdate(manual = true)
+    }
+
+    /**
+     * «Обновить»: an APK the background worker already downloaded (PamirUpdater) opens the installer at once;
+     * otherwise it downloads now with progress — through the VPN first, then directly.
+     */
     private fun installUpdate() {
         if (updProgress >= 0) return
+        val version = newVersion ?: return
         if (android.os.Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
             toast("Разрешите установку обновлений и нажмите «Обновить» ещё раз", true)
             runCatching {
@@ -1673,54 +1664,27 @@ class PamirActivity : AppCompatActivity() {
             }
             return
         }
+        PamirUpdater.dismiss(this)
         updProgress = 0
         lifecycleScope.launch {
+            val port = proxyPort()
+            val urls = newVersionUrls
             val file = withContext(Dispatchers.IO) {
-                newVersionUrls.firstNotNullOfOrNull { url -> downloadApk(url) }
+                PamirUpdater.ready(this@PamirActivity, version)
+                    ?: urls.firstNotNullOfOrNull { url ->
+                        PamirUpdater.download(this@PamirActivity, url, version, port) { pr ->
+                            lifecycleScope.launch(Dispatchers.Main) { if (updProgress >= 0) updProgress = pr }
+                        }
+                    }
             }
             updProgress = -1
             if (file == null) {
                 toast("Не удалось скачать обновление")
                 return@launch
             }
-            runCatching {
-                val uri = androidx.core.content.FileProvider.getUriForFile(this@PamirActivity, "$packageName.cache", file)
-                startActivity(
-                    Intent(Intent.ACTION_VIEW)
-                        .setDataAndType(uri, "application/vnd.android.package-archive")
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }.onFailure { toast("Не удалось открыть установщик") }
+            if (!PamirUpdater.install(this@PamirActivity, file)) toast("Не удалось открыть установщик")
         }
     }
-
-    /** Downloads one source into the cache; null (and logged) when it fails or arrives incomplete. */
-    private suspend fun downloadApk(url: String): java.io.File? = runCatching {
-        withContext(Dispatchers.Main) { updProgress = 0 }
-        val dir = java.io.File(cacheDir, "update").apply { mkdirs() }
-        val f = java.io.File(dir, "pamir-vpn.apk")
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 10000; c.readTimeout = 20000
-        val total = c.contentLengthLong
-        var done = 0L
-        c.inputStream.use { input ->
-            f.outputStream().use { out ->
-                val buf = ByteArray(64 * 1024)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    out.write(buf, 0, n)
-                    done += n
-                    if (total > 0) {
-                        val pr = (done * 100 / total).toInt()
-                        withContext(Dispatchers.Main) { updProgress = pr }
-                    }
-                }
-            }
-        }
-        if (total > 0 && done != total) throw java.io.IOException("incomplete download: $done of $total")
-        f
-    }.onFailure { Log.w("Pamir", "update download failed: ${it.message}") }.getOrNull()
 
     private fun updateSubscription(silent: Boolean = false) {
         if (updating) return
@@ -1758,10 +1722,29 @@ class PamirActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Our own site and API always go through the tunnel. mognu.app sits behind a Russian address and app.pamirlink.ru
+     * is a .ru domain, so the «Russian sites directly» rules would send them past the VPN — and under mobile «white
+     * lists» the direct route is closed, so the cabinet and app updates did not open even with the VPN on.
+     * First in the list, so it wins over those rules; added again after every preset reset.
+     */
+    private fun ensureOwnServicesRule() {
+        runCatching {
+            val rules = MmkvManager.decodeRoutingRulesets().orEmpty()
+            if (rules.any { it.remarks == OWN_SERVICES_RULE }) return
+            SettingsManager.saveRoutingRuleset(-1, com.v2ray.ang.dto.entities.RulesetItem(
+                remarks = OWN_SERVICES_RULE,
+                domain = listOf("domain:mognu.app", "domain:mognu.net", "full:app.pamirlink.ru"),
+                outboundTag = AppConfig.TAG_PROXY,
+            ))
+        }.onFailure { Log.w("Pamir", "own services routing rule: ${it.message}") }
+    }
+
     private fun setRuDirect(on: Boolean) {
         runCatching {
             SettingsManager.resetRoutingRulesetsFromPresets(this, if (on) RoutingType.WHITE_RUSSIA else RoutingType.GLOBAL)
         }
+        ensureOwnServicesRule()
         MmkvManager.encodeSettings(PREF_RU_DIRECT, on)
         if (running) LauncherManager.restartService(this)
     }
@@ -3663,7 +3646,8 @@ class PamirActivity : AppCompatActivity() {
                     if (nyTaps >= 7) {
                         nyTaps = 0
                         val on = PamirSeason.toggle()
-                        toast(if (on) "🎄 Новогодний режим включён" else "Новогодний режим выключен")
+                        PamirSeason.applyIcon(this@PamirActivity)
+                        toast(if (on) "🎄 Новогодний режим включён — иконка сменится через пару секунд" else "Новогодний режим выключен")
                     } else if (nyTaps == 1) {
                         updCheck = if (newVersion != null) "new" else "checking"
                         if (newVersion == null) checkAppUpdate(manual = true)

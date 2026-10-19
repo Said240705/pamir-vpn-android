@@ -1,5 +1,9 @@
 package com.v2ray.ang.pamir
 
+import android.content.ComponentName
+import android.content.Context
+import android.content.pm.PackageManager
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -21,7 +25,8 @@ import kotlin.random.Random
 /**
  * Новогодний режим, как на mognu.app: сам включается у всех с 20 декабря по 10 января. Раньше его видно только на
  * телефоне, где 7 раз быстро нажали «О приложении» в настройках (ещё 7 нажатий выключают; запоминается в настройках
- * приложения). Наряд Могну — красная шапка набок поверх короны (PamirMascot.kt), на главном экране — снег (SnowLayer).
+ * приложения). Наряд Могну — красная шапка набок поверх короны (PamirMascot.kt), на главном экране — снег (SnowLayer),
+ * на рабочем столе — иконка с шапкой (applyIcon).
  */
 object PamirSeason {
     private const val K_NY = "pamir_ny"   // "1" — включён вручную, "0" — выключен вручную, нет — по дате
@@ -68,6 +73,33 @@ object PamirSeason {
             m == Calendar.JANUARY && d in 2..10 -> "Каникулы — время сериалов. Я готов 🍿"
             else -> LINES.random()
         }
+    }
+
+    /**
+     * Новогодняя иконка на рабочем столе: в режиме — вход «.pamir.PamirNewYear» (Могну в шапке), иначе обычный
+     * «.pamir.PamirActivity» (см. манифест в brand.py). Сначала включается нужный, потом выключается второй, чтобы
+     * иконка была всегда. DONT_KILL_APP — приложение не закрывается; лаунчер обновляет значок через пару секунд.
+     * Вызывается при уходе приложения в фон, из фоновой задачи и сразу после 7 нажатий. На ТВ не трогаем.
+     */
+    fun applyIcon(ctx: Context) {
+        if (PamirTv.isTv(ctx)) return
+        runCatching {
+            val want = compute()
+            val pkg = PamirHome::class.java.`package`?.name ?: "com.v2ray.ang.pamir"
+            val regular = ComponentName(ctx, "$pkg.PamirActivity")
+            val ny = ComponentName(ctx, "$pkg.PamirNewYear")
+            val pm = ctx.packageManager
+            fun on(c: ComponentName, byDefault: Boolean) = when (pm.getComponentEnabledSetting(c)) {
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+                PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> byDefault
+                else -> false
+            }
+            if (on(ny, false) == want && on(regular, true) == !want) return
+            val (enable, disable) = if (want) ny to regular else regular to ny
+            pm.setComponentEnabledSetting(enable, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)
+            pm.setComponentEnabledSetting(disable, PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+            Log.i("Pamir", "launcher icon: ${if (want) "new year" else "regular"}")
+        }.onFailure { Log.w("Pamir", "launcher icon switch failed: ${it.message}") }
     }
 
     /** Переключает режим на этом телефоне и возвращает новое состояние. */

@@ -19,7 +19,6 @@ import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.handler.AppLocaleManager
 import com.v2ray.ang.handler.MmkvManager
 import com.v2ray.ang.helper.MessageHelper
-import com.v2ray.ang.pamir.PamirActivity
 import com.v2ray.ang.pamir.PamirWatch
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.Utils
@@ -89,7 +88,7 @@ class QSTileService : TileService() {
 
     @SuppressLint("StartActivityAndCollapseDeprecated")
     private fun openApp() {
-        val intent = Intent(this, PamirActivity::class.java)
+        val intent = Intent(this, com.v2ray.ang.pamir.PamirHome::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .putExtra(PamirWatch.EXTRA_RECONNECT, true)
         try {

@@ -8,13 +8,15 @@
   • Адвент-календарь 20–31 декабря: одна коробка в день, подарок выдаёт сервер и запоминает (повторно не выдаётся).
     Дни к подписке получают только те, кто хоть раз платил и у кого есть действующий ключ, остальным — промокод.
   • Итоги года: трафик за год по ежедневным снимкам, лучший месяц и день, место среди всех пользователей,
-    приглашённые друзья, чаты с поддержкой, вращения колеса, оплаты.
+    приглашённые друзья, чаты с поддержкой, вращения колеса, оплаты; плюс общая карточка всех пользователей —
+    любимая страна по суммарному трафику серверов (панель не делит трафик человека по серверам, и мы этого не пишем).
 """
 from __future__ import annotations
 
 import datetime
 import logging
 import secrets
+import sqlite3
 import string
 import time
 from typing import Any
@@ -275,6 +277,41 @@ async def advent_open(telegram_id: int) -> dict[str, Any]:
 # ── итоги года ────────────────────────────────────────────────────────────────
 
 _RANK_CACHE: dict[str, Any] = {'at': 0.0, 'year': None, 'totals': []}
+_COMMUNITY_CACHE: dict[str, Any] = {'at': 0.0, 'data': None}
+XUI_DB = '/etc/x-ui/x-ui.db'
+
+
+def _place(remark: str) -> str:
+    """'ES', 'DE', … from the flag in an inbound name; 'LTE' for the mobile-mode servers; '' when unknown."""
+    if 'LTE' in remark.upper():
+        return 'LTE'
+    letters = [chr(ord(c) - 0x1F1E6 + ord('A')) for c in remark if 0x1F1E6 <= ord(c) <= 0x1F1FF]
+    return ''.join(letters[:2]) if len(letters) >= 2 else ''
+
+
+def _community() -> dict[str, Any] | None:
+    """Everyone together: all-time traffic of every server summed by country, cached for 6 hours.
+    Aggregate only — the panel keeps one counter per server for all users, nothing per person."""
+    if _COMMUNITY_CACHE['data'] is not None and time.time() - _COMMUNITY_CACHE['at'] < 6 * 3600:
+        return _COMMUNITY_CACHE['data']
+    try:
+        with sqlite3.connect(f'file:{XUI_DB}?mode=ro', uri=True, timeout=5) as x:
+            rows = x.execute("SELECT remark, up, down FROM inbounds").fetchall()
+    except Exception as e:
+        logger.warning('mognu wrapped: community stats unavailable (%s)', e)
+        return None
+    places: dict[str, int] = {}
+    for remark, up, down in rows:
+        key = _place(str(remark or ''))
+        if key:
+            places[key] = places.get(key, 0) + int(up or 0) + int(down or 0)
+    total = sum(places.values())
+    if not total:
+        return None
+    top = max(places, key=places.get)
+    data = {'total_bytes': total, 'top_place': top, 'top_share': int(round(100 * places[top] / total))}
+    _COMMUNITY_CACHE.update(at=time.time(), data=data)
+    return data
 
 
 def _history_start(conn) -> str:
@@ -422,4 +459,5 @@ def wrapped(telegram_id: int) -> dict[str, Any]:
         'payments': payments,
         'advent_opened': advent,
         **rhythm,
+        'community': _community(),
     }

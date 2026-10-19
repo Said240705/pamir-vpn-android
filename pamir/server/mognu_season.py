@@ -149,16 +149,13 @@ def _ensure_advent_table(conn) -> None:
 
 
 def _advent_today(state: str, opened: dict[int, dict], start: datetime.date) -> int | None:
-    """Which box can be opened now: the date's box in December; in preview — the next unopened, one per day."""
+    """Which box can be opened now: the date's box in December; in preview — the next unopened one, straight away."""
     today = _today()
     if state == 'on':
         if today.month == 12 and ADVENT_FIRST <= today.day <= ADVENT_LAST and today.year == start.year:
             return today.day
         return None
-    # preview: boxes in order, at most one a day
-    for row in opened.values():
-        if str(row.get('opened_at') or '')[:10] == datetime.datetime.utcnow().strftime('%Y-%m-%d'):
-            return None
+    # preview (owner testing before Dec 20): boxes in order, the next one right after the previous — no waiting a day
     for day in range(ADVENT_FIRST, ADVENT_LAST + 1):
         if day not in opened:
             return day

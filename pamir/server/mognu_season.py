@@ -305,6 +305,24 @@ def _key_year_traffic(rows, year: int, history_start: str = '') -> tuple[int, di
     return total, months, days
 
 
+def _rhythm(days: dict[str, int]) -> dict[str, Any]:
+    """Favourite weekday (0 = Monday) by traffic and the longest run of days in a row with traffic.
+    The weekday needs two full weeks of data, or one lucky evening decides it."""
+    dates = sorted(datetime.date.fromisoformat(d) for d, v in days.items() if v > 0)
+    weekday, share = None, 0
+    if len(dates) >= 14:
+        per = [0] * 7
+        for d, v in days.items():
+            per[datetime.date.fromisoformat(d).weekday()] += v
+        weekday = max(range(7), key=lambda i: per[i])
+        share = int(round(100 * per[weekday] / (sum(per) or 1)))
+    streak = run = 0
+    for i, d in enumerate(dates):
+        run = run + 1 if i and (d - dates[i - 1]).days == 1 else 1
+        streak = max(streak, run)
+    return {'weekday': weekday, 'weekday_share': share, 'streak_days': streak, 'active_days': len(dates)}
+
+
 def _all_totals(conn, year: int) -> list[int]:
     """Every user's traffic for the year (sorted), cached for 6 hours — for the «more than N% of users» line."""
     if _RANK_CACHE['year'] == year and time.time() - _RANK_CACHE['at'] < 6 * 3600:
@@ -385,6 +403,7 @@ def wrapped(telegram_id: int) -> dict[str, Any]:
 
     top_month = max(months, key=months.get) if months else None
     best_day = max(days, key=days.get) if days else None
+    rhythm = _rhythm(days)
     return {
         'available': True,
         'state': state,
@@ -402,4 +421,5 @@ def wrapped(telegram_id: int) -> dict[str, Any]:
         'wheel_spins': spins,
         'payments': payments,
         'advent_opened': advent,
+        **rhythm,
     }

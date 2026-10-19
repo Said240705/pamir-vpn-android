@@ -7,10 +7,11 @@
   • mognu_season.py → /root/YadrenoVPN/bot/services/ — цена со скидкой для списков, календарь, итоги года.
 Что правит:
   • бот, bot/services/mini_app_api.py: /mini-app-api/tariffs отдаёт sale_price_minor (и принимает telegram_id,
-    чтобы «видят заранее» видели скидку в кабинете); новые /mini-app-api/mognu/advent, …/advent/open, …/wrapped;
+    чтобы «видят заранее» видели скидку в кабинете); новые /mini-app-api/mognu/advent, …/advent/open, …/wrapped,
+    …/wrapped/gift (подарок в конце итогов — добавляется и туда, где первая версия патча уже стоит);
   • бот, bot/utils/page_button_items.py: в списке тарифов бота «🎄 было → стало»;
   • бэкенд сайта, routers/topup_router.py: /api/topup/tariffs передаёт telegram_id; /api/topup/mognu/advent,
-    …/advent/open, …/wrapped пересылают боту telegram_id вошедшего человека.
+    …/advent/open, …/wrapped, …/wrapped/gift пересылают боту telegram_id вошедшего человека.
 
     python3 patch_mognu_newyear.py          показать, что изменится (ничего не меняет)
     python3 patch_mognu_newyear.py --apply  применить (копии рядом, .bak-newyear); при ошибке всё вернётся
@@ -34,6 +35,7 @@ NEW_FILES = [
 ]
 BAK = '.bak-newyear'
 MARK = '# Mognu: New Year season'
+GIFT_MARK = '# Mognu: wrapped gift'
 
 # ── бот: адреса ───────────────────────────────────────────────────────────────
 API_ROUTE_ANCHOR = "    app.router.add_get('/mini-app-api/tariffs', _tariffs_handler)\n"
@@ -117,6 +119,47 @@ async def _mognu_wrapped_handler(request: web.Request) -> web.Response:
     except Exception as error:
         logger.exception('Mognu wrapped error: %s', error)
         return web.json_response({'ok': False, 'reason': 'internal_error'}, status=500)
+
+
+'''
+
+# ── подарок в конце итогов: бот и сайт ───────────────────────────────────────
+GIFT_ROUTE_ANCHOR = "    app.router.add_get('/mini-app-api/mognu/wrapped', _mognu_wrapped_handler)\n"
+GIFT_ROUTE_NEW = GIFT_ROUTE_ANCHOR + (
+    "    app.router.add_post('/mini-app-api/mognu/wrapped/gift', _mognu_gift_handler)  " + GIFT_MARK + "\n"
+)
+GIFT_FUNC = '''async def _mognu_gift_handler(request: web.Request) -> web.Response:
+    """# Mognu: wrapped gift — opens the gift at the end of the year in review, once per season."""
+    if not _check_secret(request):
+        return web.json_response({'ok': False, 'reason': 'forbidden'}, status=403)
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({'ok': False, 'reason': 'invalid_json'}, status=400)
+    telegram_id = payload.get('telegram_id')
+    if not isinstance(telegram_id, int) or telegram_id == 0:
+        return web.json_response({'ok': False, 'reason': 'telegram_id_required'}, status=400)
+    try:
+        from bot.services.mognu_season import gift_open
+        result = await gift_open(telegram_id)
+        return web.json_response(result, status=200 if result.get('ok') or result.get('gift') else 400)
+    except Exception as error:
+        logger.exception('Mognu gift error: %s', error)
+        return web.json_response({'ok': False, 'reason': 'internal_error'}, status=500)
+
+
+'''
+SITE_GIFT = '''@router.post("/mognu/wrapped/gift")
+async def mognu_wrapped_gift(request: Request, user=Depends(auth.current_user)):
+    """# Mognu: wrapped gift"""
+    telegram_id = user.get("telegram_id")
+    if not telegram_id:
+        raise HTTPException(400, "У пользователя нет привязанного Telegram ID")
+    enforce_rate_limit(request, "mognu_wrapped_gift", max_requests=10, window_seconds=60)
+    data = await _mognu_bot("POST", "/mognu/wrapped/gift", telegram_id, timeout=40)
+    if not data.get("ok") and not data.get("gift"):
+        return {"ok": False, "reason": data.get("reason") or "failed"}
+    return data
 
 
 '''
@@ -207,6 +250,7 @@ def edits():
     """(path, old text, new text) for every file that is not patched yet."""
     out = []
     api = open(API, encoding='utf-8').read()
+    new = api
     if MARK not in api:
         for anchor in (API_ROUTE_ANCHOR, API_TARIFFS_OLD, API_FUNC_ANCHOR):
             if api.count(anchor) != 1:
@@ -214,6 +258,13 @@ def edits():
                          f'(совпадений {api.count(anchor)}). Файл менялся — пришли его Claude.')
         new = (api.replace(API_ROUTE_ANCHOR, API_ROUTE_NEW).replace(API_TARIFFS_OLD, API_TARIFFS_NEW)
                .replace(API_FUNC_ANCHOR, API_FUNC + API_FUNC_ANCHOR))
+    if GIFT_MARK not in new:
+        for anchor in (GIFT_ROUTE_ANCHOR, API_FUNC_ANCHOR):
+            if new.count(anchor) != 1:
+                sys.exit(f'Бот (mini_app_api.py): не нашёл место для подарка «{anchor.strip()[:60]}…» '
+                         f'(совпадений {new.count(anchor)}). Пришли файл Claude.')
+        new = new.replace(GIFT_ROUTE_ANCHOR, GIFT_ROUTE_NEW).replace(API_FUNC_ANCHOR, GIFT_FUNC + API_FUNC_ANCHOR)
+    if new != api:
         out.append((API, api, new))
     items = open(ITEMS, encoding='utf-8').read()
     if MARK not in items:
@@ -221,6 +272,7 @@ def edits():
             sys.exit(f'Бот (page_button_items.py): не нашёл место для правки (совпадений {items.count(ITEMS_ANCHOR)}).')
         out.append((ITEMS, items, items.replace(ITEMS_ANCHOR, ITEMS_NEW)))
     site = open(SITE, encoding='utf-8').read()
+    new_site = site
     if MARK not in site:
         for anchor in (SITE_TARIFFS_OLD, SITE_ROUTE_ANCHOR):
             if site.count(anchor) != 1:
@@ -229,8 +281,14 @@ def edits():
         for need in ('from rate_limit import enforce_rate_limit', 'Request'):
             if need not in site:
                 sys.exit(f'Сайт (topup_router.py): нет «{need}» — файл менялся, пришли его Claude.')
-        out.append((SITE, site, site.replace(SITE_TARIFFS_OLD, SITE_TARIFFS_NEW)
-                    .replace(SITE_ROUTE_ANCHOR, SITE_ROUTES + SITE_ROUTE_ANCHOR)))
+        new_site = (site.replace(SITE_TARIFFS_OLD, SITE_TARIFFS_NEW)
+                    .replace(SITE_ROUTE_ANCHOR, SITE_ROUTES + SITE_ROUTE_ANCHOR))
+    if GIFT_MARK not in new_site:
+        if new_site.count(SITE_ROUTE_ANCHOR) != 1 or '_mognu_bot(' not in new_site:
+            sys.exit('Сайт (topup_router.py): не нашёл место для подарка — пришли файл Claude.')
+        new_site = new_site.replace(SITE_ROUTE_ANCHOR, SITE_GIFT + SITE_ROUTE_ANCHOR)
+    if new_site != site:
+        out.append((SITE, site, new_site))
     return out
 
 
@@ -264,8 +322,9 @@ def main():
     done = []
     try:
         for path, old, new in changes:
-            shutil.copy2(path, path + BAK)
-            done.append(path)
+            if not os.path.exists(path + BAK):   # the copy from before the first version of this patch stays for --undo
+                shutil.copy2(path, path + BAK)
+            done.append((path, old))
             open(path, 'w', encoding='utf-8').write(new)
             py_compile.compile(path, doraise=True)
         for src, dst in new_files:
@@ -274,8 +333,8 @@ def main():
             shutil.copy2(src, dst)
             py_compile.compile(dst, doraise=True)
     except Exception as error:
-        for path in done:
-            shutil.copy2(path + BAK, path)
+        for path, old in done:
+            open(path, 'w', encoding='utf-8').write(old)
         sys.exit(f'Ошибка, вернул правки как были: {error}')
     print('Готово. Копии: *' + BAK + '\nПерезапусти: systemctl restart yadreno-vpn pamir-backend\n'
           'Потом админка бота → Расширения → mognu_newyear: впиши свой Telegram ID в «Видят заранее».')

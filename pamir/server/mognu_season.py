@@ -8,7 +8,7 @@
   • Адвент-календарь 20–31 декабря: одна коробка в день, подарок выдаёт сервер и запоминает (повторно не выдаётся).
     Дни к подписке получают только те, кто хоть раз платил и у кого есть действующий ключ, остальным — промокод.
   • Итоги года: трафик за год по ежедневным снимкам, лучший месяц и день, место среди всех пользователей,
-    приглашённые друзья, чаты с поддержкой, вращения колеса, оплаты; плюс общая карточка всех пользователей —
+    приглашённые друзья, чаты с поддержкой, вращения колеса, оплаты, подарок от Могну в конце (один за сезон); плюс общая карточка всех пользователей —
     любимая страна по суммарному трафику серверов (панель не делит трафик человека по серверам, и мы этого не пишем).
 """
 from __future__ import annotations
@@ -37,6 +37,9 @@ ADVENT_FIRST, ADVENT_LAST = 20, 31
 # Кому дни не положены (ни одной оплаты или нет действующего ключа) — промокод вместо дней.
 ADVENT_DAYS_FALLBACK_PROMO = 15
 ADVENT_DAYS_FALLBACK_PROMO_BIG = 30   # вместо главного подарка 31 декабря
+# Подарок в конце итогов года: дни тем, кто платил и у кого есть действующий ключ, остальным — промокод.
+GIFT_DAYS = 14
+GIFT_PROMO = 30
 
 
 # ── настройки и даты ──────────────────────────────────────────────────────────
@@ -274,6 +277,77 @@ async def advent_open(telegram_id: int) -> dict[str, Any]:
     return {'ok': True, 'day': day, 'prize': prize, 'value': value, 'code': code, 'note': note}
 
 
+def _ensure_gift_table(conn) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS mognu_gift ("
+        "user_id INTEGER NOT NULL, season INTEGER NOT NULL, prize TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, "
+        "code TEXT, note TEXT, opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (user_id, season))"
+    )
+
+
+def _gift_row(conn, user_id: int, season_year: int) -> dict[str, Any] | None:
+    _ensure_gift_table(conn)
+    row = conn.execute("SELECT prize, value, code, note FROM mognu_gift WHERE user_id = ? AND season = ?",
+                       (user_id, season_year)).fetchone()
+    return dict(row) if row else None
+
+
+async def gift_open(telegram_id: int) -> dict[str, Any]:
+    """The gift at the end of the year in review, once per season: recorded first (a double tap gives nothing twice),
+    then handed out — days for those who paid and have an active key, a promo code for everyone else."""
+    if not season(telegram_id):
+        return {'ok': False, 'reason': 'not_available'}
+    config = _config()
+    start, end = _window(config)
+    promo_until = (datetime.datetime.combine(end, datetime.time(23, 59, 59), MSK)
+                   .astimezone(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
+
+    from database.connection import get_db
+    from database.db_users import get_or_create_user
+
+    user, _ = get_or_create_user(telegram_id)
+    user_id = int(user['id'])
+    with get_db() as conn:
+        _ensure_gift_table(conn)
+        prize, value = ('days', GIFT_DAYS) if _paid_and_active(conn, user_id) else ('promo', GIFT_PROMO)
+        cur = conn.execute("INSERT OR IGNORE INTO mognu_gift (user_id, season, prize, value) VALUES (?, ?, ?, ?)",
+                           (user_id, start.year, prize, value))
+        if cur.rowcount == 0:
+            return {'ok': False, 'reason': 'already_opened', 'gift': _gift_row(conn, user_id, start.year)}
+
+    code = None
+    note = None
+    try:
+        if prize == 'promo':
+            from database.db_promotions import create_promo_code
+            from bot.services.promotions import activate_promo_code_for_user, get_active_promo_discount_percent
+            code = _new_code('SPASIBO')
+            create_promo_code(
+                code=code, discount_percent=int(value), expires_at=promo_until, activation_limit=1,
+                source=f'mognu_gift:{start.year}:{user_id}', code_type='promo', issued_to_user_id=user_id,
+            )
+            if get_active_promo_discount_percent(user_id) < int(value):
+                activate_promo_code_for_user(user_id, code)
+                note = 'applied'
+        else:
+            from bot.services.rewards import grant_days_to_first_active_key
+            result = await grant_days_to_first_active_key(
+                user_id, int(value), source='mognu_gift', reason='Подарок от Могну в итогах года',
+                reference_type='mognu_gift', reference_id=f'{start.year}:{user_id}',
+            )
+            note = str(result.get('status') or ('applied' if result.get('ok') else 'failed'))
+            if not result.get('ok'):
+                logger.warning('mognu_season: gift days not granted user=%s: %s', user_id, result.get('reason'))
+    except Exception as error:
+        logger.exception('mognu_season: gift failed user=%s: %s', user_id, error)
+        note = 'failed'
+
+    with get_db() as conn:
+        conn.execute("UPDATE mognu_gift SET code = ?, note = ? WHERE user_id = ? AND season = ?",
+                     (code, note, user_id, start.year))
+    return {'ok': True, 'gift': {'prize': prize, 'value': value, 'code': code, 'note': note}}
+
+
 # ── итоги года ────────────────────────────────────────────────────────────────
 
 _RANK_CACHE: dict[str, Any] = {'at': 0.0, 'year': None, 'totals': []}
@@ -433,6 +507,10 @@ def wrapped(telegram_id: int) -> dict[str, Any]:
         payments = count("SELECT COUNT(*) FROM payments WHERE user_id = ? AND status = 'paid' "
                          "AND paid_at >= ? AND paid_at < ?", uid, y0, y1)
         try:
+            gift = _gift_row(conn, uid, year)
+        except Exception:
+            gift = None
+        try:
             _ensure_advent_table(conn)
             advent = count("SELECT COUNT(*) FROM mognu_advent WHERE user_id = ? AND season = ?", uid, year)
         except Exception:
@@ -460,4 +538,5 @@ def wrapped(telegram_id: int) -> dict[str, Any]:
         'advent_opened': advent,
         **rhythm,
         'community': _community(),
+        'gift': gift,
     }

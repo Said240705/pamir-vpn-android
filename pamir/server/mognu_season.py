@@ -6,7 +6,7 @@
 
   • Скидка: сама цена при оплате считается политикой расширения; здесь — только показ «было → стало» в списках.
   • Адвент-календарь 20–31 декабря: одна коробка в день, подарок выдаёт сервер и запоминает (повторно не выдаётся).
-    Дни к подписке получают только те, кто хоть раз платил и у кого есть действующий ключ, остальным — промокод.
+    Три скидки, 50 ₽ на баланс (только тем, кто хоть раз платил, остальным — промокод), открытка и пожелания.
   • Итоги года: трафик за год по ежедневным снимкам, лучший месяц и день, место среди всех пользователей,
     приглашённые друзья, чаты с поддержкой, вращения колеса, оплаты, подарок от Могну в конце (один за сезон); плюс общая карточка всех пользователей —
     любимая страна по суммарному трафику серверов (панель не делит трафик человека по серверам, и мы этого не пишем).
@@ -27,16 +27,19 @@ MSK = datetime.timezone(datetime.timedelta(hours=3))
 EXT_ID = 'mognu_newyear'
 POLICY_NAME = 'ext_mognu_newyear'
 
-# Подарки календаря по дням декабря: (вид, значение). promo — скидка %, days — дни к подписке, card — открытка.
+# Подарки календаря по дням декабря: (вид, значение). promo — скидка %, balance — рубли на баланс,
+# card — открытка, wish — пожелание от Могну (сам текст — в кабинете, assets/cabinet-newyear.js).
+# days (дни к подписке) в расписании больше нет, но уже открытые такие коробки показываются как раньше.
 ADVENT = {
-    20: ('promo', 10), 21: ('days', 1), 22: ('promo', 15), 23: ('days', 1),
-    24: ('card', 0), 25: ('days', 2), 26: ('promo', 20), 27: ('days', 1),
-    28: ('promo', 20), 29: ('days', 2), 30: ('promo', 25), 31: ('days', 7),
+    20: ('wish', 0), 21: ('promo', 10), 22: ('wish', 0), 23: ('balance', 50),
+    24: ('card', 0), 25: ('wish', 0), 26: ('promo', 15), 27: ('wish', 0),
+    28: ('wish', 0), 29: ('wish', 0), 30: ('wish', 0), 31: ('promo', 25),
 }
 ADVENT_FIRST, ADVENT_LAST = 20, 31
 # Кому дни не положены (ни одной оплаты или нет действующего ключа) — промокод вместо дней.
 ADVENT_DAYS_FALLBACK_PROMO = 15
 ADVENT_DAYS_FALLBACK_PROMO_BIG = 30   # вместо главного подарка 31 декабря
+ADVENT_BALANCE_FALLBACK_PROMO = 10    # вместо рублей на баланс тем, кто ещё ни разу не платил
 # Подарок в конце итогов года: дни тем, кто платил и у кого есть действующий ключ, остальным — промокод.
 GIFT_DAYS = 14
 GIFT_PROMO = 30
@@ -197,11 +200,15 @@ def _new_code(prefix: str) -> str:
     return prefix + ''.join(secrets.choice(alphabet) for _ in range(6))
 
 
-def _paid_and_active(conn, user_id: int) -> bool:
-    paid = conn.execute(
+def _has_paid(conn, user_id: int) -> bool:
+    return conn.execute(
         "SELECT 1 FROM payments WHERE user_id = ? AND status = 'paid' AND payable_amount_minor > 0 LIMIT 1",
         (user_id,),
-    ).fetchone()
+    ).fetchone() is not None
+
+
+def _paid_and_active(conn, user_id: int) -> bool:
+    paid = _has_paid(conn, user_id)
     active = conn.execute(
         "SELECT 1 FROM vpn_keys WHERE user_id = ? AND expires_at IS NOT NULL AND expires_at > datetime('now') LIMIT 1",
         (user_id,),
@@ -233,6 +240,9 @@ async def advent_open(telegram_id: int) -> dict[str, Any]:
         _ensure_advent_table(conn)
         if prize == 'days' and not _paid_and_active(conn, user_id):
             prize, value = 'promo', (ADVENT_DAYS_FALLBACK_PROMO_BIG if day == ADVENT_LAST else ADVENT_DAYS_FALLBACK_PROMO)
+        # money only for those who have paid at least once, or fresh accounts would farm it
+        if prize == 'balance' and not _has_paid(conn, user_id):
+            prize, value = 'promo', ADVENT_BALANCE_FALLBACK_PROMO
         cur = conn.execute(
             "INSERT OR IGNORE INTO mognu_advent (user_id, season, day, prize, value) VALUES (?, ?, ?, ?, ?)",
             (user_id, start.year, day, prize, value),
@@ -265,6 +275,16 @@ async def advent_open(telegram_id: int) -> dict[str, Any]:
             if not result.get('ok'):
                 logger.warning('mognu_season: advent days not granted user=%s day=%s: %s',
                                user_id, day, result.get('reason'))
+        elif prize == 'balance':
+            from bot.services.balance import credit_user_balance
+            result = await credit_user_balance(
+                user_id, int(value) * 100, source='mognu_advent', reason=f'Адвент-календарь, {day} декабря',
+                reference_type='mognu_advent', reference_id=f'{start.year}:{user_id}:{day}',
+            )
+            note = 'applied' if result.get('ok') else 'failed'
+            if not result.get('ok'):
+                logger.warning('mognu_season: advent balance not credited user=%s day=%s: %s',
+                               user_id, day, result.get('status'))
     except Exception as error:
         logger.exception('mognu_season: advent prize failed user=%s day=%s: %s', user_id, day, error)
         note = 'failed'

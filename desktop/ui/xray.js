@@ -265,7 +265,15 @@ export function buildConfig(profile, ports, opts = {}) {
       ],
     },
   };
-  if (opts.tun) cfg.inbounds.unshift(TUN);
+  if (opts.tun) {
+    cfg.inbounds.unshift(TUN);
+    // DNS из адаптера отвечает сам Xray и только адресами IPv4: у серверов нет IPv6, а внутри TUN соединение
+    // «устанавливается» всегда — браузер, получив IPv6, ждал бы ответа вечно и не переходил на IPv4.
+    // IPv6-трафик при этом всё равно забирает адаптер (маршрут ::/0), мимо Mognu он не уходит.
+    cfg.dns = { servers: ["1.1.1.1", "8.8.8.8"], queryStrategy: "UseIPv4" };
+    cfg.outbounds.push({ tag: "dns-out", protocol: "dns", settings: {} });
+    cfg.routing.rules.unshift({ type: "field", inboundTag: ["tun"], port: "53", outboundTag: "dns-out" });
+  }
   return cfg;
 }
 

@@ -86,6 +86,8 @@ test("режим «весь трафик»: вход TUN, xray принимае�
   const cfg = buildConfig(parseLink(REALITY), PORTS, { tun: true });
   assert.equal(cfg.inbounds[0].protocol, "tun");
   assert.deepEqual(cfg.inbounds[0].settings.autoSystemRoutingTable, ["0.0.0.0/0", "::/0"]);
+  assert.equal(cfg.dns.queryStrategy, "UseIPv4");
+  assert.equal(cfg.routing.rules[0].outboundTag, "dns-out");
   if (!process.env.XRAY_BIN) return;
   const f = join(mkdtempSync(join(tmpdir(), "mognu-")), "tun.json");
   writeFileSync(f, JSON.stringify(cfg));

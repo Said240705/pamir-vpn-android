@@ -185,6 +185,13 @@ function daysLeft(k) {
 function currentKey() { return S.keys.find((k) => k.id === S.keyId) || S.keys[0] || null; }
 
 async function loadKeys() {
+  // проверочный запуск на GitHub (MOGNU_DEMO_SUB): без аккаунта, сразу с тестовой подпиской
+  if (S.demo) {
+    S.keys = [{ id: 1, display_name: "Тестовый ключ", is_active: true, expires_at: new Date(Date.now() + 30 * 864e5).toISOString(), subscription_url: S.demo.sub }];
+    S.keyId = 1;
+    renderKeys();
+    return;
+  }
   const r = await api("/auth/keys");
   const list = Array.isArray(r) ? r : r.keys || [];
   S.keys = list.filter((k) => k.is_active && String(k.subscription_url || "").startsWith("http"));
@@ -213,7 +220,7 @@ async function loadSubscription(force) {
     }
   }
   renderServers();
-  pingAll();
+  await pingAll();
   loadStatus();
 }
 
@@ -394,5 +401,11 @@ async function startHome() {
   try { S.version = await window.__TAURI__.app.getVersion(); } catch (e) { S.version = "0.1.0"; }
   $("version").textContent = "Mognu для Windows " + S.version;
   refreshHosts();
+  S.demo = await invoke("demo").catch(() => null);
+  if (S.demo) {
+    await startHome();
+    if (S.demo.connect) connect();
+    return;
+  }
   if (store.get("token")) startHome(); else show("login");
 })();

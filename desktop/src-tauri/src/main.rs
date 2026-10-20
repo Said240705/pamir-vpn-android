@@ -119,6 +119,20 @@ async fn tcp_ping(host: String, port: u16) -> Option<u32> {
     }
 }
 
+#[derive(Serialize)]
+struct Demo {
+    sub: String,
+    connect: bool,
+}
+
+/// Проверочный запуск на GitHub (desktop-build.yml): MOGNU_DEMO_SUB — тестовая подписка вместо входа в аккаунт,
+/// MOGNU_DEMO_CONNECT=1 — сразу подключиться. У обычного человека этих переменных нет, и команда возвращает None.
+#[tauri::command]
+fn demo() -> Option<Demo> {
+    let sub = std::env::var("MOGNU_DEMO_SUB").ok().filter(|s| s.starts_with("https://"))?;
+    Some(Demo { sub, connect: std::env::var("MOGNU_DEMO_CONNECT").map(|v| v == "1").unwrap_or(false) })
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("tg://")) {
@@ -141,7 +155,7 @@ fn main() {
             }
         }))
         .manage(AppState { core: Mutex::new(core::Core::default()) })
-        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, proxy_set, http, tcp_ping, open_url])
+        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, proxy_set, http, tcp_ping, open_url, demo])
         .build(tauri::generate_context!())
         .expect("Mognu не запустился");
 

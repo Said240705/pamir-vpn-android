@@ -101,6 +101,61 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-Content e2e.txt | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
+      - name: Real app on Windows - screenshots and system proxy
+        shell: pwsh
+        working-directory: desktop
+        env:
+          MOGNU_TEST_SUB: ${{ secrets.MOGNU_TEST_SUB }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (-not $env:MOGNU_TEST_SUB) { Write-Host 'MOGNU_TEST_SUB не задан — пропускаю'; exit 0 }
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($path) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save($path)
+            Write-Host "снимок $path ($($b.Width)x$($b.Height))"
+          }
+          function Proxy() { Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' | Select-Object ProxyEnable, ProxyServer }
+          $exe = Join-Path $env:LOCALAPPDATA 'Mognu\mognu.exe'
+          New-Item -ItemType Directory -Force shots | Out-Null
+
+          # 1. главный экран с серверами из тестовой подписки
+          $env:MOGNU_DEMO_SUB = $env:MOGNU_TEST_SUB
+          $app = Start-Process $exe -PassThru; Start-Sleep 14; Shot shots/1-home.png; Stop-Process -Id $app.Id -Force; Start-Sleep 2
+
+          # 2. сразу подключиться: программа сама включает системный прокси Windows
+          $env:MOGNU_DEMO_CONNECT = '1'
+          $app = Start-Process $exe -PassThru; Start-Sleep 30; Shot shots/2-connected.png
+          $p = Proxy; Write-Host "прокси при подключении: включён=$($p.ProxyEnable) адрес=$($p.ProxyServer)"
+          $ok = $p.ProxyEnable -eq 1 -and $p.ProxyServer -like '127.0.0.1:*'
+          if ($ok) {
+            $code = curl.exe -s -o NUL -w '%{http_code}' --max-time 15 -x "http://$($p.ProxyServer)" https://www.google.com/generate_204
+            Write-Host "сайт через системный прокси: $code"
+            $ok = $code -eq '204'
+          }
+          # аварийное закрытие: прокси остаётся, но следующий запуск обязан его убрать; ядро должно умереть вместе с программой
+          Stop-Process -Id $app.Id -Force; Start-Sleep 2
+          $orphan = @(Get-Process xray -ErrorAction SilentlyContinue).Count
+          Write-Host "ядер xray после аварийного закрытия: $orphan"
+
+          # 3. обычный запуск без аккаунта — экран входа; прокси от прошлого раза должен выключиться сам
+          Remove-Item Env:MOGNU_DEMO_SUB, Env:MOGNU_DEMO_CONNECT
+          $app = Start-Process $exe -PassThru; Start-Sleep 10; Shot shots/3-login.png
+          $p = Proxy; Write-Host "прокси после аварийного закрытия и нового запуска: включён=$($p.ProxyEnable)"
+          $cleared = $p.ProxyEnable -ne 1
+          Stop-Process -Id $app.Id -Force
+
+          # снимки — в пре-релиз desktop-screens (только интерфейс: имена серверов, без адресов и ключей)
+          gh release view desktop-screens 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) { gh release create desktop-screens --prerelease --latest=false --title 'Mognu для Windows — скриншоты из проверки' --notes 'Снимки экрана настоящей программы на Windows, обновляются при каждой сборке.' }
+          gh release upload desktop-screens shots/1-home.png shots/2-connected.png shots/3-login.png --clobber
+          if (!$ok) { throw 'подключение через системный прокси не сработало' }
+          if (!$cleared) { throw 'прокси не выключился после аварийного закрытия' }
+          if ($orphan -gt 0) { throw 'xray.exe остался работать после закрытия программы' }
+          'Программа на Windows: подключение через системный прокси ✅, прокси убирается после аварийного закрытия ✅' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+
       - uses: actions/upload-artifact@v4
         with:
           name: mognu-windows

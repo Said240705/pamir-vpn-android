@@ -62,6 +62,8 @@ impl Core {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let mut child = cmd.spawn().map_err(|e| format!("не удалось запустить ядро: {e}"))?;
+        #[cfg(windows)]
+        bind_to_app(&child);
         if let Ok(mut l) = self.log.lock() { l.clear(); }
         for pipe in [child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
                      child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
@@ -86,6 +88,38 @@ impl Core {
             let _ = c.kill();
             let _ = c.wait();
         }
+    }
+}
+
+/// Windows: ядро в «задании» (Job Object) с флагом «убить всех при закрытии». Если mognu.exe упадёт или его снимут
+/// через диспетчер задач, Windows сама остановит и xray.exe — иначе он остался бы работать в фоне без окна.
+#[cfg(windows)]
+fn bind_to_app(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    // задание одно на всю программу и живёт до её конца: его закрывает сама Windows вместе с процессом
+    static JOB: OnceLock<usize> = OnceLock::new();
+    let job = *JOB.get_or_init(|| unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return 0;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        job as usize
+    });
+    if job != 0 {
+        unsafe { AssignProcessToJobObject(job as _, child.as_raw_handle() as _) };
     }
 }
 

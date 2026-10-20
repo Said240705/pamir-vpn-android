@@ -19,7 +19,7 @@ open = "5"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
-windows-sys = { version = "0.59", features = ["Win32_Networking_WinInet"] }
+windows-sys = { version = "0.59", features = ["Win32_Networking_WinInet", "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects"] }
 
 [profile.release]
 codegen-units = 1

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mognu</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="assets/fonts.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="sky" aria-hidden="true"></div>
+
+<!-- вход -->
+<main id="login" class="screen" hidden>
+  <div class="login-hero">
+    <img class="login-mascot" src="assets/mascot-off.svg" alt="">
+    <h1>Mognu</h1>
+    <p class="muted">Быстрое и приватное подключение в одно касание</p>
+  </div>
+  <div class="login-actions" id="login-start">
+    <button class="btn primary" id="tg-login">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.4c-.2 1-.9 1.3-1.7.8l-4.8-3.5-2.3 2.2c-.3.3-.5.5-1 .5l.3-4.9 8.9-8c.4-.3-.1-.5-.6-.2L6.5 13.3l-4.7-1.5c-1-.3-1-1 .2-1.5L20.5 3c.9-.3 1.6.2 1.4 1.3z"/></svg>
+      Войти через Telegram
+    </button>
+    <button class="btn" id="email-open">Войти по почте</button>
+    <p class="small muted center">Нет аккаунта? <a href="#" data-open="/login.html?tab=register">Создать на сайте</a></p>
+  </div>
+  <form class="login-actions" id="email-form" hidden>
+    <label>Почта<input type="email" id="email" autocomplete="username" required></label>
+    <label>Пароль<input type="password" id="password" autocomplete="current-password" required></label>
+    <button class="btn primary" type="submit">Войти</button>
+    <div class="row-links">
+      <a href="#" id="email-back">← Назад</a>
+      <a href="#" data-open="/login.html?tab=forgot">Забыли пароль?</a>
+    </div>
+  </form>
+  <p class="status" id="login-status" role="status"></p>
+</main>
+
+<!-- главный экран -->
+<main id="home" class="screen" hidden>
+  <header class="top">
+    <div class="brand"><img src="assets/mognu-icon.svg" alt=""><span>Mognu</span></div>
+    <div class="top-right">
+      <button class="pill" id="days" hidden></button>
+      <button class="icon-btn" id="settings-open" aria-label="Настройки">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="keys" id="keys" hidden></div>
+
+  <section class="hero">
+    <button class="power" id="power" data-state="off" aria-label="Подключить">
+      <span class="power-ring" aria-hidden="true"></span>
+      <img id="power-mascot" src="assets/mascot-off.svg" alt="">
+    </button>
+    <h2 id="state-title">Не подключено</h2>
+    <p class="muted" id="state-sub">Нажми на Могну, чтобы подключиться</p>
+  </section>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <section class="card servers">
+    <div class="card-head"><span>Серверы</span><button class="link" id="refresh">Обновить</button></div>
+    <div id="server-list"></div>
+    <details class="lte" id="lte-wrap" hidden>
+      <summary>Для белых списков <span class="muted">· LTE</span></summary>
+      <div id="lte-list"></div>
+    </details>
+  </section>
+
+  <p class="foot small muted">Браузеры, Telegram и большинство программ идут через Mognu (системный прокси Windows).</p>
+</main>
+
+<!-- настройки -->
+<div class="sheet-wrap" id="settings" hidden>
+  <div class="sheet" role="dialog" aria-label="Настройки">
+    <div class="sheet-head"><b>Настройки</b><button class="icon-btn" id="settings-close" aria-label="Закрыть">✕</button></div>
+    <p class="muted small" id="account"></p>
+    <button class="row-btn" data-open="/">Личный кабинет <span>↗</span></button>
+    <button class="row-btn" data-open="/?screen=support">Поддержка <span>↗</span></button>
+    <button class="row-btn" id="copy-log">Скопировать журнал для поддержки</button>
+    <button class="row-btn danger" id="logout">Выйти</button>
+    <p class="muted small center" id="version"></p>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

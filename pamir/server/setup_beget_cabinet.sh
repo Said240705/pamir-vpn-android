@@ -10,6 +10,9 @@
 #     bash setup_beget_cabinet.sh            применить и проверить
 #     bash setup_beget_cabinet.sh --check    только проверить через CDN
 #     bash setup_beget_cabinet.sh --undo     вернуть заглушку
+#
+# ID платежа (UUID) Beget отбивает в адресе даже без дефисов, но пропускает в cookie: кабинет на адресе Beget кладёт
+# его в cookie mq_order_id / mq_token (app.js, hideIdsForBeget), а здесь nginx возвращает его в строку запроса.
 set -uo pipefail
 F=/etc/nginx/sites-enabled/o-bg.pamirlink.ru
 [ -L "$F" ] && F=$(readlink -f "$F")
@@ -52,7 +55,39 @@ if [ "${1:-}" = "--undo" ]; then
   exit 0
 fi
 [ -f "$F" ] || { echo "Нет $F — сначала setup_beget_cdn.sh"; exit 1; }
-if grep -q "Mognu cabinet via Beget CDN" "$F"; then echo "Уже настроено."; check; exit 0; fi
+# ID из cookie обратно в адрес: отдельный шаг, его можно доставить и на уже настроенный сервер
+add_ids() {
+  grep -q 'mq_order_id' "$F" && return 0
+  cp "$F" "$BAK.ids"
+  python3 - "$F" <<'PY2'
+import sys
+path = sys.argv[1]
+src = open(path, encoding='utf-8').read()
+maps = ""
+for k in ("order_id", "token"):
+    maps += (f"map $cookie_mq_{k} $mq_{k} {{\n    default \"\";\n"
+             f"    \"~^([0-9a-f]{{8}})([0-9a-f]{{4}})([0-9a-f]{{4}})([0-9a-f]{{4}})([0-9a-f]{{12}})$\" \"$1-$2-$3-$4-$5\";\n}}\n")
+anchor = "    location /api/ {\n        client_max_body_size 20m;\n"
+assert anchor in src, "нет location /api/ кабинета"
+ifs = ('        # Beget отбивает UUID в адресе: кабинет прислал его в cookie, возвращаем в строку запроса\n'
+       '        if ($mq_order_id) { rewrite ^/api/(.*)$ /$1?order_id=$mq_order_id break; }\n'
+       '        if ($mq_token) { rewrite ^/api/(.*)$ /$1?token=$mq_token break; }\n')
+src = src.replace(anchor, anchor + ifs, 1)
+i = src.index("server {")
+open(path, 'w', encoding='utf-8').write("# Mognu cabinet via Beget CDN: IDs from cookies back into the query\n" + src[:i] + maps + src[i:])
+PY2
+  if [ $? -ne 0 ] || ! nginx -t 2>/dev/null; then echo "!! ID из cookie: не получилось — возвращаю как было"; cp "$BAK.ids" "$F"; return 1; fi
+  systemctl reload nginx; sleep 1
+  # опрос входа через Telegram без токена и с токеном из cookie: ответы должны отличаться — значит токен дошёл
+  U=$(cat /proc/sys/kernel/random/uuid); X=${U//-/}; P="https://o-bg.pamirlink.ru/api/auth/telegram/poll"
+  r1=$(curl -sk --max-time 10 --resolve o-bg.pamirlink.ru:443:127.0.0.1 "$P" -w ' [%{http_code}]')
+  r2=$(curl -sk --max-time 10 --resolve o-bg.pamirlink.ru:443:127.0.0.1 -b "mq_token=$X" "$P" -w ' [%{http_code}]')
+  echo "   без ID:        ${r1:0:120}"
+  echo "   ID из cookie:  ${r2:0:120}"
+  [ "$r1" != "$r2" ] && echo "   ✅ ID из cookie доходит до сервера" || echo "   ❌ ответы одинаковые — пришли вывод Claude"
+}
+
+if grep -q "Mognu cabinet via Beget CDN" "$F"; then echo "Уже настроено."; add_ids; check; exit 0; fi
 grep -q "location /api/stream/" "$F" || { echo "В $F нет /api/stream/ — это не тот файл, ничего не меняю."; exit 1; }
 
 cp "$F" "$BAK"
@@ -108,6 +143,7 @@ if ! nginx -t; then
   cp "$BAK" "$F"; nginx -t && systemctl reload nginx; exit 1
 fi
 systemctl reload nginx; sleep 2
+add_ids
 echo "== на этом сервере (в обход CDN)"
 for p in /welcome.html /api/topup/public/server-status /download/android.json; do
   echo "   $p → $(curl -sk --max-time 10 --resolve o-bg.pamirlink.ru:443:127.0.0.1 -o /dev/null -w "%{http_code}" "https://o-bg.pamirlink.ru$p")"

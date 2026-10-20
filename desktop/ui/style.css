@@ -112,6 +112,12 @@ input:focus { border-color: var(--mint); }
 .hero h2.on { color: var(--mint); }
 .hero p { margin: 0; font-size: 14px; }
 
+.mode { display: inline-flex; margin-top: 14px; padding: 4px; gap: 4px; border-radius: 99px; background: rgba(255, 255, 255, .06); border: 1px solid var(--line); }
+.mode button { border: 0; background: none; padding: 8px 14px; border-radius: 99px; font-weight: 700; font-size: 13px; color: var(--dim); }
+.mode button.on { background: var(--mint); color: var(--on-mint); }
+.mode button:disabled { opacity: .5; cursor: default; }
+.ask-btns { display: flex; gap: 8px; margin-top: 10px; }
+.ask-btns .btn { padding: 10px 14px; }
 .notice { padding: 12px 14px; border-radius: 16px; background: rgba(255, 200, 61, .12); border: 1px solid rgba(255, 200, 61, .35); font-size: 13.5px; }
 .notice button { margin-top: 8px; }
 

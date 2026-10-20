@@ -33,6 +33,9 @@ const S = {
   selected: store.get("server"),
   state: "off", // off | busy | on
   ports: null,
+  // proxy — системный прокси (браузеры и большинство программ); tun — весь трафик через адаптер Mognu (нужны права)
+  mode: store.get("mode") === "tun" ? "tun" : "proxy",
+  launch: { elevated: false, handoff: false },
 };
 
 // ── API кабинета: зеркала по очереди, как PamirHosts в Android ───────────────
@@ -314,9 +317,42 @@ document.addEventListener("click", async (e) => {
   if (S.state === "on") { await disconnect(true); connect(); }
 });
 
+function renderMode() {
+  for (const b of $("mode").querySelectorAll("button")) {
+    b.classList.toggle("on", b.dataset.mode === S.mode);
+    b.setAttribute("aria-checked", b.dataset.mode === S.mode);
+    b.disabled = S.state === "busy";
+  }
+  $("foot").textContent = S.mode === "tun"
+    ? "Весь трафик компьютера идёт через Mognu: игры, Discord и любые программы."
+    : "Браузеры, Telegram и большинство программ идут через Mognu (системный прокси Windows).";
+}
+
+// Перезапуск с правами администратора: Windows спросит разрешение; новая копия подключится сама
+async function elevate() {
+  const ok = await invoke("relaunch_elevated").catch((e) => { toast(String(e)); return false; });
+  if (!ok) { S.mode = "proxy"; store.set("mode", "proxy"); renderMode(); toast("Без разрешения Windows режим «Весь трафик» не включить"); }
+}
+
+$("mode").onclick = async (e) => {
+  const b = e.target.closest("[data-mode]");
+  if (!b || b.disabled || b.dataset.mode === S.mode) return;
+  if (b.dataset.mode === "tun" && !S.launch.elevated) { $("tun-ask").hidden = false; return; }
+  S.mode = b.dataset.mode; store.set("mode", S.mode); renderMode();
+  if (S.state === "on") { await disconnect(true); connect(); }
+};
+$("tun-no").onclick = () => ($("tun-ask").hidden = true);
+$("tun-yes").onclick = async () => {
+  $("tun-ask").hidden = true;
+  S.mode = "tun"; store.set("mode", "tun"); renderMode();
+  if (S.state !== "off") await disconnect(true);
+  elevate();
+};
+
 function renderPower() {
   const p = $("power"), title = $("state-title"), sub = $("state-sub");
   p.dataset.state = S.state;
+  renderMode();
   $("power-mascot").src = "assets/mascot-" + (S.state === "on" ? "on" : S.state === "busy" ? "busy" : "off") + ".svg";
   p.setAttribute("aria-label", S.state === "on" ? "Отключить" : "Подключить");
   const srv = selectedServer() || bestServer(), label = srv ? flagHtml(cleanName(srv.name).flag) + " " + esc(cleanName(srv.name).name) : "";
@@ -343,12 +379,16 @@ async function verify(port) {
 async function connect() {
   const srv = selectedServer() || bestServer();
   if (!srv) { toast(S.keys.length ? "Нет доступных серверов" : "Нет активной подписки"); return; }
+  // режим «весь трафик» без прав администратора — сначала перезапуск через окно Windows, подключится новая копия
+  if (S.mode === "tun" && !S.launch.elevated) { elevate(); return; }
+  const tun = S.mode === "tun";
   S.state = "busy"; renderPower();
   try {
     const ports = await invoke("free_ports");
-    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports)) });
+    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, { tun })) });
     if (!(await verify(ports.http))) throw new Error("Сервер не отвечает — попробуй другой");
-    await invoke("proxy_set", { port: ports.http });
+    // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
+    if (!tun) await invoke("proxy_set", { port: ports.http });
     S.ports = ports; S.state = "on";
     store.set("server", keyOf(srv)); S.selected = keyOf(srv);
   } catch (e) {
@@ -406,11 +446,16 @@ async function startHome() {
   try { S.version = await window.__TAURI__.app.getVersion(); } catch (e) { S.version = "0.1.0"; }
   $("version").textContent = "Mognu для Windows " + S.version;
   refreshHosts();
+  S.launch = await invoke("launch_info").catch(() => S.launch);
   S.demo = await invoke("demo").catch(() => null);
   if (S.demo) {
+    if (S.demo.tun) S.mode = "tun";
     await startHome();
     if (S.demo.connect) connect();
     return;
   }
-  if (store.get("token")) startHome(); else show("login");
+  if (!store.get("token")) { show("login"); return; }
+  await startHome();
+  // перезапуск с правами ради «весь трафик» — подключаемся сразу, человек уже нажал «Подключить»
+  if (S.launch.handoff) connect();
 })();

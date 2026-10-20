@@ -59,7 +59,17 @@
     </button>
     <h2 id="state-title">Не подключено</h2>
     <p class="muted" id="state-sub">Нажми на Могну, чтобы подключиться</p>
+    <div class="mode" id="mode" role="radiogroup" aria-label="Что идёт через Mognu">
+      <button data-mode="proxy" role="radio">Браузеры и программы</button>
+      <button data-mode="tun" role="radio">Весь трафик</button>
+    </div>
   </section>
+
+  <div class="notice" id="tun-ask" hidden>
+    <b>Весь трафик — игры, Discord и любые программы.</b> Для этого Windows попросит разрешение администратора,
+    и Mognu перезапустится. Разрешение нужно при каждом запуске в этом режиме.
+    <div class="ask-btns"><button class="btn primary" id="tun-yes">Перезапустить</button><button class="btn" id="tun-no">Отмена</button></div>
+  </div>
 
   <div class="notice" id="notice" hidden></div>
 
@@ -72,7 +82,7 @@
     </details>
   </section>
 
-  <p class="foot small muted">Браузеры, Telegram и большинство программ идут через Mognu (системный прокси Windows).</p>
+  <p class="foot small muted" id="foot"></p>
 </main>
 
 <!-- настройки -->

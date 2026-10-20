@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod core;
+mod elevate;
 mod sysproxy;
 
 use std::collections::HashMap;
@@ -195,6 +196,7 @@ async fn tcp_ping(host: String, port: u16) -> Option<u32> {
 struct Demo {
     sub: String,
     connect: bool,
+    tun: bool,
 }
 
 /// Проверочный запуск на GitHub (desktop-build.yml): MOGNU_DEMO_SUB — тестовая подписка вместо входа в аккаунт,
@@ -202,7 +204,32 @@ struct Demo {
 #[tauri::command]
 fn demo() -> Option<Demo> {
     let sub = std::env::var("MOGNU_DEMO_SUB").ok().filter(|s| s.starts_with("https://"))?;
-    Some(Demo { sub, connect: std::env::var("MOGNU_DEMO_CONNECT").map(|v| v == "1").unwrap_or(false) })
+    let on = |k: &str| std::env::var(k).map(|v| v == "1").unwrap_or(false);
+    Some(Demo { sub, connect: on("MOGNU_DEMO_CONNECT"), tun: on("MOGNU_DEMO_TUN") })
+}
+
+#[derive(Serialize)]
+struct Launch {
+    /// у программы есть права администратора (нужны для режима «весь трафик»)
+    elevated: bool,
+    /// это перезапуск с правами ради режима — окно сразу подключается
+    handoff: bool,
+}
+
+#[tauri::command]
+fn launch_info() -> Launch {
+    Launch { elevated: elevate::is_elevated(), handoff: std::env::args().any(|a| a == elevate::HANDOFF) }
+}
+
+/// Перезапуск с правами администратора: Windows спросит разрешение. Если человек согласился — эта копия
+/// отключается и закрывается, новая подключится сама. false — человек отказался, всё остаётся как было.
+#[tauri::command]
+fn relaunch_elevated(app: AppHandle) -> Result<bool, String> {
+    let ok = elevate::relaunch()?;
+    if ok {
+        quit(&app);
+    }
+    Ok(ok)
 }
 
 #[tauri::command]
@@ -217,6 +244,11 @@ fn main() {
     // если в прошлый раз программу закрыли аварийно, прокси мог остаться включённым на наш порт — без ядра
     // интернет у человека тогда не работает
     let _ = sysproxy::clear_ours();
+
+    // перезапуск с правами: прежняя копия ещё закрывается — подождём, иначе защита от второго окна закроет эту
+    if std::env::args().any(|a| a == elevate::HANDOFF) {
+        std::thread::sleep(Duration::from_millis(2500));
+    }
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -238,7 +270,7 @@ fn main() {
                 let _ = w.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, proxy_set, http, tcp_ping, open_url, demo, tray_state])
+        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated])
         .build(tauri::generate_context!())
         .expect("Mognu не запустился");
 

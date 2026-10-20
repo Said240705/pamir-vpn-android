@@ -228,8 +228,23 @@ const PRIVATE_IP = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/1
  * profile — сервер из parseSubscription; ports — {socks, http} свободные порты на 127.0.0.1 (их выбирает Rust).
  * Режим «системный прокси»: браузеры и программы, которые его уважают, идут через socks/http-вход.
  */
-export function buildConfig(profile, ports) {
-  return {
+// Режим «весь трафик» (opts.tun): вход TUN самого Xray создаёт адаптер Mognu (wintun.dll рядом с xray.exe) и забирает
+// весь трафик системы; трафик ядра к серверу Xray сам привязывает к настоящему сетевому адаптеру (autoOutboundsInterface),
+// поэтому петли нет. Локальная сеть остаётся прямой — её маршруты точнее, чем 0.0.0.0/0.
+const TUN = {
+  tag: "tun", port: 0, protocol: "tun",
+  settings: {
+    name: "Mognu", mtu: 1500,
+    gateway: ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+    dns: ["1.1.1.1", "8.8.8.8"],
+    autoSystemRoutingTable: ["0.0.0.0/0", "::/0"],
+    autoOutboundsInterface: "auto",
+  },
+  sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], routeOnly: true },
+};
+
+export function buildConfig(profile, ports, opts = {}) {
+  const cfg = {
     log: { loglevel: "warning" },
     inbounds: [
       { tag: "socks", listen: "127.0.0.1", port: ports.socks, protocol: "socks", settings: { auth: "noauth", udp: true },
@@ -250,6 +265,8 @@ export function buildConfig(profile, ports) {
       ],
     },
   };
+  if (opts.tun) cfg.inbounds.unshift(TUN);
+  return cfg;
 }
 
 // Как в Android (PamirActivity.reloadServers, PamirWatch.cleanName): флаг и короткое имя из remarks,

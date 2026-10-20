@@ -324,6 +324,9 @@ function renderPower() {
   if (S.state === "on") { title.textContent = "Подключено"; sub.innerHTML = label; }
   else if (S.state === "busy") { title.textContent = "Подключаем…"; sub.innerHTML = label; }
   else { title.textContent = "Не подключено"; sub.textContent = "Нажми на Могну, чтобы подключиться"; }
+  // значок в трее повторяет состояние: салатовый и сервер в подсказке — подключено
+  const plain = srv ? cleanName(srv.name).name : "";
+  invoke("tray_state", { connected: S.state === "on", label: plain }).catch(() => {});
 }
 
 // ── подключение ──────────────────────────────────────────────────────────────
@@ -363,6 +366,8 @@ async function disconnect(quiet) {
 }
 
 $("power").onclick = () => { if (S.state === "busy") return; if (S.state === "on") disconnect(); else connect(); };
+// «Подключить / Отключить» из меню значка в трее; до входа в аккаунт пункт ничего не делает
+window.__TAURI__.event.listen("tray-toggle", () => { if (!$("home").hidden) $("power").click(); });
 $("refresh").onclick = () => loadSubscription(true);
 
 // ── настройки ────────────────────────────────────────────────────────────────

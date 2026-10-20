@@ -13,9 +13,9 @@
         "label": "main",
         "title": "Mognu",
         "width": 420,
-        "height": 780,
+        "height": 720,
         "minWidth": 380,
-        "minHeight": 620,
+        "minHeight": 600,
         "center": true,
         "backgroundColor": "#1E1640"
       }

@@ -179,6 +179,12 @@ jobs:
           Shot shots/5-tun.png
           Write-Host "весь трафик: адаптер Mognu=$adapter, системный прокси=$($p3.ProxyEnable), IP сменился=$($tunIp -and $tunIp -ne $direct), сайт=$tunWeb"
           $tunOk = $adapter -eq 1 -and $tunIp -and $tunIp -ne $direct -and $tunWeb -eq '204'
+          if (-not $tunOk) {
+            # журнал ядра и ошибка программы (core.log) — адреса и имена хостов скрыты, лог публичный
+            $log = Get-Content (Join-Path $env:APPDATA 'app.mognu.desktop\core.log') -Raw -ErrorAction SilentlyContinue
+            $log = $log -replace '\b\d{1,3}(\.\d{1,3}){3}\b', 'x.x.x.x' -replace '[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}', 'host'
+            Write-Host "--- core.log (последние строки) ---"; ($log -split "`n" | Select-Object -Last 40) -join "`n" | Write-Host
+          }
           Stop-Process -Id $app.Id -Force; Start-Sleep 4
           Remove-Item Env:MOGNU_DEMO_SUB, Env:MOGNU_DEMO_CONNECT, Env:MOGNU_DEMO_TUN
           $after = curl.exe -s --max-time 15 https://api.ipify.org

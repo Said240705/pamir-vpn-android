@@ -15,6 +15,8 @@ const LOG_LINES: usize = 400;
 pub struct Core {
     child: Option<Child>,
     log: Arc<Mutex<VecDeque<String>>>,
+    /// папка данных программы: туда при остановке пишется core.log — журнал для поддержки
+    dir: Option<PathBuf>,
 }
 
 fn xray_path() -> Result<PathBuf, String> {
@@ -37,6 +39,18 @@ impl Core {
         self.log.lock().map(|l| l.iter().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default()
     }
 
+    /// Строка от самой программы (например, почему не удалось подключиться) — рядом с выводом ядра.
+    pub fn note(&self, line: String) {
+        Core::push(&self.log, format!("[Mognu] {line}"));
+        self.save();
+    }
+
+    fn save(&self) {
+        if let Some(d) = &self.dir {
+            let _ = std::fs::write(d.join("core.log"), self.log_tail());
+        }
+    }
+
     fn push(log: &Arc<Mutex<VecDeque<String>>>, line: String) {
         if let Ok(mut l) = log.lock() {
             if l.len() >= LOG_LINES { l.pop_front(); }
@@ -48,6 +62,7 @@ impl Core {
     /// (неверный конфиг, порт занят) — возвращает его последние строки, чтобы показать человеку.
     pub fn start(&mut self, data_dir: &PathBuf, config: &str) -> Result<(), String> {
         self.stop();
+        self.dir = Some(data_dir.clone());
         std::fs::create_dir_all(data_dir).map_err(|e| e.to_string())?;
         let cfg = data_dir.join("config.json");
         std::fs::write(&cfg, config).map_err(|e| e.to_string())?;
@@ -87,6 +102,7 @@ impl Core {
         if let Some(mut c) = self.child.take() {
             let _ = c.kill();
             let _ = c.wait();
+            self.save();
         }
     }
 }

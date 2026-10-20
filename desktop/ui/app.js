@@ -394,6 +394,7 @@ async function connect() {
   } catch (e) {
     await invoke("core_stop").catch(() => {});
     S.state = "off"; S.ports = null;
+    invoke("core_note", { text: "не подключилось: " + String(e.message || e).slice(0, 300) }).catch(() => {});
     toast(String(e.message || e).split("\n")[0].slice(0, 140));
   }
   renderPower(); renderServers();

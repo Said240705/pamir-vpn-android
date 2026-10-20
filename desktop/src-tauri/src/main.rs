@@ -124,6 +124,13 @@ fn core_running(state: State<AppState>) -> bool {
 }
 
 #[tauri::command]
+fn core_note(state: State<AppState>, text: String) {
+    if let Ok(c) = state.core.lock() {
+        c.note(text);
+    }
+}
+
+#[tauri::command]
 fn core_log(state: State<AppState>) -> String {
     state.core.lock().map(|c| c.log_tail()).unwrap_or_default()
 }
@@ -270,7 +277,7 @@ fn main() {
                 let _ = w.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated])
+        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated])
         .build(tauri::generate_context!())
         .expect("Mognu не запустился");
 

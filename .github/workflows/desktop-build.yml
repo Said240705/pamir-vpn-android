@@ -91,6 +91,16 @@ jobs:
           Stop-Process -Id $app.Id -Force
           Write-Host 'OK'
 
+      - name: Connect through every server (test subscription)
+        shell: pwsh
+        working-directory: desktop
+        env:
+          MOGNU_TEST_SUB: ${{ secrets.MOGNU_TEST_SUB }}
+        run: |
+          node test/e2e.mjs (Join-Path $env:LOCALAPPDATA 'Mognu\xray.exe') | Tee-Object -FilePath e2e.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Content e2e.txt | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+
       - uses: actions/upload-artifact@v4
         with:
           name: mognu-windows

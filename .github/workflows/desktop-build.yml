@@ -140,6 +140,11 @@ jobs:
           $p2 = Proxy
           $tray = -not $app.HasExited -and $p2.ProxyEnable -eq 1
           Write-Host "после крестика: программа работает=$(-not $app.HasExited), прокси включён=$($p2.ProxyEnable)"
+          # Windows 11 прячет новые значки под «^»; для снимка выносим значок Mognu на панель — то же, что перетащить его руками
+          Get-ChildItem 'HKCU:\Control Panel\NotifyIconSettings' -ErrorAction SilentlyContinue | ForEach-Object {
+            if ((Get-ItemProperty $_.PSPath).ExecutablePath -like '*mognu.exe') { Set-ItemProperty $_.PSPath -Name IsPromoted -Value 1 -Type DWord; Write-Host 'значок Mognu вынесен на панель' }
+          }
+          Start-Sleep 3
           Shot shots/4-tray.png
           # аварийное закрытие: прокси остаётся, но следующий запуск обязан его убрать; ядро должно умереть вместе с программой
           Stop-Process -Id $app.Id -Force; Start-Sleep 2

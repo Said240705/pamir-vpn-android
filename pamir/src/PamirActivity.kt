@@ -470,6 +470,7 @@ open class PamirActivity : AppCompatActivity() {
         lifecycleScope.launch { loadLocations() }
         lifecycleScope.launch { loadNews() }
         if (loggedIn) lifecycleScope.launch { loadLastChance(); if (cardInfo == null) loadPaymentMethod() }
+        if (loggedIn && servers.isEmpty()) lifecycleScope.launch { syncEmptyPhone() }
     }
 
     private suspend fun loadNews() {
@@ -883,10 +884,11 @@ open class PamirActivity : AppCompatActivity() {
 
     /**
      * After buying a subscription: the server creates the key a few seconds after the payment, so wait for it
-     * (up to ~30 s) and put it on this phone. The renewal sheet keeps showing "Оплата прошла" meanwhile.
+     * (up to ~2 min) and put it on this phone; if it is later still, [syncEmptyPhone] picks it up.
+     * The renewal sheet keeps showing "Оплата прошла" meanwhile.
      */
     private suspend fun afterPurchase() {
-        repeat(10) {
+        repeat(40) {
             val ka = api(quiet = true) { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys")
             val list = if (ka == null) emptyList() else (0 until ka.length()).map { ka.getJSONObject(it) }
             if (list.isNotEmpty()) renewKeys = list
@@ -936,6 +938,30 @@ open class PamirActivity : AppCompatActivity() {
             onDevice.size > 1 -> openKeyPicker(migrate = true)
             onDevice.size == 1 && deviceKeyId != onDevice[0].optInt("id") -> rememberDeviceKey(onDevice[0])
         }
+    }
+
+    /** Keys the empty-phone sync already tried to install this session: a failed import is not retried in a loop. */
+    private val autoKeyTried = mutableSetOf<Int>()
+
+    /**
+     * No servers on this phone yet, but the account may already have a key: bought on the site, or paid in the app
+     * while [afterPurchase] had stopped waiting. Reload the keys; a single active key goes straight onto the phone,
+     * a key that is already here (renewed after it ran out) gets its servers refreshed.
+     */
+    private suspend fun syncEmptyPhone() {
+        if (!loggedIn || updating || servers.isNotEmpty()) return
+        val ka = api(quiet = true) { p -> PamirApi.call("/auth/keys", proxyPort = p) }?.optJSONArray("keys") ?: return
+        val list = (0 until ka.length()).map { ka.getJSONObject(it) }
+        renewKeys = list
+        val active = activeKeys(list)
+        val onDevice = keysOnDevice(active)
+        val key = when {
+            onDevice.isNotEmpty() -> onDevice[0]
+            active.size == 1 -> active[0]
+            else -> return
+        }
+        if (!autoKeyTried.add(key.optInt("id")) || servers.isNotEmpty()) return
+        if (onDevice.isNotEmpty()) updateSubscription(silent = true) else applyDeviceKey(key)
     }
 
     private fun openKeyPicker(migrate: Boolean = false) {
@@ -2017,6 +2043,9 @@ open class PamirActivity : AppCompatActivity() {
         LaunchedEffect(Unit) {
             loadTrialOffer()
             while (true) { delay(1500); reloadServers() }
+        }
+        LaunchedEffect(loggedIn) {
+            while (loggedIn) { syncEmptyPhone(); delay(15_000) }
         }
         val active = activeKeys(renewKeys)
         Column(

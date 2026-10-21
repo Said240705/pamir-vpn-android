@@ -50,6 +50,11 @@
     </div>
   </header>
 
+  <div class="update" id="update" role="status" hidden>
+    <div><b id="update-title">Новая версия Mognu</b><span class="muted small">Ключ и настройки сохранятся</span></div>
+    <button class="btn primary" id="update-go">Обновить</button>
+  </div>
+
   <div class="keys" id="keys" hidden></div>
 
   <section class="hero">
@@ -93,6 +98,7 @@
     <button class="row-btn" data-open="/">Личный кабинет <span>↗</span></button>
     <button class="row-btn" data-open="/?screen=support">Поддержка <span>↗</span></button>
     <button class="row-btn" id="copy-log">Скопировать журнал для поддержки</button>
+    <button class="row-btn" id="update-check">Проверить обновления</button>
     <button class="row-btn danger" id="logout">Выйти</button>
     <p class="muted small center" id="version"></p>
   </div>

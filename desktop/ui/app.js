@@ -432,6 +432,37 @@ $("copy-log").onclick = async () => {
   catch (e) { toast("Не удалось скопировать"); }
 };
 
+// ── обновления (update.rs): новые версии — пре-релизы desktop-v* на GitHub ───────
+let pendingUpdate = null;
+const viaCore = () => (S.state === "on" && S.ports ? S.ports.http : null);
+
+async function checkUpdate(manual) {
+  try {
+    const u = await invoke("update_check", { proxy: viaCore() });
+    if (u) {
+      pendingUpdate = u;
+      $("update-title").textContent = "Mognu " + u.version + " готов";
+      $("update").hidden = false;
+    } else if (manual) toast("У тебя последняя версия — " + S.version);
+  } catch (e) {
+    if (manual) toast("Не удалось проверить обновления");
+  }
+}
+
+$("update-go").onclick = async () => {
+  const b = $("update-go");
+  if (!pendingUpdate || b.disabled) return;
+  b.disabled = true; b.textContent = "Скачиваем…";
+  try {
+    // после скачивания и проверки программа сама закроется, обновится и откроется снова
+    await invoke("update_install", { u: pendingUpdate, proxy: viaCore() });
+  } catch (e) {
+    b.disabled = false; b.textContent = "Обновить";
+    toast("Не удалось обновить: " + String(e).slice(0, 100));
+  }
+};
+$("update-check").onclick = () => { $("settings").hidden = true; checkUpdate(true); };
+
 // ── запуск ───────────────────────────────────────────────────────────────────
 async function startHome() {
   show("home"); renderPower();
@@ -447,6 +478,8 @@ async function startHome() {
   try { S.version = await window.__TAURI__.app.getVersion(); } catch (e) { S.version = "0.1.0"; }
   $("version").textContent = "Mognu для Windows " + S.version;
   refreshHosts();
+  setTimeout(checkUpdate, 8000);
+  setInterval(checkUpdate, 6 * 3600e3);
   S.launch = await invoke("launch_info").catch(() => S.launch);
   S.demo = await invoke("demo").catch(() => null);
   if (S.demo) {

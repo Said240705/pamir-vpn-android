@@ -6,6 +6,7 @@
 mod core;
 mod elevate;
 mod sysproxy;
+mod update;
 
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -239,6 +240,21 @@ fn relaunch_elevated(app: AppHandle) -> Result<bool, String> {
     Ok(ok)
 }
 
+/// Есть ли новая версия Mognu для Windows; proxy — порт HTTP-входа ядра, если подключены.
+#[tauri::command]
+async fn update_check(proxy: Option<u16>) -> Result<Option<update::Update>, String> {
+    update::check(proxy).await
+}
+
+/// Скачать и проверить новую версию, затем выйти: установка пройдёт тихо и откроет обновлённый Mognu.
+#[tauri::command]
+async fn update_install(app: AppHandle, u: update::Update, proxy: Option<u16>) -> Result<(), String> {
+    let setup = update::download(&u, proxy).await?;
+    update::install_after_exit(&setup)?;
+    quit(&app);
+    Ok(())
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("tg://")) {
@@ -277,7 +293,7 @@ fn main() {
                 let _ = w.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated])
+        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, update_check, update_install])
         .build(tauri::generate_context!())
         .expect("Mognu не запустился");
 

@@ -42,6 +42,7 @@ jobs:
   windows:
     needs: test
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -96,21 +97,31 @@ jobs:
           }
           $ui = Start-Process $setup.FullName -PassThru; Start-Sleep 6; Shot shots/0-installer.png
           $sh = New-Object -ComObject WScript.Shell
-          if ($sh.AppActivate($ui.Id)) { Start-Sleep 1; $sh.SendKeys('{ENTER}'); Start-Sleep 3; Shot shots/0-installer-2.png }
+          if ($sh.AppActivate($ui.Id)) { Start-Sleep 1; $sh.SendKeys('{ENTER}'); Start-Sleep 6; Shot shots/0-installer-2.png }
           Stop-Process -Id $ui.Id -Force -ErrorAction SilentlyContinue; Start-Sleep 2
           # переезд со старого имени: сначала ставим 0.2.0 («Mognu» в %LOCALAPPDATA%\Mognu), поверх — новую версию
           # тихо, как это делает автообновление; старая папка и запись в «Программах» должны исчезнуть
+          # ждём только сам установщик: Start-Process -Wait ждёт ещё и всё, что он запустил, а после переезда
+          # установщик открывает программу (она живёт в трее и сама не закрывается)
+          function Install($exe) {
+            $p = Start-Process $exe -ArgumentList '/S' -PassThru
+            if (!$p.WaitForExit(300000)) { throw "установщик $exe не закончил за 5 минут" }
+          }
           gh release download desktop-v0.2.0 --pattern 'Mognu-Setup-0.2.0.exe' --dir old
-          Start-Process old/Mognu-Setup-0.2.0.exe -ArgumentList '/S' -Wait
+          Write-Host 'ставлю 0.2.0'
+          Install old/Mognu-Setup-0.2.0.exe
           if (!(Test-Path (Join-Path $env:LOCALAPPDATA 'Mognu\mognu.exe'))) { throw 'старая версия 0.2.0 не установилась' }
-          Start-Process $setup.FullName -ArgumentList '/S' -Wait
+          Write-Host 'ставлю новую версию поверх'
+          Install $setup.FullName
           Start-Sleep 3
+          $opened = @(Get-Process mognu -ErrorAction SilentlyContinue).Count
+          Write-Host "после тихого обновления программа открылась сама: $($opened -gt 0)"
           Get-Process mognu -ErrorAction SilentlyContinue | Stop-Process -Force
           $oldLeft = Test-Path (Join-Path $env:LOCALAPPDATA 'Mognu')
           $oldKey = Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mognu'
           $newKey = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mognu VPN' -ErrorAction SilentlyContinue).DisplayName
           Write-Host "после обновления: старая папка=$oldLeft, старая запись=$oldKey, новая запись=$newKey"
-          if ($oldLeft -or $oldKey -or $newKey -ne 'Mognu VPN') { throw 'переезд с «Mognu» на «Mognu VPN» не удался' }
+          if ($oldLeft -or $oldKey -or $newKey -ne 'Mognu VPN' -or $opened -eq 0) { throw 'переезд с «Mognu» на «Mognu VPN» не удался' }
           'Обновление с 0.2.0 («Mognu») на «Mognu VPN»: старая копия убрана, новая на месте ✅' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           $dir = Join-Path $env:LOCALAPPDATA 'Mognu VPN'
           Get-ChildItem $dir | Format-Table Name, Length

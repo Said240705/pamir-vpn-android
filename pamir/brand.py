@@ -20,7 +20,8 @@ VERSION = os.environ.get('PAMIR_VERSION', '1.0.0')
 CODE = os.environ.get('PAMIR_CODE', '1000')
 TEST = os.environ.get('PAMIR_TEST') == '1'
 BRAND = 'Mognu'
-APP_NAME = BRAND + (' тест' if TEST else '')
+PRODUCT = BRAND + ' VPN'   # название продукта: под иконкой, плитка, виджет
+APP_NAME = PRODUCT + (' тест' if TEST else '')
 PACKAGE = 'ru.pamirlink.vpn' + ('.test' if TEST else '')
 BRAND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res', 'brand')
 
@@ -291,8 +292,8 @@ if os.path.exists(banner_xml):
     os.remove(banner_xml)
 for f in glob.glob(os.path.join(MAIN, 'res', 'values*', 'strings.xml')):
     edit(f, [
-        (re.compile(r'<string name="app_widget_name">[^<]*</string>'), f'<string name="app_widget_name">{BRAND}</string>'),
-        (re.compile(r'<string name="app_tile_name">[^<]*</string>'), f'<string name="app_tile_name">{BRAND}</string>'),
+        (re.compile(r'<string name="app_widget_name">[^<]*</string>'), f'<string name="app_widget_name">{PRODUCT}</string>'),
+        (re.compile(r'<string name="app_tile_name">[^<]*</string>'), f'<string name="app_tile_name">{PRODUCT}</string>'),
     ], required=False)
 
 PROBE_FN = """    /** Pamir watchdog probe: delay through the running core, -1 = no answer, -2 = not running. */

@@ -1940,7 +1940,7 @@ open class PamirActivity : AppCompatActivity() {
                 Text("Важное обновление", style = PamirType.title, color = c.text, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(Gap.s))
                 Text(
-                    "Вышла новая версия Mognu — без неё приложение дальше не откроется. " +
+                    "Вышла новая версия Mognu VPN — без неё приложение дальше не откроется. " +
                         "Обновление займёт минуту, подписка и настройки сохранятся.",
                     style = PamirType.body, color = c.textDim, textAlign = TextAlign.Center
                 )
@@ -1959,7 +1959,7 @@ open class PamirActivity : AppCompatActivity() {
                 TextAction("Скачать с сайта", color = c.accentText) {
                     openUrl(
                         PamirHosts.web("/download/") + if (prefersArm64()) "pamir-vpn.apk" else "pamir-vpn-universal.apk",
-                        "Скачать Mognu", "Откройте ссылку на телефоне и установите файл"
+                        "Скачать Mognu VPN", "Откройте ссылку на телефоне и установите файл"
                     )
                 }
                 TextAction("Поддержка", icon = PamirIcons.Chat) { openUrl(BOT_URL, "Поддержка", "Отсканируйте код телефоном — ответим в Telegram") }
@@ -2064,7 +2064,7 @@ open class PamirActivity : AppCompatActivity() {
         LogoHero()
         Spacer(Modifier.height(Gap.l))
         Text(
-            "Добро пожаловать\nв Mognu", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
+            "Добро пожаловать\nв Mognu VPN", style = PamirType.hero, color = c.text, textAlign = TextAlign.Center,
             modifier = Modifier.semantics { heading() }
         )
         Spacer(Modifier.height(Gap.s))
@@ -2311,7 +2311,7 @@ open class PamirActivity : AppCompatActivity() {
         ) {
             Image(painterResource(R.drawable.pamir_logo), contentDescription = null, modifier = Modifier.size(30.dp))
             Spacer(Modifier.width(Gap.s))
-            Text("Mognu", style = PamirType.brand, color = c.text, modifier = Modifier.weight(1f))
+            Text("Mognu VPN", style = PamirType.brand, color = c.text, maxLines = 1, softWrap = false, modifier = Modifier.weight(1f))
             val d = daysLeft
             val tone = if (d != null && d <= 3) Tone.WARN else Tone.ACCENT
             val left = when {

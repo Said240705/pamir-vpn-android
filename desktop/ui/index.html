@@ -126,6 +126,16 @@
   <div class="sheet" role="dialog" aria-label="Настройки">
     <div class="sheet-head"><b>Настройки</b><button class="icon-btn" id="settings-close" aria-label="Закрыть">✕</button></div>
     <p class="muted small" id="account"></p>
+    <div class="toggles">
+      <label class="tog"><span><b>Запускать вместе с Windows</b><small>Mognu VPN тихо стартует в трее</small></span>
+        <input type="checkbox" id="opt-autostart"><i aria-hidden="true"></i></label>
+      <label class="tog"><span><b>Подключаться при запуске</b><small>Сразу к выбранному или самому быстрому серверу</small></span>
+        <input type="checkbox" id="opt-autoconnect"><i aria-hidden="true"></i></label>
+      <label class="tog"><span><b>Российские сайты — напрямую</b><small>Банки, Госуслуги и маркетплейсы открываются без VPN</small></span>
+        <input type="checkbox" id="opt-ru"><i aria-hidden="true"></i></label>
+      <label class="tog"><span><b>Защита от утечек</b><small>Если связь с сервером пропала, интернет на паузе, пока Mognu VPN переподключается</small></span>
+        <input type="checkbox" id="opt-guard"><i aria-hidden="true"></i></label>
+    </div>
     <button class="row-btn" data-open="/">Личный кабинет <span>↗</span></button>
     <button class="row-btn" id="devices-open">Устройства на ключе <span>→</span></button>
     <button class="row-btn" data-open="/?screen=support">Поддержка <span>↗</span></button>

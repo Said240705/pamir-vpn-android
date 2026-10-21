@@ -3,6 +3,7 @@
 // пустить запрос через уже работающее подключение.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod core;
 mod elevate;
 mod sysproxy;
@@ -222,18 +223,32 @@ struct Launch {
     elevated: bool,
     /// это перезапуск с правами ради режима — окно сразу подключается
     handoff: bool,
+    /// стартовали вместе с Windows: окно спрятано в трее
+    autostart: bool,
 }
 
 #[tauri::command]
 fn launch_info() -> Launch {
-    Launch { elevated: elevate::is_elevated(), handoff: std::env::args().any(|a| a == elevate::HANDOFF) }
+    let arg = |x: &str| std::env::args().any(|a| a == x);
+    Launch { elevated: elevate::is_elevated(), handoff: arg(elevate::HANDOFF), autostart: arg(autostart::ARG) }
+}
+
+/// Запуск вместе с Windows: включён ли и включить/выключить.
+#[tauri::command]
+fn autostart_get() -> bool {
+    autostart::enabled()
+}
+
+#[tauri::command]
+fn autostart_set(on: bool) -> Result<(), String> {
+    autostart::set(on)
 }
 
 /// Перезапуск с правами администратора: Windows спросит разрешение. Если человек согласился — эта копия
 /// отключается и закрывается, новая подключится сама. false — человек отказался, всё остаётся как было.
 #[tauri::command]
-fn relaunch_elevated(app: AppHandle) -> Result<bool, String> {
-    let ok = elevate::relaunch()?;
+fn relaunch_elevated(app: AppHandle, hidden: bool) -> Result<bool, String> {
+    let ok = elevate::relaunch(hidden)?;
     if ok {
         quit(&app);
     }
@@ -284,6 +299,10 @@ fn main() {
         .manage(AppState { core: Mutex::new(core::Core::default()) })
         .setup(|app| {
             build_tray(app)?;
+            // окно создаётся скрытым (tauri.conf.json): при запуске вместе с Windows так и остаётся в трее
+            if !std::env::args().any(|a| a == autostart::ARG) {
+                show_main(app.handle());
+            }
             Ok(())
         })
         // крестик окна не выходит из программы и не отключает: окно прячется, Mognu остаётся в трее
@@ -293,7 +312,7 @@ fn main() {
                 let _ = w.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, update_check, update_install])
+        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, autostart_get, autostart_set, update_check, update_install])
         .build(tauri::generate_context!())
         .expect("Mognu VPN не запустился");
 

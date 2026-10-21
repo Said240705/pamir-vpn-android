@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseLink, parseSubscription, buildConfig, outbound, cleanName, isLte, isStub } from "../ui/xray.js";
+import { parseLink, parseSubscription, buildConfig, outbound, cleanName, isLte, isStub, RU_DOMAINS } from "../ui/xray.js";
 
 const ID = "11111111-2222-4333-8444-555555555555";
 const PORTS = { socks: 10808, http: 10809 };
@@ -92,4 +92,19 @@ test("режим «весь трафик»: вход TUN, xray принимае�
   const f = join(mkdtempSync(join(tmpdir(), "mognu-")), "tun.json");
   writeFileSync(f, JSON.stringify(cfg));
   assert.match(execFileSync(process.env.XRAY_BIN, ["run", "-test", "-c", f], { encoding: "utf8" }), /Configuration OK/);
+});
+
+test("российские сайты напрямую: правило есть только с ruDirect, xray принимает", () => {
+  const ruRule = (cfg) => cfg.routing.rules.find((r) => r.domain === RU_DOMAINS);
+  assert.equal(ruRule(buildConfig(parseLink(REALITY), PORTS)), undefined);
+  for (const tun of [false, true]) {
+    const cfg = buildConfig(parseLink(REALITY), PORTS, { tun, ruDirect: true });
+    assert.equal(ruRule(cfg).outboundTag, "direct");
+    assert.ok(RU_DOMAINS.includes("domain:ru") && RU_DOMAINS.includes("domain:xn--p1ai"));
+    if (tun) assert.equal(cfg.routing.rules[0].outboundTag, "dns-out", "DNS из адаптера — раньше остальных правил");
+    if (!process.env.XRAY_BIN) continue;
+    const f = join(mkdtempSync(join(tmpdir(), "mognu-")), "ru.json");
+    writeFileSync(f, JSON.stringify(cfg));
+    assert.match(execFileSync(process.env.XRAY_BIN, ["run", "-test", "-c", f], { encoding: "utf8" }), /Configuration OK/);
+  }
 });

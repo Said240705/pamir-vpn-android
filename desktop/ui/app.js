@@ -452,7 +452,9 @@ function renderMode() {
 
 // Перезапуск с правами администратора: Windows спросит разрешение; новая копия подключится сама
 async function elevate() {
-  const ok = await invoke("relaunch_elevated").catch((e) => { toast(String(e)); return false; });
+  // запустились вместе с Windows и окно ещё в трее — новая копия с правами тоже останется в трее
+  const hidden = S.launch.autostart && document.visibilityState === "hidden";
+  const ok = await invoke("relaunch_elevated", { hidden }).catch((e) => { toast(String(e)); return false; });
   if (!ok) { S.mode = "proxy"; store.set("mode", "proxy"); renderMode(); toast("Без разрешения Windows режим «Весь трафик» не включить"); }
 }
 
@@ -475,13 +477,17 @@ function renderPower() {
   const p = $("power"), title = $("state-title"), sub = $("state-sub");
   p.dataset.state = S.state;
   renderMode();
-  $("power-mascot").dataset.mood = S.state;
+  $("power-mascot").dataset.mood = S.state === "paused" ? "busy" : S.state;
   document.body.classList.toggle("connected", S.state === "on");
-  p.setAttribute("aria-label", S.state === "on" ? "Отключить" : "Подключить");
+  p.setAttribute("aria-label", S.state === "on" || S.state === "paused" ? "Отключить" : "Подключить");
   const srv = current(), label = srv ? flagHtml(cleanName(srv.name).flag) + " " + esc(cleanName(srv.name).name) : "";
   title.classList.toggle("on", S.state === "on");
   if (S.state === "on") { title.textContent = "Подключено"; sub.innerHTML = label; }
-  else if (S.state === "busy") { title.textContent = "Подключаем…"; sub.innerHTML = label; }
+  else if (S.state === "busy") { title.textContent = S.healing ? "Переподключаемся…" : "Подключаем…"; sub.innerHTML = label; }
+  else if (S.state === "paused") {
+    title.textContent = "Нет связи с сервером";
+    sub.textContent = "Интернет на паузе, чтобы ничего не ушло мимо VPN. Пробуем снова…";
+  }
   else { title.textContent = "Не подключено"; sub.textContent = "Нажми на Могну, чтобы подключиться"; }
   renderStats();
   // значок в трее повторяет состояние: салатовый и сервер в подсказке — подключено
@@ -509,11 +515,12 @@ async function connect() {
   S.active = srv; S.state = "busy"; renderPower();
   try {
     const ports = await invoke("free_ports");
-    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, { tun })) });
+    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, coreOpts())) });
     if (!(await verify(ports.http))) throw new Error("Сервер не отвечает — попробуй другой");
     // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
     if (!tun) await invoke("proxy_set", { port: ports.http });
     S.ports = ports; S.state = "on";
+    startWatch();
   } catch (e) {
     await invoke("core_stop").catch(() => {});
     S.state = "off"; S.ports = null; S.active = null;
@@ -524,12 +531,72 @@ async function connect() {
 }
 
 async function disconnect(quiet) {
+  stopWatch();
   await invoke("core_stop").catch(() => {});
   S.state = "off"; S.ports = null; S.active = null;
   if (!quiet) renderPower();
 }
 
-$("power").onclick = () => { if (S.state === "busy") return; if (S.state === "on") disconnect(); else connect(); };
+$("power").onclick = () => {
+  // во время подключения нажатие ждёт, во время переподключения — отключает
+  if (S.state === "busy" && !S.healing) return;
+  if (S.healing) { disconnect(); return; }
+  if (S.state === "on" || S.state === "paused") disconnect(); else connect();
+};
+
+// ── связь под присмотром: переподключение и защита от утечек ─────────────────
+// Каждые 15 секунд: ядро живо и сайт открывается через подключение? Две неудачи подряд, упавшее ядро или выход
+// из сна — переподключаемся: сначала к тому же серверу, потом к самым быстрым остальным. Ядро перезапускается на тех
+// же портах, поэтому системный прокси всё это время указывает на Mognu и браузеры не уходят в интернет напрямую.
+// Если не вышло: с защитой от утечек интернет остаётся на паузе и попытки идут дальше, без неё — VPN отключается
+// и интернет работает как без Mognu.
+const coreOpts = () => ({ tun: S.mode === "tun", ruDirect: store.get("ru_direct", true) });
+const guardOn = () => store.get("guard", true);
+let watchTimer = 0, watchFails = 0, watchLast = 0;
+function startWatch() { stopWatch(); watchFails = 0; watchLast = Date.now(); watchTimer = setInterval(checkHealth, 15000); }
+function stopWatch() { clearInterval(watchTimer); watchTimer = 0; }
+
+async function checkHealth() {
+  if (S.healing || !S.ports) return;
+  const now = Date.now(), woke = now - watchLast > 45000;
+  watchLast = now;
+  if (S.state === "paused") { heal(); return; }
+  if (S.state !== "on") return;
+  const alive = await invoke("core_running").catch(() => false);
+  if (alive && !woke && (await verify(S.ports.http))) { watchFails = 0; return; }
+  if (!alive || woke || ++watchFails >= 2) heal();
+}
+
+async function heal() {
+  if (S.healing || !S.ports) return;
+  S.healing = true;
+  const was = S.active, paused = S.state === "paused";
+  if (!paused) { S.state = "busy"; renderPower(); }
+  const others = S.servers.filter((p) => !isStub(p) && !S.down[keyOf(p)] && (isLte(p) === !!(was && isLte(was))))
+    .sort((a, b) => (S.pings[keyOf(a)] || 9e9) - (S.pings[keyOf(b)] || 9e9));
+  const order = [was, ...others].filter((p, i, a) => p && a.findIndex((q) => q && keyOf(q) === keyOf(p)) === i).slice(0, 4);
+  for (const srv of order) {
+    if (!S.ports) break; // пока пробовали, человек нажал «Отключить»
+    try {
+      await invoke("core_start", { config: JSON.stringify(buildConfig(srv, S.ports, coreOpts())) });
+      // «Отключить» нажали, пока ядро перезапускалось: оно не должно остаться работать (в TUN — держать адаптер)
+      if (!S.ports) { await invoke("core_stop").catch(() => {}); break; }
+      if (await verify(S.ports.http)) {
+        S.active = srv; S.state = "on"; S.healing = false; watchFails = 0;
+        invoke("core_note", { text: "переподключились: " + cleanName(srv.name).name }).catch(() => {});
+        if (was && keyOf(was) !== keyOf(srv)) toast(cleanName(was.name).name + " не отвечает — переключились на " + cleanName(srv.name).name);
+        renderPower(); renderServers();
+        return;
+      }
+    } catch (e) { /* следующий сервер */ }
+  }
+  S.healing = false;
+  if (!S.ports) return;
+  invoke("core_note", { text: "связь с серверами пропала" + (guardOn() ? ", интернет на паузе" : ", VPN отключён") }).catch(() => {});
+  if (guardOn()) { S.state = "paused"; renderPower(); return; }
+  await disconnect();
+  toast("Связь с серверами пропала — VPN отключён, интернет работает напрямую");
+}
 // «Подключить / Отключить» из меню значка в трее; до входа в аккаунт пункт ничего не делает
 window.__TAURI__.event.listen("tray-toggle", () => { if (!$("home").hidden) $("power").click(); });
 $("refresh").onclick = () => loadSubscription(true);
@@ -537,9 +604,28 @@ $("refresh").onclick = () => loadSubscription(true);
 // ── настройки ────────────────────────────────────────────────────────────────
 $("settings-open").onclick = async () => {
   $("settings").hidden = false;
+  $("opt-autostart").checked = await invoke("autostart_get").catch(() => false);
+  $("opt-autoconnect").checked = store.get("autoconnect", false);
+  $("opt-ru").checked = store.get("ru_direct", true);
+  $("opt-guard").checked = store.get("guard", true);
   try { const me = await api("/auth/me"); $("account").textContent = me.email || (me.username ? "@" + me.username : "") || ""; } catch (e) {}
 };
 $("settings-close").onclick = () => ($("settings").hidden = true);
+$("opt-autostart").onchange = async (e) => {
+  try { await invoke("autostart_set", { on: e.target.checked }); }
+  catch (err) { e.target.checked = !e.target.checked; toast("Не удалось изменить автозапуск: " + String(err).slice(0, 80)); }
+};
+$("opt-autoconnect").onchange = (e) => store.set("autoconnect", e.target.checked);
+$("opt-guard").onchange = (e) => store.set("guard", e.target.checked);
+// маршруты меняются в ядре: если подключены — переподключаемся к тому же серверу с новыми правилами
+$("opt-ru").onchange = async (e) => {
+  store.set("ru_direct", e.target.checked);
+  if (S.state === "on" && S.active) {
+    try { await invoke("core_start", { config: JSON.stringify(buildConfig(S.active, S.ports, coreOpts())) }); }
+    catch (err) { heal(); }
+  }
+  toast(e.target.checked ? "Российские сайты теперь открываются напрямую" : "Теперь все сайты идут через VPN");
+};
 $("settings").onclick = (e) => { if (e.target.id === "settings") $("settings").hidden = true; };
 $("logout").onclick = async () => {
   await disconnect();
@@ -669,6 +755,7 @@ async function startHome() {
   }
   if (!store.get("token")) { show("login"); return; }
   await startHome();
-  // перезапуск с правами ради «весь трафик» — подключаемся сразу, человек уже нажал «Подключить»
-  if (S.launch.handoff) connect();
+  // перезапуск с правами ради «весь трафик» — подключаемся сразу, человек уже нажал «Подключить»;
+  // «Подключаться при запуске» — тоже сразу, к выбранному или самому быстрому серверу
+  if (S.launch.handoff || (store.get("autoconnect", false) && S.state === "off")) connect();
 })();

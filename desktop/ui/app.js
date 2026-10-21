@@ -432,7 +432,10 @@ async function lookupIp() {
   try {
     const r = await invoke("http", { req: { url: "https://cloudflare.com/cdn-cgi/trace", proxy: S.ports && S.ports.http, timeout_ms: 9000 } });
     const ip = /^ip=(.+)$/m.exec(r.body), loc = /^loc=([A-Z]{2})$/m.exec(r.body);
-    if (S.state === "on" && ip) { $("st-ip").innerHTML = (loc ? flagSvg(loc[1]) + " " : "") + esc(ip[1]); $("st-ip").title = ip[1]; }
+    // в проверочном запуске на GitHub снимки экрана публичные — адрес сервера не показываем
+    if (!ip) throw new Error("no ip");
+    const shown = S.demo ? ip[1].replace(/[0-9a-f]/gi, "•") : ip[1];
+    if (S.state === "on") { $("st-ip").innerHTML = (loc ? flagSvg(loc[1]) + " " : "") + esc(shown); $("st-ip").title = shown; }
   } catch (e) { if (S.state === "on") $("st-ip").textContent = "—"; }
 }
 

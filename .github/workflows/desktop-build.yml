@@ -229,7 +229,9 @@ jobs:
             return $true }, [IntPtr]::Zero) | Out-Null
           Write-Host "видимые окна при автозапуске: $($vis.Count) $($vis -join '; ')"
           Shot shots/6-autostart.png
-          $hidden = $vis.Count -eq 0
+          # служебные окна (защита от второй копии «…-sic», события «Tao Thread Event Target») человеку не видны —
+          # считаем только главное окно программы
+          $hidden = @($vis | Where-Object { $_ -like '*«Mognu VPN»' }).Count -eq 0
           $pa = Proxy
           $auto = $hidden -and $pa.ProxyEnable -eq 1 -and $pa.ProxyServer -like '127.0.0.1:*'
           Write-Host "автозапуск: окно скрыто=$hidden, подключился=$($pa.ProxyEnable -eq 1)"

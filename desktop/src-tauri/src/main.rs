@@ -55,7 +55,7 @@ fn tray_state(app: AppHandle, connected: bool, label: String) {
         if let Ok(img) = Image::from_bytes(if connected { TRAY_ON } else { TRAY_OFF }) {
             let _ = t.set_icon(Some(img));
         }
-        let tip = if connected { format!("Mognu — подключено · {label}") } else { "Mognu — не подключено".to_string() };
+        let tip = if connected { format!("Mognu VPN — подключено · {label}") } else { "Mognu VPN — не подключено".to_string() };
         let _ = t.set_tooltip(Some(tip));
     }
     if let Some(tray) = app.try_state::<Tray>() {
@@ -64,13 +64,13 @@ fn tray_state(app: AppHandle, connected: bool, label: String) {
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Открыть Mognu", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Открыть Mognu VPN", true, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", "Подключить", true, None::<&str>)?;
     let exit = MenuItem::with_id(app, "quit", "Выйти", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &toggle, &PredefinedMenuItem::separator(app)?, &exit])?;
     TrayIconBuilder::with_id("main")
         .icon(Image::from_bytes(TRAY_OFF)?)
-        .tooltip("Mognu — не подключено")
+        .tooltip("Mognu VPN — не подключено")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| match e.id.as_ref() {
@@ -295,7 +295,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, update_check, update_install])
         .build(tauri::generate_context!())
-        .expect("Mognu не запустился");
+        .expect("Mognu VPN не запустился");
 
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {

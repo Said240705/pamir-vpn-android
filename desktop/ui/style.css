@@ -122,6 +122,7 @@ body.connected .a2 { background: radial-gradient(closest-side, rgba(var(--mint-r
 .login-hero { text-align: center; }
 .login-mascot { display: block; width: 150px; height: 182px; margin: 0 auto; transform: rotate(-6deg); filter: drop-shadow(0 16px 30px rgba(0, 0, 0, .4)); }
 .login-hero h1 { font: 900 34px/1 var(--display); letter-spacing: -.03em; margin: 10px 0 6px; }
+.login-hero h1 span { color: var(--mint); }
 .login-actions { display: flex; flex-direction: column; gap: 10px; }
 label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--dim); font-weight: 600; }
 input {

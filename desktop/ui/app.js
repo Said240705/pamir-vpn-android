@@ -443,8 +443,8 @@ function renderMode() {
     b.disabled = S.state === "busy";
   }
   $("foot").textContent = S.mode === "tun"
-    ? "Весь трафик компьютера идёт через Mognu: игры, Discord и любые программы."
-    : "Браузеры, Telegram и большинство программ идут через Mognu (системный прокси Windows).";
+    ? "Весь трафик компьютера идёт через Mognu VPN: игры, Discord и любые программы."
+    : "Браузеры, Telegram и большинство программ идут через Mognu VPN (системный прокси Windows).";
 }
 
 // Перезапуск с правами администратора: Windows спросит разрешение; новая копия подключится сама
@@ -547,7 +547,7 @@ $("logout").onclick = async () => {
 };
 $("copy-log").onclick = async () => {
   const log = await invoke("core_log").catch(() => "");
-  const text = `Mognu Desktop ${S.version}\n${navigator.userAgent}\n\n${log || "(журнал ядра пуст)"}`;
+  const text = `Mognu VPN для Windows ${S.version}\n${navigator.userAgent}\n\n${log || "(журнал ядра пуст)"}`;
   try { await navigator.clipboard.writeText(text); toast("Журнал скопирован — вставь его в чат поддержки"); }
   catch (e) { toast("Не удалось скопировать"); }
 };
@@ -561,7 +561,7 @@ async function checkUpdate(manual) {
     const u = await invoke("update_check", { proxy: viaCore() });
     if (u) {
       pendingUpdate = u;
-      $("update-title").textContent = "Mognu " + u.version + " готов";
+      $("update-title").textContent = "Mognu VPN " + u.version + " готов";
       $("update").hidden = false;
     } else if (manual) toast("У тебя последняя версия — " + S.version);
   } catch (e) {
@@ -652,7 +652,7 @@ async function startHome() {
   mountMascots(ny);
   sky(ny);
   try { S.version = await window.__TAURI__.app.getVersion(); } catch (e) { S.version = "0.1.0"; }
-  $("version").textContent = "Mognu для Windows " + S.version;
+  $("version").textContent = "Mognu VPN для Windows " + S.version;
   refreshHosts();
   setTimeout(checkUpdate, 8000);
   setInterval(checkUpdate, 6 * 3600e3);

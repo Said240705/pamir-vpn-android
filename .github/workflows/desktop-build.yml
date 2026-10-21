@@ -1,6 +1,6 @@
 name: Mognu Desktop (Windows)
 
-# Сборка Mognu для Windows: ядро Xray той же версии, что в Android (go.mod в AndroidLibXrayLite), окно на Tauri,
+# Сборка Mognu VPN для Windows: ядро Xray той же версии, что в Android (go.mod в AndroidLibXrayLite), окно на Tauri,
 # установщик NSIS. Тесты разбора подписки — с настоящим xray. С release: true — публикует релиз desktop-v<версия>
 # как пре-релиз: Android и сайт берут обновления из releases/latest, а пре-релиз «последним» не становится никогда.
 on:
@@ -80,6 +80,8 @@ jobs:
       - name: Smoke test on Windows
         shell: pwsh
         working-directory: desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
           Write-Host "installer: $($setup.Name) $([math]::Round($setup.Length/1MB,1)) MB"
@@ -96,9 +98,21 @@ jobs:
           $sh = New-Object -ComObject WScript.Shell
           if ($sh.AppActivate($ui.Id)) { Start-Sleep 1; $sh.SendKeys('{ENTER}'); Start-Sleep 3; Shot shots/0-installer-2.png }
           Stop-Process -Id $ui.Id -Force -ErrorAction SilentlyContinue; Start-Sleep 2
-          # тихая установка для текущего пользователя и проверка, что ядро лежит рядом с программой
+          # переезд со старого имени: сначала ставим 0.2.0 («Mognu» в %LOCALAPPDATA%\Mognu), поверх — новую версию
+          # тихо, как это делает автообновление; старая папка и запись в «Программах» должны исчезнуть
+          gh release download desktop-v0.2.0 --pattern 'Mognu-Setup-0.2.0.exe' --dir old
+          Start-Process old/Mognu-Setup-0.2.0.exe -ArgumentList '/S' -Wait
+          if (!(Test-Path (Join-Path $env:LOCALAPPDATA 'Mognu\mognu.exe'))) { throw 'старая версия 0.2.0 не установилась' }
           Start-Process $setup.FullName -ArgumentList '/S' -Wait
-          $dir = Join-Path $env:LOCALAPPDATA 'Mognu'
+          Start-Sleep 3
+          Get-Process mognu -ErrorAction SilentlyContinue | Stop-Process -Force
+          $oldLeft = Test-Path (Join-Path $env:LOCALAPPDATA 'Mognu')
+          $oldKey = Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mognu'
+          $newKey = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mognu VPN' -ErrorAction SilentlyContinue).DisplayName
+          Write-Host "после обновления: старая папка=$oldLeft, старая запись=$oldKey, новая запись=$newKey"
+          if ($oldLeft -or $oldKey -or $newKey -ne 'Mognu VPN') { throw 'переезд с «Mognu» на «Mognu VPN» не удался' }
+          'Обновление с 0.2.0 («Mognu») на «Mognu VPN»: старая копия убрана, новая на месте ✅' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          $dir = Join-Path $env:LOCALAPPDATA 'Mognu VPN'
           Get-ChildItem $dir | Format-Table Name, Length
           if (!(Test-Path (Join-Path $dir 'xray.exe'))) { throw 'xray.exe не установлен' }
           if (!(Test-Path (Join-Path $dir 'mognu.exe'))) { throw 'mognu.exe не установлен' }
@@ -120,7 +134,7 @@ jobs:
         env:
           MOGNU_TEST_SUB: ${{ secrets.MOGNU_TEST_SUB }}
         run: |
-          node test/e2e.mjs (Join-Path $env:LOCALAPPDATA 'Mognu\xray.exe') | Tee-Object -FilePath e2e.txt
+          node test/e2e.mjs (Join-Path $env:LOCALAPPDATA 'Mognu VPN\xray.exe') | Tee-Object -FilePath e2e.txt
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-Content e2e.txt | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
@@ -141,7 +155,7 @@ jobs:
             Write-Host "снимок $path ($($b.Width)x$($b.Height))"
           }
           function Proxy() { Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' | Select-Object ProxyEnable, ProxyServer }
-          $exe = Join-Path $env:LOCALAPPDATA 'Mognu\mognu.exe'
+          $exe = Join-Path $env:LOCALAPPDATA 'Mognu VPN\mognu.exe'
           New-Item -ItemType Directory -Force shots | Out-Null
 
           # 1. главный экран с серверами из тестовой подписки
@@ -207,7 +221,7 @@ jobs:
 
           # снимки — в пре-релиз desktop-screens (только интерфейс: имена серверов, без адресов и ключей)
           gh release view desktop-screens 2>$null | Out-Null
-          if ($LASTEXITCODE -ne 0) { gh release create desktop-screens --prerelease --latest=false --title 'Mognu для Windows — скриншоты из проверки' --notes 'Снимки экрана настоящей программы на Windows, обновляются при каждой сборке.' }
+          if ($LASTEXITCODE -ne 0) { gh release create desktop-screens --prerelease --latest=false --title 'Mognu VPN для Windows — скриншоты из проверки' --notes 'Снимки экрана настоящей программы на Windows, обновляются при каждой сборке.' }
           gh release upload desktop-screens (Get-ChildItem shots/*.png).FullName --clobber
           if (!$ok) { throw 'подключение через системный прокси не сработало' }
           if (!$cleared) { throw 'прокси не выключился после аварийного закрытия' }
@@ -231,5 +245,5 @@ jobs:
           V=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
           F=$(ls desktop/src-tauri/target/release/bundle/nsis/*.exe | head -1)
           cp "$F" "Mognu-Setup-$V.exe"
-          gh release create "desktop-v$V" "Mognu-Setup-$V.exe" --title "Mognu для Windows $V" \
-            --notes "Mognu для Windows. Скачай Mognu-Setup-$V.exe и запусти — установка без прав администратора." --prerelease --latest=false
+          gh release create "desktop-v$V" "Mognu-Setup-$V.exe" --title "Mognu VPN для Windows $V" \
+            --notes "Mognu VPN для Windows. Скачай Mognu-Setup-$V.exe и запусти — установка без прав администратора." --prerelease --latest=false

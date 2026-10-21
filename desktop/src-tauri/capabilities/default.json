@@ -1,7 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Окно Mognu: свои команды (main.rs) и базовые API Tauri",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Окно Mognu: свои команды (main.rs), базовые API Tauri и своя шапка окна (свернуть, развернуть, закрыть, перетаскивание)",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-is-maximized"
+  ]
 }

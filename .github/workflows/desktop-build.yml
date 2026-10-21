@@ -83,6 +83,19 @@ jobs:
         run: |
           $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
           Write-Host "installer: $($setup.Name) $([math]::Round($setup.Length/1MB,1)) MB"
+          # снимки окна установщика (первая страница и следующая) — для проверки оформления
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          New-Item -ItemType Directory -Force shots | Out-Null
+          function Shot($path) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save($path)
+          }
+          $ui = Start-Process $setup.FullName -PassThru; Start-Sleep 6; Shot shots/0-installer.png
+          $sh = New-Object -ComObject WScript.Shell
+          if ($sh.AppActivate($ui.Id)) { Start-Sleep 1; $sh.SendKeys('{ENTER}'); Start-Sleep 3; Shot shots/0-installer-2.png }
+          Stop-Process -Id $ui.Id -Force -ErrorAction SilentlyContinue; Start-Sleep 2
           # тихая установка для текущего пользователя и проверка, что ядро лежит рядом с программой
           Start-Process $setup.FullName -ArgumentList '/S' -Wait
           $dir = Join-Path $env:LOCALAPPDATA 'Mognu'
@@ -195,7 +208,7 @@ jobs:
           # снимки — в пре-релиз desktop-screens (только интерфейс: имена серверов, без адресов и ключей)
           gh release view desktop-screens 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) { gh release create desktop-screens --prerelease --latest=false --title 'Mognu для Windows — скриншоты из проверки' --notes 'Снимки экрана настоящей программы на Windows, обновляются при каждой сборке.' }
-          gh release upload desktop-screens shots/1-home.png shots/2-connected.png shots/3-login.png shots/4-tray.png shots/5-tun.png --clobber
+          gh release upload desktop-screens (Get-ChildItem shots/*.png).FullName --clobber
           if (!$ok) { throw 'подключение через системный прокси не сработало' }
           if (!$cleared) { throw 'прокси не выключился после аварийного закрытия' }
           if ($orphan -gt 0) { throw 'xray.exe остался работать после закрытия программы' }

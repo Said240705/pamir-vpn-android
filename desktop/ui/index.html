@@ -9,39 +9,51 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="sky" aria-hidden="true"></div>
+<div class="sky" aria-hidden="true"><i class="aurora a1"></i><i class="aurora a2"></i><canvas id="stars"></canvas></div>
+
+<!-- своя шапка окна: тянуть за неё, двойной щелчок — развернуть; крестик прячет в трей (main.rs) -->
+<header class="titlebar" data-tauri-drag-region>
+  <div class="tb-brand" data-tauri-drag-region><img src="assets/mognu-icon.svg" alt=""><span data-tauri-drag-region>Mognu</span></div>
+  <div class="tb-btns">
+    <button id="win-min" aria-label="Свернуть"><svg viewBox="0 0 10 10"><path d="M1 5h8"/></svg></button>
+    <button id="win-max" aria-label="Развернуть"><svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" rx="1"/></svg></button>
+    <button id="win-close" class="close" aria-label="Закрыть"><svg viewBox="0 0 10 10"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg></button>
+  </div>
+</header>
 
 <!-- вход -->
-<main id="login" class="screen" hidden>
-  <div class="login-hero">
-    <img class="login-mascot" src="assets/mascot-off.svg" alt="">
-    <h1>Mognu</h1>
-    <p class="muted">Быстрое и приватное подключение в одно касание</p>
-  </div>
-  <div class="login-actions" id="login-start">
-    <button class="btn primary" id="tg-login">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.4c-.2 1-.9 1.3-1.7.8l-4.8-3.5-2.3 2.2c-.3.3-.5.5-1 .5l.3-4.9 8.9-8c.4-.3-.1-.5-.6-.2L6.5 13.3l-4.7-1.5c-1-.3-1-1 .2-1.5L20.5 3c.9-.3 1.6.2 1.4 1.3z"/></svg>
-      Войти через Telegram
-    </button>
-    <button class="btn" id="email-open">Войти по почте</button>
-    <p class="small muted center">Нет аккаунта? <a href="#" data-open="/login.html?tab=register">Создать на сайте</a></p>
-  </div>
-  <form class="login-actions" id="email-form" hidden>
-    <label>Почта<input type="email" id="email" autocomplete="username" required></label>
-    <label>Пароль<input type="password" id="password" autocomplete="current-password" required></label>
-    <button class="btn primary" type="submit">Войти</button>
-    <div class="row-links">
-      <a href="#" id="email-back">← Назад</a>
-      <a href="#" data-open="/login.html?tab=forgot">Забыли пароль?</a>
+<main id="login" class="screen login" hidden>
+  <div class="login-card">
+    <div class="login-hero">
+      <div class="login-mascot mascot-slot" data-mood="off"></div>
+      <h1>Mognu</h1>
+      <p class="muted">Быстрое и приватное подключение в одно касание</p>
     </div>
-  </form>
-  <p class="status" id="login-status" role="status"></p>
+    <div class="login-actions" id="login-start">
+      <button class="btn primary" id="tg-login">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.4c-.2 1-.9 1.3-1.7.8l-4.8-3.5-2.3 2.2c-.3.3-.5.5-1 .5l.3-4.9 8.9-8c.4-.3-.1-.5-.6-.2L6.5 13.3l-4.7-1.5c-1-.3-1-1 .2-1.5L20.5 3c.9-.3 1.6.2 1.4 1.3z"/></svg>
+        Войти через Telegram
+      </button>
+      <button class="btn" id="email-open">Войти по почте</button>
+      <p class="small muted center">Нет аккаунта? <a href="#" data-open="/login.html?tab=register">Создать на сайте</a></p>
+    </div>
+    <form class="login-actions" id="email-form" hidden>
+      <label>Почта<input type="email" id="email" autocomplete="username" required></label>
+      <label>Пароль<input type="password" id="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Войти</button>
+      <div class="row-links">
+        <a href="#" id="email-back">← Назад</a>
+        <a href="#" data-open="/login.html?tab=forgot">Забыли пароль?</a>
+      </div>
+    </form>
+    <p class="status" id="login-status" role="status"></p>
+  </div>
 </main>
 
-<!-- главный экран -->
-<main id="home" class="screen" hidden>
+<!-- главный экран: слева (или сверху в узком окне) подключение, справа серверы -->
+<main id="home" class="screen home" hidden>
   <header class="top">
-    <div class="brand"><img src="assets/mognu-icon.svg" alt=""><span>Mognu</span></div>
+    <div class="keys" id="keys" hidden></div>
     <div class="top-right">
       <button class="pill" id="days" hidden></button>
       <button class="icon-btn" id="settings-open" aria-label="Настройки">
@@ -50,44 +62,63 @@
     </div>
   </header>
 
-  <div class="update" id="update" role="status" hidden>
-    <div><b id="update-title">Новая версия Mognu</b><span class="muted small">Ключ и настройки сохранятся</span></div>
-    <button class="btn primary" id="update-go">Обновить</button>
-  </div>
-
-  <div class="keys" id="keys" hidden></div>
-
-  <section class="hero">
+  <section class="stage">
     <button class="power" id="power" data-state="off" aria-label="Подключить">
+      <span class="halo" aria-hidden="true"><i></i><i></i><i></i></span>
       <span class="power-ring" aria-hidden="true"></span>
-      <img id="power-mascot" src="assets/mascot-off.svg" alt="">
+      <span class="mascot-slot" id="power-mascot" data-mood="off"></span>
     </button>
     <h2 id="state-title">Не подключено</h2>
-    <p class="muted" id="state-sub">Нажми на Могну, чтобы подключиться</p>
+    <p class="state-sub" id="state-sub">Нажми на Могну, чтобы подключиться</p>
+    <div class="stats" id="stats" hidden>
+      <div class="stat"><span>В сети</span><b id="st-time">00:00</b></div>
+      <div class="stat"><span>Твой IP</span><b id="st-ip">…</b></div>
+      <div class="stat"><span>Пинг</span><b id="st-ping">—</b></div>
+    </div>
     <div class="mode" id="mode" role="radiogroup" aria-label="Что идёт через Mognu">
-      <button data-mode="proxy" role="radio">Браузеры и программы</button>
-      <button data-mode="tun" role="radio">Весь трафик</button>
+      <button data-mode="proxy" role="radio"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg>Браузеры и программы</button>
+      <button data-mode="tun" role="radio"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Весь трафик</button>
+    </div>
+    <p class="foot" id="foot"></p>
+
+    <div class="notice" id="tun-ask" hidden>
+      <b>Весь трафик — игры, Discord и любые программы.</b> Для этого Windows попросит разрешение администратора,
+      и Mognu перезапустится. Разрешение нужно при каждом запуске в этом режиме.
+      <div class="ask-btns"><button class="btn primary" id="tun-yes">Перезапустить</button><button class="btn" id="tun-no">Отмена</button></div>
     </div>
   </section>
 
-  <div class="notice" id="tun-ask" hidden>
-    <b>Весь трафик — игры, Discord и любые программы.</b> Для этого Windows попросит разрешение администратора,
-    и Mognu перезапустится. Разрешение нужно при каждом запуске в этом режиме.
-    <div class="ask-btns"><button class="btn primary" id="tun-yes">Перезапустить</button><button class="btn" id="tun-no">Отмена</button></div>
-  </div>
+  <aside class="panel">
+    <div class="update" id="update" role="status" hidden>
+      <div><b id="update-title">Новая версия Mognu</b><span class="muted small">Ключ и настройки сохранятся</span></div>
+      <button class="btn primary" id="update-go">Обновить</button>
+    </div>
 
-  <div class="notice" id="notice" hidden></div>
+    <div class="notice" id="notice" hidden></div>
 
-  <section class="card servers">
-    <div class="card-head"><span>Серверы</span><button class="link" id="refresh">Обновить</button></div>
-    <div id="server-list"></div>
-    <details class="lte" id="lte-wrap" hidden>
-      <summary>Для белых списков <span class="muted">· LTE</span></summary>
-      <div id="lte-list"></div>
-    </details>
-  </section>
+    <section class="card servers">
+      <div class="card-head"><span>Серверы</span><button class="link" id="refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>Обновить</button></div>
+      <div id="server-list" class="srv-list"></div>
+      <details class="lte" id="lte-wrap" hidden>
+        <summary>Для белых списков <span class="muted">· LTE</span></summary>
+        <div id="lte-list" class="srv-list"></div>
+      </details>
+    </section>
 
-  <p class="foot small muted" id="foot"></p>
+    <section class="card sub-card" id="sub-card" hidden>
+      <div class="card-head"><span>Подписка</span></div>
+      <div class="sub-row">
+        <svg class="sub-ring" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="27"/><circle id="sub-arc" class="arc" cx="32" cy="32" r="27"/></svg>
+        <div class="sub-days"><b id="sub-num">0</b><span id="sub-unit">дней</span></div>
+        <div class="sub-info"><b id="sub-name"></b><span id="sub-date"></span></div>
+      </div>
+      <div class="sub-acts">
+        <button class="btn sm primary" data-open="/?screen=subscriptions">Продлить</button>
+        <button class="btn sm" id="sub-devices">Устройства</button>
+      </div>
+    </section>
+  </aside>
 </main>
 
 <!-- настройки -->
@@ -96,11 +127,20 @@
     <div class="sheet-head"><b>Настройки</b><button class="icon-btn" id="settings-close" aria-label="Закрыть">✕</button></div>
     <p class="muted small" id="account"></p>
     <button class="row-btn" data-open="/">Личный кабинет <span>↗</span></button>
+    <button class="row-btn" id="devices-open">Устройства на ключе <span>→</span></button>
     <button class="row-btn" data-open="/?screen=support">Поддержка <span>↗</span></button>
     <button class="row-btn" id="copy-log">Скопировать журнал для поддержки</button>
     <button class="row-btn" id="update-check">Проверить обновления</button>
     <button class="row-btn danger" id="logout">Выйти</button>
     <p class="muted small center" id="version"></p>
+  </div>
+</div>
+
+<!-- устройства ключа: место для компьютера, отключить лишнее, докупить место -->
+<div class="sheet-wrap" id="devices" hidden>
+  <div class="sheet" role="dialog" aria-label="Устройства">
+    <div class="sheet-head"><b>Устройства</b><button class="icon-btn" id="devices-close" aria-label="Закрыть">✕</button></div>
+    <div id="devices-body"></div>
   </div>
 </div>
 

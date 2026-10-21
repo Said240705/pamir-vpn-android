@@ -229,9 +229,9 @@ object PamirUpdater {
         val count = if (sameVersion) MmkvManager.decodeSettingsInt(K_NOTIFIED_COUNT, 0) else 0
         if (sameVersion && (count >= MAX_REMINDERS || now - MmkvManager.decodeSettingsLong(K_NOTIFIED_AT, 0L) < REMIND_EVERY_MS)) return
         PamirWatch.notify(
-            ctx, "Mognu $version готов 👑", "Обновление уже скачано — нажми, чтобы установить. Это пара секунд.",
+            ctx, "Mognu VPN $version готов 👑", "Обновление уже скачано — нажми, чтобы установить. Это пара секунд.",
             EXTRA_INSTALL, "Установить", NOTIFY_ID,
-            channel = "pamir_updates", channelName = "Обновления приложения", channelDesc = "Новая версия Mognu готова к установке",
+            channel = "pamir_updates", channelName = "Обновления приложения", channelDesc = "Новая версия Mognu VPN готова к установке",
         )
         MmkvManager.encodeSettings(K_NOTIFIED_VERSION, version)
         MmkvManager.encodeSettings(K_NOTIFIED_COUNT, count + 1)

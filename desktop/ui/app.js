@@ -1,5 +1,6 @@
 // Mognu для компьютера: вход, ключи, серверы и подключение. Сеть и ядро — через команды Rust (src-tauri/src/main.rs).
 import { parseSubscription, buildConfig, cleanName, isLte, isStub } from "./xray.js";
+import { mountMascots, newYear } from "./mascot.js";
 
 const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
 const $ = (id) => document.getElementById(id);
@@ -252,6 +253,8 @@ async function pingAll() {
 
 // ── отрисовка ────────────────────────────────────────────────────────────────
 const keyOf = (p) => p.address + ":" + p.port + ":" + p.name;
+// сервер на экране: при подключении — тот, через который идём, иначе выбранный или самый быстрый
+const current = () => (S.state !== "off" && S.active) || selectedServer() || bestServer();
 function selectedServer() {
   const usable = S.servers.filter((p) => !isStub(p));
   return usable.find((p) => keyOf(p) === S.selected) || null;
@@ -274,6 +277,7 @@ function renderKeys() {
     pill.className = "pill" + (d <= 3 ? " danger" : d <= 7 ? " warn" : "");
     pill.title = "Продлить в личном кабинете";
   }
+  renderSubCard();
 }
 $("keys").onclick = async (e) => {
   const b = e.target.closest("[data-key]");
@@ -283,14 +287,42 @@ $("keys").onclick = async (e) => {
   renderKeys(); loadSubscription();
 };
 $("days").onclick = () => openSite("/?screen=subscriptions");
+// карточка подписки справа (в широком окне вместо значка с днями)
+function renderSubCard() {
+  const k = currentKey(), d = daysLeft(k), card = $("sub-card");
+  card.hidden = !k;
+  if (!k) return;
+  $("sub-name").textContent = k.display_name || "Ключ";
+  $("sub-num").textContent = d === null ? "∞" : d;
+  $("sub-unit").textContent = d === null ? "" : plural(d, "день", "дня", "дней");
+  const end = k.expires_at ? new Date(String(k.expires_at).replace(" ", "T") + (/[zZ+]/.test(k.expires_at) ? "" : "Z")) : null;
+  $("sub-date").textContent = end ? "до " + end.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }) : "бессрочно";
+  $("sub-arc").style.strokeDashoffset = 169.6 * (1 - (d === null ? 1 : Math.min(d, 30) / 30));
+  card.classList.toggle("warn", d !== null && d <= 7 && d > 3);
+  card.classList.toggle("danger", d !== null && d <= 3);
+}
+$("sub-devices").onclick = () => openDevices();
+
+const BARS = '<span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>';
+function pingHtml(k) {
+  const ping = S.pings[k];
+  const cls = ping == null ? "" : ping < 150 ? "good" : ping < 400 ? "mid" : "bad";
+  return `<span class="ping ${cls}">${ping == null ? (k in S.pings ? "нет ответа" : "…") : ping + " мс"}${BARS}</span>`;
+}
 
 function row(p) {
-  const k = keyOf(p), { flag, name } = cleanName(p.name), ping = S.pings[k];
-  const cls = ping == null ? "" : ping < 150 ? "good" : ping < 400 ? "mid" : "bad";
-  const sub = S.down[k] ? "<small>Перебои — лучше выбрать другой</small>" : "";
-  const on = (selectedServer() || bestServer()) === p;
-  return `<button class="srv ${on ? "on" : ""}" data-srv="${esc(k)}"><span class="flag">${flagHtml(flag)}</span><span class="name">${esc(name)}${sub}</span>` +
-    `<span class="ping ${cls}">${ping == null ? (k in S.pings ? "—" : "…") : ping + " мс"}</span></button>`;
+  const k = keyOf(p), { flag, name } = cleanName(p.name);
+  const sub = S.down[k] ? '<small class="warn">Перебои — лучше выбрать другой</small>' : "";
+  const on = S.selected === k && selectedServer() === p;
+  return `<button class="srv ${on ? "on" : ""}" data-srv="${esc(k)}"><span class="flag">${flagHtml(flag)}</span><span class="name">${esc(name)}${sub}</span>${pingHtml(k)}</button>`;
+}
+
+// «Самый быстрый»: сервер выбирается сам по пингу при каждом подключении
+function autoRow() {
+  const best = bestServer(), on = !selectedServer();
+  const sub = best ? `Сейчас: ${esc(cleanName(best.name).name)}` : "По пингу при подключении";
+  return `<button class="srv ${on ? "on" : ""}" data-srv=""><span class="flag"><span class="auto-ico"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span></span>` +
+    `<span class="name">Самый быстрый<small>${sub}</small></span>${best ? pingHtml(keyOf(best)) : ""}</button>`;
 }
 
 function renderServers() {
@@ -299,12 +331,14 @@ function renderServers() {
   const notice = $("notice");
   if (!S.keys.length) {
     notice.hidden = false;
-    notice.innerHTML = 'Нет активной подписки. <button class="btn primary" data-open="/?screen=balance">Купить подписку</button>';
+    notice.innerHTML = '<b>Нет активной подписки</b>Оформи её в личном кабинете — серверы появятся здесь сами.<button class="btn primary" data-open="/?screen=balance">Купить подписку</button>';
   } else if (S.servers.length && !usable.length) {
+    // вместо серверов подписка прислала заглушки — почти всегда это занятые места для устройств на ключе
     notice.hidden = false;
-    notice.innerHTML = 'Подписка не активна или достигнут лимит устройств. <button class="btn primary" data-open="/?screen=subscriptions">Открыть кабинет</button>';
+    notice.innerHTML = '<b>Этот компьютер пока не подключён к ключу</b>Все места для устройств заняты. Освободи место или добавь ещё одно — серверы появятся сразу.' +
+      '<button class="btn primary" id="notice-devices">Устройства на ключе</button>';
   } else notice.hidden = true;
-  $("server-list").innerHTML = normal.length ? normal.map(row).join("") : '<div class="empty">Серверов пока нет</div>';
+  $("server-list").innerHTML = normal.length ? autoRow() + normal.map(row).join("") : '<div class="empty">Серверов пока нет</div>';
   $("lte-wrap").hidden = !lte.length;
   $("lte-list").innerHTML = lte.map(row).join("");
 }
@@ -312,10 +346,98 @@ function renderServers() {
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-srv]");
   if (!b) return;
-  S.selected = b.dataset.srv; store.set("server", S.selected);
+  S.selected = b.dataset.srv || null; store.set("server", S.selected);
   renderServers();
   if (S.state === "on") { await disconnect(true); connect(); }
 });
+
+// ── устройства ключа (как в кабинете, cabinet-3.js): место для этого компьютера ─────────
+const DEV_PHONE = '<svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M11 18h2"/></svg>';
+const DEV_PC = '<svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+const isPc = (d) => /windows|mac ?os|macos|linux|desktop|pc/i.test((d.device_os || "") + " " + (d.device_model || "")) && !/iphone|ipad|android/i.test(d.device_os || "");
+function seen(ms) {
+  const t = Number(ms);
+  if (!t) return "";
+  const min = Math.max(0, Date.now() - t) / 60000;
+  if (min < 10) return "в сети недавно";
+  if (min < 60) return "был " + Math.round(min) + " мин назад";
+  if (min < 1440) return "был " + Math.round(min / 60) + " ч назад";
+  return "был " + new Date(t).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+}
+
+async function openDevices() {
+  const k = currentKey();
+  if (!k) { toast("Нет активного ключа"); return; }
+  $("settings").hidden = true;
+  $("devices").hidden = false;
+  const body = $("devices-body");
+  body.innerHTML = '<p class="muted">Загружаем…</p>';
+  let data;
+  try { data = await api("/topup/devices?key_id=" + k.id); }
+  catch (e) { body.innerHTML = `<p class="muted">Не удалось загрузить устройства: ${esc(e.message)}</p>`; return; }
+  const list = (data.devices || []).slice().sort((a, b) => (Number(b.last_seen) || 0) - (Number(a.last_seen) || 0));
+  const limit = Number(data.limit) || 0, used = list.length, full = limit > 0 && used >= limit;
+  const meter = limit > 0 ? `<div class="dev-meter">${Array.from({ length: Math.min(limit, 6) }, (_, i) => `<span class="${i < used ? "on" : ""}"></span>`).join("")}</div>` : "";
+  body.innerHTML =
+    `<p class="muted small" style="margin:0">Ключ «${esc(k.display_name || "Ключ")}» · подключено ${used}${limit ? " из " + limit : ""}</p>${meter}` +
+    (full ? '<p class="small" style="margin:6px 0 0">Чтобы подключить этот компьютер, отключи устройство, которым больше не пользуешься, или добавь место.</p>' : "") +
+    `<div class="dev-list">${list.map((d) =>
+      `<div class="dev"><span class="dev-ico">${isPc(d) ? DEV_PC : DEV_PHONE}</span><span class="dev-info"><b>${esc(d.device_model || "Устройство")}</b>` +
+      `<span>${esc([d.device_os, d.os_version].filter(Boolean).join(" "))}${d.last_seen ? " · " + seen(d.last_seen) : ""}</span></span>` +
+      `<button class="dev-off" data-dev="${esc(d.id)}">Отключить</button></div>`).join("") || '<p class="muted small">Пока ни одно устройство не подключено</p>'}</div>` +
+    `<div class="dev-acts">${limit > 0 && limit < 3 ? '<button class="btn primary" id="dev-buy">Добавить место — 50 ₽</button>' : ""}` +
+    '<button class="btn" data-open="/?screen=subscriptions">Открыть кабинет</button></div>';
+}
+
+$("devices-body").onclick = async (e) => {
+  const off = e.target.closest("[data-dev]"), buy = e.target.closest("#dev-buy"), k = currentKey();
+  if (!k || (!off && !buy)) return;
+  const btn = off || buy;
+  btn.disabled = true;
+  try {
+    if (off) await api("/topup/device-remove", { method: "POST", body: { key_id: k.id, device_id: Number(off.dataset.dev) } });
+    else await api("/topup/buy-device-slot", { method: "POST", body: { key_id: k.id } });
+    toast(off ? "Устройство отключено — место свободно" : "Место добавлено");
+    await openDevices();
+    loadSubscription(true);
+  } catch (err) {
+    btn.disabled = false;
+    if (buy && /недостаточно/i.test(err.message)) { toast("На балансе не хватает 50 ₽ — пополни в кабинете"); openSite("/?screen=balance"); }
+    else toast(err.message);
+  }
+};
+$("devices-open").onclick = openDevices;
+$("devices-close").onclick = () => ($("devices").hidden = true);
+$("devices").onclick = (e) => { if (e.target.id === "devices") $("devices").hidden = true; };
+$("notice").onclick = (e) => { if (e.target.closest("#notice-devices")) openDevices(); };
+
+// ── подключено: время, IP снаружи и пинг ─────────────────────────────────────
+let since = 0, clock = 0;
+function renderStats() {
+  const on = S.state === "on";
+  $("stats").hidden = !on;
+  clearInterval(clock);
+  if (!on) { since = 0; return; }
+  if (!since) { since = Date.now(); $("st-ip").textContent = "…"; lookupIp(); }
+  const srv = current(), ping = srv && S.pings[keyOf(srv)];
+  $("st-ping").textContent = ping ? ping + " мс" : "—";
+  const tick = () => {
+    const s = Math.floor((Date.now() - since) / 1000), h = Math.floor(s / 3600), two = (n) => String(n).padStart(2, "0");
+    $("st-time").textContent = (h ? h + ":" : "") + two(Math.floor(s / 60) % 60) + ":" + two(s % 60);
+  };
+  tick(); clock = setInterval(tick, 1000);
+}
+// адрес, который видят сайты: служебная страница Cloudflare через само подключение
+async function lookupIp() {
+  try {
+    const r = await invoke("http", { req: { url: "https://cloudflare.com/cdn-cgi/trace", proxy: S.ports && S.ports.http, timeout_ms: 9000 } });
+    const ip = /^ip=(.+)$/m.exec(r.body), loc = /^loc=([A-Z]{2})$/m.exec(r.body);
+    // в проверочном запуске на GitHub снимки экрана публичные — адрес сервера не показываем
+    if (!ip) throw new Error("no ip");
+    const shown = S.demo ? ip[1].replace(/[0-9a-f]/gi, "•") : ip[1];
+    if (S.state === "on") { $("st-ip").innerHTML = (loc ? flagSvg(loc[1]) + " " : "") + esc(shown); $("st-ip").title = shown; }
+  } catch (e) { if (S.state === "on") $("st-ip").textContent = "—"; }
+}
 
 function renderMode() {
   for (const b of $("mode").querySelectorAll("button")) {
@@ -324,8 +446,8 @@ function renderMode() {
     b.disabled = S.state === "busy";
   }
   $("foot").textContent = S.mode === "tun"
-    ? "Весь трафик компьютера идёт через Mognu: игры, Discord и любые программы."
-    : "Браузеры, Telegram и большинство программ идут через Mognu (системный прокси Windows).";
+    ? "Весь трафик компьютера идёт через Mognu VPN: игры, Discord и любые программы."
+    : "Браузеры, Telegram и большинство программ идут через Mognu VPN (системный прокси Windows).";
 }
 
 // Перезапуск с правами администратора: Windows спросит разрешение; новая копия подключится сама
@@ -353,13 +475,15 @@ function renderPower() {
   const p = $("power"), title = $("state-title"), sub = $("state-sub");
   p.dataset.state = S.state;
   renderMode();
-  $("power-mascot").src = "assets/mascot-" + (S.state === "on" ? "on" : S.state === "busy" ? "busy" : "off") + ".svg";
+  $("power-mascot").dataset.mood = S.state;
+  document.body.classList.toggle("connected", S.state === "on");
   p.setAttribute("aria-label", S.state === "on" ? "Отключить" : "Подключить");
-  const srv = selectedServer() || bestServer(), label = srv ? flagHtml(cleanName(srv.name).flag) + " " + esc(cleanName(srv.name).name) : "";
+  const srv = current(), label = srv ? flagHtml(cleanName(srv.name).flag) + " " + esc(cleanName(srv.name).name) : "";
   title.classList.toggle("on", S.state === "on");
   if (S.state === "on") { title.textContent = "Подключено"; sub.innerHTML = label; }
   else if (S.state === "busy") { title.textContent = "Подключаем…"; sub.innerHTML = label; }
   else { title.textContent = "Не подключено"; sub.textContent = "Нажми на Могну, чтобы подключиться"; }
+  renderStats();
   // значок в трее повторяет состояние: салатовый и сервер в подсказке — подключено
   const plain = srv ? cleanName(srv.name).name : "";
   invoke("tray_state", { connected: S.state === "on", label: plain }).catch(() => {});
@@ -382,7 +506,7 @@ async function connect() {
   // режим «весь трафик» без прав администратора — сначала перезапуск через окно Windows, подключится новая копия
   if (S.mode === "tun" && !S.launch.elevated) { elevate(); return; }
   const tun = S.mode === "tun";
-  S.state = "busy"; renderPower();
+  S.active = srv; S.state = "busy"; renderPower();
   try {
     const ports = await invoke("free_ports");
     await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, { tun })) });
@@ -390,10 +514,9 @@ async function connect() {
     // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
     if (!tun) await invoke("proxy_set", { port: ports.http });
     S.ports = ports; S.state = "on";
-    store.set("server", keyOf(srv)); S.selected = keyOf(srv);
   } catch (e) {
     await invoke("core_stop").catch(() => {});
-    S.state = "off"; S.ports = null;
+    S.state = "off"; S.ports = null; S.active = null;
     invoke("core_note", { text: "не подключилось: " + String(e.message || e).slice(0, 300) }).catch(() => {});
     toast(String(e.message || e).split("\n")[0].slice(0, 140));
   }
@@ -402,7 +525,7 @@ async function connect() {
 
 async function disconnect(quiet) {
   await invoke("core_stop").catch(() => {});
-  S.state = "off"; S.ports = null;
+  S.state = "off"; S.ports = null; S.active = null;
   if (!quiet) renderPower();
 }
 
@@ -427,7 +550,7 @@ $("logout").onclick = async () => {
 };
 $("copy-log").onclick = async () => {
   const log = await invoke("core_log").catch(() => "");
-  const text = `Mognu Desktop ${S.version}\n${navigator.userAgent}\n\n${log || "(журнал ядра пуст)"}`;
+  const text = `Mognu VPN для Windows ${S.version}\n${navigator.userAgent}\n\n${log || "(журнал ядра пуст)"}`;
   try { await navigator.clipboard.writeText(text); toast("Журнал скопирован — вставь его в чат поддержки"); }
   catch (e) { toast("Не удалось скопировать"); }
 };
@@ -441,7 +564,7 @@ async function checkUpdate(manual) {
     const u = await invoke("update_check", { proxy: viaCore() });
     if (u) {
       pendingUpdate = u;
-      $("update-title").textContent = "Mognu " + u.version + " готов";
+      $("update-title").textContent = "Mognu VPN " + u.version + " готов";
       $("update").hidden = false;
     } else if (manual) toast("У тебя последняя версия — " + S.version);
   } catch (e) {
@@ -463,6 +586,59 @@ $("update-go").onclick = async () => {
 };
 $("update-check").onclick = () => { $("settings").hidden = true; checkUpdate(true); };
 
+// ── окно: своя шапка вместо системной (tauri.conf.json: decorations false) ────────
+const win = () => window.__TAURI__.window.getCurrentWindow();
+$("win-min").onclick = () => win().minimize();
+$("win-max").onclick = () => win().toggleMaximize();
+// значок кнопки: один квадрат — развернуть, два — вернуть прежний размер
+const MAXI = '<rect x="1.5" y="1.5" width="7" height="7" rx="1"/>';
+const RESTORE = '<rect x="1.5" y="3" width="5.5" height="5.5" rx="1"/><path d="M3.5 3V2.2c0-.4.3-.7.7-.7h4.1c.4 0 .7.3.7.7v4.1c0 .4-.3.7-.7.7H7"/>';
+async function syncMax() {
+  const m = await win().isMaximized().catch(() => false);
+  $("win-max").querySelector("svg").innerHTML = m ? RESTORE : MAXI;
+  $("win-max").setAttribute("aria-label", m ? "Свернуть в окно" : "Развернуть");
+}
+addEventListener("resize", syncMax);
+syncMax();
+// крестик — как у системной шапки: main.rs прячет окно в трей, подключение остаётся
+$("win-close").onclick = () => win().close();
+
+// ── небо: звёзды (и снег в новогодний сезон) на холсте под интерфейсом ───────
+function sky(snow) {
+  const cv = $("stars"), cx = cv.getContext("2d");
+  if (!cx) return;
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let w = 0, h = 0, stars = [], flakes = [];
+  const size = () => {
+    const r = devicePixelRatio || 1;
+    w = cv.clientWidth; h = cv.clientHeight;
+    cv.width = w * r; cv.height = h * r; cx.setTransform(r, 0, 0, r, 0, 0);
+    stars = Array.from({ length: Math.round((w * h) / 9000) }, () => ({ x: Math.random() * w, y: Math.random() * h * 0.8, r: Math.random() * 1.1 + 0.3, a: Math.random() * 0.6 + 0.2, s: Math.random() * 2 + 1 }));
+    flakes = snow ? Array.from({ length: Math.round(w / 22) }, () => ({ x: Math.random() * w, y: Math.random() * h, r: Math.random() * 1.8 + 0.8, v: Math.random() * 0.4 + 0.25, d: Math.random() * 6 })) : [];
+  };
+  const draw = (t) => {
+    cx.clearRect(0, 0, w, h);
+    for (const s of stars) {
+      cx.globalAlpha = still ? s.a : s.a * (0.65 + 0.35 * Math.sin(t / 1000 / s.s + s.x));
+      cx.fillStyle = "#fff"; cx.beginPath(); cx.arc(s.x, s.y, s.r, 0, 6.283); cx.fill();
+    }
+    cx.globalAlpha = 0.7;
+    for (const f of flakes) {
+      f.y += f.v; f.x += Math.sin(t / 1600 + f.d) * 0.25;
+      if (f.y > h + 4) { f.y = -4; f.x = Math.random() * w; }
+      cx.beginPath(); cx.arc(f.x, f.y, f.r, 0, 6.283); cx.fill();
+    }
+    cx.globalAlpha = 1;
+  };
+  size(); draw(0);
+  addEventListener("resize", () => { size(); draw(performance.now()); });
+  if (still) return;
+  // ~30 кадров в секунду и только пока окно видно: в трее небо не тратит процессор
+  let last = 0;
+  const loop = (t) => { if (!document.hidden && t - last > 33) { last = t; draw(t); } requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+}
+
 // ── запуск ───────────────────────────────────────────────────────────────────
 async function startHome() {
   show("home"); renderPower();
@@ -475,8 +651,11 @@ async function startHome() {
 }
 
 (async function boot() {
+  const ny = newYear();
+  mountMascots(ny);
+  sky(ny);
   try { S.version = await window.__TAURI__.app.getVersion(); } catch (e) { S.version = "0.1.0"; }
-  $("version").textContent = "Mognu для Windows " + S.version;
+  $("version").textContent = "Mognu VPN для Windows " + S.version;
   refreshHosts();
   setTimeout(checkUpdate, 8000);
   setInterval(checkUpdate, 6 * 3600e3);

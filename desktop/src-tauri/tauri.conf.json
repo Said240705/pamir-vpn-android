@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Mognu",
-  "version": "0.2.0",
+  "productName": "Mognu VPN",
+  "mainBinaryName": "mognu",
+  "version": "0.3.0",
   "identifier": "app.mognu.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -11,13 +12,16 @@
     "windows": [
       {
         "label": "main",
-        "title": "Mognu",
-        "width": 420,
-        "height": 720,
-        "minWidth": 380,
-        "minHeight": 600,
+        "title": "Mognu VPN",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 400,
+        "minHeight": 620,
         "center": true,
-        "backgroundColor": "#1E1640"
+        "maximized": true,
+        "decorations": false,
+        "shadow": true,
+        "backgroundColor": "#120E33"
       }
     ],
     "security": {
@@ -28,7 +32,7 @@
     "active": true,
     "targets": ["nsis"],
     "publisher": "Mognu",
-    "shortDescription": "Mognu — быстрое и приватное подключение",
+    "shortDescription": "Mognu VPN — быстрое и приватное подключение",
     "category": "Utility",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.ico"],
     "externalBin": ["binaries/xray"],
@@ -37,6 +41,10 @@
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
         "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerHooks": "installer/hooks.nsh",
         "languages": ["Russian"],
         "displayLanguageSelector": false
       }

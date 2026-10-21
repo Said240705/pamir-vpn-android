@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  actions: read   # скачать установщик 0.2.0 из файлов её сборки (проверка переезда)
 
 env:
   # тот же коммит xray-core, что в AndroidLibXrayLite/go.mod (v1.260327.1-0.20260908222543-52a412d9e2f5)
@@ -107,9 +108,13 @@ jobs:
             $p = Start-Process $exe -ArgumentList '/S' -PassThru
             if (!$p.WaitForExit(300000)) { throw "установщик $exe не закончил за 5 минут" }
           }
-          gh release download desktop-v0.2.0 --pattern 'Mognu-Setup-0.2.0.exe' --dir old
-          Write-Host 'ставлю 0.2.0'
-          Install old/Mognu-Setup-0.2.0.exe
+          # установщик 0.2.0 — из файлов её сборки (релиз desktop-v0.2.0 удалила очистка релизов Android 1.7.8);
+          # файлы сборки GitHub хранит 90 дней, после этого переезд с 0.2.0 проверить уже не из чего
+          gh run download 39549483619 -n mognu-windows -D old
+          $old = Get-ChildItem old -Filter *.exe -Recurse | Select-Object -First 1
+          if (!$old) { throw 'установщик 0.2.0 недоступен — переезд с 0.2.0 проверить не из чего' }
+          Write-Host "ставлю 0.2.0: $($old.Name)"
+          Install $old.FullName
           if (!(Test-Path (Join-Path $env:LOCALAPPDATA 'Mognu\mognu.exe'))) { throw 'старая версия 0.2.0 не установилась' }
           Write-Host 'ставлю новую версию поверх'
           Install $setup.FullName

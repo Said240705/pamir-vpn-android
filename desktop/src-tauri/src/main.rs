@@ -32,8 +32,15 @@ struct Tray {
 const TRAY_ON: &[u8] = include_bytes!("../icons/tray-on.png");
 const TRAY_OFF: &[u8] = include_bytes!("../icons/tray-off.png");
 
+/// Окно создаётся скрытым и не развёрнутым (tauri.conf.json): на Windows развёрнутое окно сразу видно, а при
+/// запуске вместе с Windows оно должно остаться в трее. Разворачиваем его на весь экран при первом показе.
+static SHOWN_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        if !SHOWN_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let _ = w.maximize();
+        }
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
@@ -293,13 +300,7 @@ fn main() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .manage(AppState { core: Mutex::new(core::Core::default()) })
         .setup(|app| {
             build_tray(app)?;

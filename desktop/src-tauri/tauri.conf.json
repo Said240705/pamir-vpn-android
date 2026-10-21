@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mognu",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "app.mognu.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -13,9 +13,9 @@
         "label": "main",
         "title": "Mognu",
         "width": 420,
-        "height": 780,
+        "height": 720,
         "minWidth": 380,
-        "minHeight": 620,
+        "minHeight": 600,
         "center": true,
         "backgroundColor": "#1E1640"
       }
@@ -32,6 +32,7 @@
     "category": "Utility",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.ico"],
     "externalBin": ["binaries/xray"],
+    "resources": { "binaries/wintun.dll": "wintun.dll" },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {

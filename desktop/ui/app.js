@@ -33,6 +33,9 @@ const S = {
   selected: store.get("server"),
   state: "off", // off | busy | on
   ports: null,
+  // proxy — системный прокси (браузеры и большинство программ); tun — весь трафик через адаптер Mognu (нужны права)
+  mode: store.get("mode") === "tun" ? "tun" : "proxy",
+  launch: { elevated: false, handoff: false },
 };
 
 // ── API кабинета: зеркала по очереди, как PamirHosts в Android ───────────────
@@ -185,6 +188,13 @@ function daysLeft(k) {
 function currentKey() { return S.keys.find((k) => k.id === S.keyId) || S.keys[0] || null; }
 
 async function loadKeys() {
+  // проверочный запуск на GitHub (MOGNU_DEMO_SUB): без аккаунта, сразу с тестовой подпиской
+  if (S.demo) {
+    S.keys = [{ id: 1, display_name: "Тестовый ключ", is_active: true, expires_at: new Date(Date.now() + 30 * 864e5).toISOString(), subscription_url: S.demo.sub }];
+    S.keyId = 1;
+    renderKeys();
+    return;
+  }
   const r = await api("/auth/keys");
   const list = Array.isArray(r) ? r : r.keys || [];
   S.keys = list.filter((k) => k.is_active && String(k.subscription_url || "").startsWith("http"));
@@ -213,7 +223,7 @@ async function loadSubscription(force) {
     }
   }
   renderServers();
-  pingAll();
+  await pingAll();
   loadStatus();
 }
 
@@ -307,9 +317,42 @@ document.addEventListener("click", async (e) => {
   if (S.state === "on") { await disconnect(true); connect(); }
 });
 
+function renderMode() {
+  for (const b of $("mode").querySelectorAll("button")) {
+    b.classList.toggle("on", b.dataset.mode === S.mode);
+    b.setAttribute("aria-checked", b.dataset.mode === S.mode);
+    b.disabled = S.state === "busy";
+  }
+  $("foot").textContent = S.mode === "tun"
+    ? "Весь трафик компьютера идёт через Mognu: игры, Discord и любые программы."
+    : "Браузеры, Telegram и большинство программ идут через Mognu (системный прокси Windows).";
+}
+
+// Перезапуск с правами администратора: Windows спросит разрешение; новая копия подключится сама
+async function elevate() {
+  const ok = await invoke("relaunch_elevated").catch((e) => { toast(String(e)); return false; });
+  if (!ok) { S.mode = "proxy"; store.set("mode", "proxy"); renderMode(); toast("Без разрешения Windows режим «Весь трафик» не включить"); }
+}
+
+$("mode").onclick = async (e) => {
+  const b = e.target.closest("[data-mode]");
+  if (!b || b.disabled || b.dataset.mode === S.mode) return;
+  if (b.dataset.mode === "tun" && !S.launch.elevated) { $("tun-ask").hidden = false; return; }
+  S.mode = b.dataset.mode; store.set("mode", S.mode); renderMode();
+  if (S.state === "on") { await disconnect(true); connect(); }
+};
+$("tun-no").onclick = () => ($("tun-ask").hidden = true);
+$("tun-yes").onclick = async () => {
+  $("tun-ask").hidden = true;
+  S.mode = "tun"; store.set("mode", "tun"); renderMode();
+  if (S.state !== "off") await disconnect(true);
+  elevate();
+};
+
 function renderPower() {
   const p = $("power"), title = $("state-title"), sub = $("state-sub");
   p.dataset.state = S.state;
+  renderMode();
   $("power-mascot").src = "assets/mascot-" + (S.state === "on" ? "on" : S.state === "busy" ? "busy" : "off") + ".svg";
   p.setAttribute("aria-label", S.state === "on" ? "Отключить" : "Подключить");
   const srv = selectedServer() || bestServer(), label = srv ? flagHtml(cleanName(srv.name).flag) + " " + esc(cleanName(srv.name).name) : "";
@@ -317,6 +360,9 @@ function renderPower() {
   if (S.state === "on") { title.textContent = "Подключено"; sub.innerHTML = label; }
   else if (S.state === "busy") { title.textContent = "Подключаем…"; sub.innerHTML = label; }
   else { title.textContent = "Не подключено"; sub.textContent = "Нажми на Могну, чтобы подключиться"; }
+  // значок в трее повторяет состояние: салатовый и сервер в подсказке — подключено
+  const plain = srv ? cleanName(srv.name).name : "";
+  invoke("tray_state", { connected: S.state === "on", label: plain }).catch(() => {});
 }
 
 // ── подключение ──────────────────────────────────────────────────────────────
@@ -333,17 +379,22 @@ async function verify(port) {
 async function connect() {
   const srv = selectedServer() || bestServer();
   if (!srv) { toast(S.keys.length ? "Нет доступных серверов" : "Нет активной подписки"); return; }
+  // режим «весь трафик» без прав администратора — сначала перезапуск через окно Windows, подключится новая копия
+  if (S.mode === "tun" && !S.launch.elevated) { elevate(); return; }
+  const tun = S.mode === "tun";
   S.state = "busy"; renderPower();
   try {
     const ports = await invoke("free_ports");
-    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports)) });
+    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, { tun })) });
     if (!(await verify(ports.http))) throw new Error("Сервер не отвечает — попробуй другой");
-    await invoke("proxy_set", { port: ports.http });
+    // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
+    if (!tun) await invoke("proxy_set", { port: ports.http });
     S.ports = ports; S.state = "on";
     store.set("server", keyOf(srv)); S.selected = keyOf(srv);
   } catch (e) {
     await invoke("core_stop").catch(() => {});
     S.state = "off"; S.ports = null;
+    invoke("core_note", { text: "не подключилось: " + String(e.message || e).slice(0, 300) }).catch(() => {});
     toast(String(e.message || e).split("\n")[0].slice(0, 140));
   }
   renderPower(); renderServers();
@@ -356,6 +407,8 @@ async function disconnect(quiet) {
 }
 
 $("power").onclick = () => { if (S.state === "busy") return; if (S.state === "on") disconnect(); else connect(); };
+// «Подключить / Отключить» из меню значка в трее; до входа в аккаунт пункт ничего не делает
+window.__TAURI__.event.listen("tray-toggle", () => { if (!$("home").hidden) $("power").click(); });
 $("refresh").onclick = () => loadSubscription(true);
 
 // ── настройки ────────────────────────────────────────────────────────────────
@@ -379,6 +432,37 @@ $("copy-log").onclick = async () => {
   catch (e) { toast("Не удалось скопировать"); }
 };
 
+// ── обновления (update.rs): новые версии — пре-релизы desktop-v* на GitHub ───────
+let pendingUpdate = null;
+const viaCore = () => (S.state === "on" && S.ports ? S.ports.http : null);
+
+async function checkUpdate(manual) {
+  try {
+    const u = await invoke("update_check", { proxy: viaCore() });
+    if (u) {
+      pendingUpdate = u;
+      $("update-title").textContent = "Mognu " + u.version + " готов";
+      $("update").hidden = false;
+    } else if (manual) toast("У тебя последняя версия — " + S.version);
+  } catch (e) {
+    if (manual) toast("Не удалось проверить обновления");
+  }
+}
+
+$("update-go").onclick = async () => {
+  const b = $("update-go");
+  if (!pendingUpdate || b.disabled) return;
+  b.disabled = true; b.textContent = "Скачиваем…";
+  try {
+    // после скачивания и проверки программа сама закроется, обновится и откроется снова
+    await invoke("update_install", { u: pendingUpdate, proxy: viaCore() });
+  } catch (e) {
+    b.disabled = false; b.textContent = "Обновить";
+    toast("Не удалось обновить: " + String(e).slice(0, 100));
+  }
+};
+$("update-check").onclick = () => { $("settings").hidden = true; checkUpdate(true); };
+
 // ── запуск ───────────────────────────────────────────────────────────────────
 async function startHome() {
   show("home"); renderPower();
@@ -394,5 +478,18 @@ async function startHome() {
   try { S.version = await window.__TAURI__.app.getVersion(); } catch (e) { S.version = "0.1.0"; }
   $("version").textContent = "Mognu для Windows " + S.version;
   refreshHosts();
-  if (store.get("token")) startHome(); else show("login");
+  setTimeout(checkUpdate, 8000);
+  setInterval(checkUpdate, 6 * 3600e3);
+  S.launch = await invoke("launch_info").catch(() => S.launch);
+  S.demo = await invoke("demo").catch(() => null);
+  if (S.demo) {
+    if (S.demo.tun) S.mode = "tun";
+    await startHome();
+    if (S.demo.connect) connect();
+    return;
+  }
+  if (!store.get("token")) { show("login"); return; }
+  await startHome();
+  // перезапуск с правами ради «весь трафик» — подключаемся сразу, человек уже нажал «Подключить»
+  if (S.launch.handoff) connect();
 })();

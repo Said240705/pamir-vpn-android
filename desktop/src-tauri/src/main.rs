@@ -310,6 +310,16 @@ fn main() {
             }
             Ok(())
         })
+        // запуск вместе с Windows: окно создаётся скрытым, но WebView2 может показать его, когда загрузит страницу —
+        // прячем снова, пока человек сам его не открыл (трей, ярлык)
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && std::env::args().any(|a| a == autostart::ARG)
+                && !SHOWN_ONCE.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                let _ = webview.window().hide();
+            }
+        })
         // крестик окна не выходит из программы и не отключает: окно прячется, Mognu остаётся в трее
         .on_window_event(|w, e| {
             if let WindowEvent::CloseRequested { api, .. } = e {

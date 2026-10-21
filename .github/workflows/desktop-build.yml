@@ -213,7 +213,23 @@ jobs:
           # запуск вместе с Windows (--autostart): окна не видно, программа в трее и подключается сама
           $app = Start-Process $exe -ArgumentList '--autostart' -PassThru; Start-Sleep 30
           $app.Refresh()
-          $hidden = $app.MainWindowHandle -eq [IntPtr]::Zero
+          # какие окна программы видны (класс и заголовок) — чтобы понять, что именно показалось
+          Add-Type -Namespace W -Name U -MemberDefinition @'
+          public delegate bool EnumProc(System.IntPtr h, System.IntPtr p);
+          [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, System.IntPtr p);
+          [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+          [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
+          [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern int GetClassName(System.IntPtr h, System.Text.StringBuilder s, int n);
+          [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern int GetWindowText(System.IntPtr h, System.Text.StringBuilder s, int n);
+          '@
+          $vis = [System.Collections.Generic.List[string]]::new()
+          [W.U]::EnumWindows({ param($h, $x) $wp = 0; [void][W.U]::GetWindowThreadProcessId($h, [ref]$wp)
+            if ($wp -eq $app.Id -and [W.U]::IsWindowVisible($h)) { $c = [Text.StringBuilder]::new(256); $t = [Text.StringBuilder]::new(256)
+              [void][W.U]::GetClassName($h, $c, 256); [void][W.U]::GetWindowText($h, $t, 256); $vis.Add("$c «$t»") }
+            return $true }, [IntPtr]::Zero) | Out-Null
+          Write-Host "видимые окна при автозапуске: $($vis.Count) $($vis -join '; ')"
+          Shot shots/6-autostart.png
+          $hidden = $vis.Count -eq 0
           $pa = Proxy
           $auto = $hidden -and $pa.ProxyEnable -eq 1 -and $pa.ProxyServer -like '127.0.0.1:*'
           Write-Host "автозапуск: окно скрыто=$hidden, подключился=$($pa.ProxyEnable -eq 1)"

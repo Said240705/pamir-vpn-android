@@ -108,3 +108,14 @@ test("российские сайты напрямую: правило есть 
     assert.match(execFileSync(process.env.XRAY_BIN, ["run", "-test", "-c", f], { encoding: "utf8" }), /Configuration OK/);
   }
 });
+
+test("счётчики трафика: metrics на своём порту, xray принимает", () => {
+  const cfg = buildConfig(parseLink(REALITY), { ...PORTS, metrics: 10810 });
+  assert.equal(cfg.metrics.listen, "127.0.0.1:10810");
+  assert.equal(cfg.policy.system.statsOutboundDownlink, true);
+  assert.equal(buildConfig(parseLink(REALITY), PORTS).metrics, undefined);
+  if (!process.env.XRAY_BIN) return;
+  const f = join(mkdtempSync(join(tmpdir(), "mognu-")), "metrics.json");
+  writeFileSync(f, JSON.stringify(cfg));
+  assert.match(execFileSync(process.env.XRAY_BIN, ["run", "-test", "-c", f], { encoding: "utf8" }), /Configuration OK/);
+});

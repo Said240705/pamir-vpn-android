@@ -278,6 +278,12 @@ export function buildConfig(profile, ports, opts = {}) {
     },
   };
   if (opts.ruDirect) cfg.routing.rules.push({ type: "field", domain: RU_DOMAINS, outboundTag: "direct" });
+  // счётчики трафика через сервер: http://127.0.0.1:<metrics>/debug/vars → stats.outbound.proxy.{uplink,downlink}
+  if (ports.metrics) {
+    cfg.stats = {};
+    cfg.metrics = { tag: "metrics", listen: "127.0.0.1:" + ports.metrics };
+    cfg.policy = { system: { statsOutboundUplink: true, statsOutboundDownlink: true } };
+  }
   if (opts.tun) {
     cfg.inbounds.unshift(TUN);
     // DNS из адаптера отвечает сам Xray и только адресами IPv4: у серверов нет IPv6, а внутри TUN соединение

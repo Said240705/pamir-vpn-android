@@ -97,14 +97,17 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 struct Ports {
     socks: u16,
     http: u16,
+    /// счётчики трафика ядра (metrics, /debug/vars) — для скорости на главном экране
+    metrics: u16,
 }
 
-/// Два свободных порта на 127.0.0.1 для входов ядра.
+/// Три свободных порта на 127.0.0.1: входы ядра и его счётчики. Слушатели держим до конца, чтобы порты не совпали.
 #[tauri::command]
 fn free_ports() -> Result<Ports, String> {
-    let a = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let b = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    Ok(Ports { socks: a.local_addr().map_err(|e| e.to_string())?.port(), http: b.local_addr().map_err(|e| e.to_string())?.port() })
+    let bind = || TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string());
+    let (a, b, c) = (bind()?, bind()?, bind()?);
+    let port = |l: &TcpListener| l.local_addr().map(|x| x.port()).map_err(|e| e.to_string());
+    Ok(Ports { socks: port(&a)?, http: port(&b)?, metrics: port(&c)? })
 }
 
 #[tauri::command]
@@ -289,6 +292,7 @@ fn main() {
     }
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();

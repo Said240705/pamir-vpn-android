@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Окно Mognu: свои команды (main.rs), базовые API Tauri и своя шапка окна (свернуть, развернуть, закрыть, перетаскивание)",
+  "description": "Окно Mognu: свои команды (main.rs), базовые API Tauri и своя шапка окна (свернуть, развернуть, закрыть, перетаскивание) и уведомления Windows",
   "windows": [
     "main"
   ],
@@ -12,6 +12,7 @@
     "core:window:allow-internal-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
-    "core:window:allow-is-maximized"
+    "core:window:allow-is-maximized",
+    "notification:default"
   ]
 }

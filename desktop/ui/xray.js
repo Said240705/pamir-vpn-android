@@ -243,6 +243,18 @@ const TUN = {
   sniffing: { enabled: true, destOverride: ["http", "tls", "quic"], routeOnly: true },
 };
 
+// «Российские сайты — напрямую» (opts.ruDirect): банки, Госуслуги, маркетплейсы часто не пускают зарубежные адреса,
+// поэтому их домены идут мимо сервера. Зоны .ru/.su/.рф целиком и крупные российские сервисы на других зонах.
+// Домен берётся из запроса (HTTP-вход) или из sniffing (socks и TUN), поэтому правило работает в обоих режимах.
+export const RU_DOMAINS = [
+  "domain:ru", "domain:su", "domain:xn--p1ai", "domain:xn--d1acj3b", "domain:xn--80asehdb", "domain:xn--80aswg",
+  "domain:yandex.net", "domain:yandex.com", "domain:yastatic.net", "domain:yandexcloud.net", "domain:ya.cc",
+  "domain:vk.com", "domain:vk.me", "domain:vkuser.net", "domain:userapi.com", "domain:vk-cdn.net", "domain:vkuseraudio.net",
+  "domain:mycdn.me", "domain:okcdn.ru", "domain:mail.ru", "domain:sberbank.com", "domain:sber.ru",
+  "domain:wildberries.ru", "domain:wb.ru", "domain:ozon.ru", "domain:ozone.ru", "domain:avito.st",
+  "domain:kaspersky.com", "domain:1c.com", "domain:2gis.com", "domain:tinkoff.ru", "domain:tbank.ru",
+];
+
 export function buildConfig(profile, ports, opts = {}) {
   const cfg = {
     log: { loglevel: "warning" },
@@ -265,6 +277,13 @@ export function buildConfig(profile, ports, opts = {}) {
       ],
     },
   };
+  if (opts.ruDirect) cfg.routing.rules.push({ type: "field", domain: RU_DOMAINS, outboundTag: "direct" });
+  // счётчики трафика через сервер: http://127.0.0.1:<metrics>/debug/vars → stats.outbound.proxy.{uplink,downlink}
+  if (ports.metrics) {
+    cfg.stats = {};
+    cfg.metrics = { tag: "metrics", listen: "127.0.0.1:" + ports.metrics };
+    cfg.policy = { system: { statsOutboundUplink: true, statsOutboundDownlink: true } };
+  }
   if (opts.tun) {
     cfg.inbounds.unshift(TUN);
     // DNS из адаптера отвечает сам Xray и только адресами IPv4: у серверов нет IPv6, а внутри TUN соединение

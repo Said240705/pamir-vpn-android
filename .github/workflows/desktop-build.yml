@@ -188,6 +188,12 @@ jobs:
             Write-Host "сайт через системный прокси: $code"
             $ok = $code -eq '204'
           }
+          # ядро упало (снимаем xray.exe): Mognu сам перезапускает его на тех же портах, прокси всё это время на месте
+          Get-Process xray -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 30
+          $code2 = curl.exe -s -o NUL -w '%{http_code}' --max-time 15 -x "http://$($p.ProxyServer)" https://www.google.com/generate_204
+          $healed = $code2 -eq '204' -and @(Get-Process xray -ErrorAction SilentlyContinue).Count -eq 1
+          Write-Host "после падения ядра: переподключился=$healed (сайт $code2)"
           # крестик окна: программа не выходит и не отключается — прячется в трей
           $null = $app.CloseMainWindow(); Start-Sleep 3
           $p2 = Proxy
@@ -203,6 +209,33 @@ jobs:
           Stop-Process -Id $app.Id -Force; Start-Sleep 2
           $orphan = @(Get-Process xray -ErrorAction SilentlyContinue).Count
           Write-Host "ядер xray после аварийного закрытия: $orphan"
+
+          # запуск вместе с Windows (--autostart): окна не видно, программа в трее и подключается сама
+          $app = Start-Process $exe -ArgumentList '--autostart' -PassThru; Start-Sleep 30
+          $app.Refresh()
+          # какие окна программы видны (класс и заголовок) — чтобы понять, что именно показалось
+          Add-Type -Namespace W -Name U -MemberDefinition @'
+          public delegate bool EnumProc(System.IntPtr h, System.IntPtr p);
+          [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, System.IntPtr p);
+          [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+          [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
+          [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern int GetClassName(System.IntPtr h, System.Text.StringBuilder s, int n);
+          [System.Runtime.InteropServices.DllImport("user32.dll", CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern int GetWindowText(System.IntPtr h, System.Text.StringBuilder s, int n);
+          '@
+          $vis = [System.Collections.Generic.List[string]]::new()
+          [W.U]::EnumWindows({ param($h, $x) $wp = 0; [void][W.U]::GetWindowThreadProcessId($h, [ref]$wp)
+            if ($wp -eq $app.Id -and [W.U]::IsWindowVisible($h)) { $c = [Text.StringBuilder]::new(256); $t = [Text.StringBuilder]::new(256)
+              [void][W.U]::GetClassName($h, $c, 256); [void][W.U]::GetWindowText($h, $t, 256); $vis.Add("$c «$t»") }
+            return $true }, [IntPtr]::Zero) | Out-Null
+          Write-Host "видимые окна при автозапуске: $($vis.Count) $($vis -join '; ')"
+          Shot shots/6-autostart.png
+          # служебные окна (защита от второй копии «…-sic», события «Tao Thread Event Target») человеку не видны —
+          # считаем только главное окно программы
+          $hidden = @($vis | Where-Object { $_ -like '*«Mognu VPN»' }).Count -eq 0
+          $pa = Proxy
+          $auto = $hidden -and $pa.ProxyEnable -eq 1 -and $pa.ProxyServer -like '127.0.0.1:*'
+          Write-Host "автозапуск: окно скрыто=$hidden, подключился=$($pa.ProxyEnable -eq 1)"
+          Stop-Process -Id $app.Id -Force; Start-Sleep 2
 
           # 3. обычный запуск без аккаунта — экран входа; прокси от прошлого раза должен выключиться сам
           Remove-Item Env:MOGNU_DEMO_SUB, Env:MOGNU_DEMO_CONNECT
@@ -245,7 +278,9 @@ jobs:
           if (!$tunOk) { throw 'режим «весь трафик» не пустил трафик через Mognu' }
           if (!$tunClean) { throw 'после закрытия в режиме «весь трафик» интернет не вернулся как был' }
           if (!$tray) { throw 'крестик окна закрыл программу или отключил — должна была спрятаться в трей' }
-          'Программа на Windows: подключение через системный прокси ✅, крестик прячет в трей ✅, весь трафик через адаптер Mognu ✅, после закрытия интернет как был ✅, прокси убирается после аварийного закрытия ✅' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          if (!$healed) { throw 'после падения ядра Mognu VPN не переподключился сам' }
+          if (!$auto) { throw 'запуск с --autostart показал окно или не подключился' }
+          'Программа на Windows: подключение через системный прокси ✅, крестик прячет в трей ✅, весь трафик через адаптер Mognu ✅, после закрытия интернет как был ✅, прокси убирается после аварийного закрытия ✅, переподключение после падения ядра ✅, автозапуск в трей ✅' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v4
         with:

@@ -34,8 +34,17 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.9 4.3 18.7 19.4c-.2 1-.9 1.3-1.7.8l-4.8-3.5-2.3 2.2c-.3.3-.5.5-1 .5l.3-4.9 8.9-8c.4-.3-.1-.5-.6-.2L6.5 13.3l-4.7-1.5c-1-.3-1-1 .2-1.5L20.5 3c.9-.3 1.6.2 1.4 1.3z"/></svg>
         Войти через Telegram
       </button>
+      <button class="btn" id="qr-login">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/></svg>
+        Войти с телефона по QR
+      </button>
       <button class="btn" id="email-open">Войти по почте</button>
       <p class="small muted center">Нет аккаунта? <a href="#" data-open="/login.html?tab=register">Создать на сайте</a></p>
+    </div>
+    <div class="login-actions qr-box" id="qr-box" hidden>
+      <div class="qr" id="qr" aria-label="QR-код для входа"></div>
+      <p class="small center">Наведи камеру телефона на код — откроется Telegram. Подтверди вход, и Mognu VPN откроется здесь.</p>
+      <div class="row-links"><a href="#" id="qr-back">← Назад</a><a href="#" id="qr-refresh" hidden>Обновить код</a></div>
     </div>
     <form class="login-actions" id="email-form" hidden>
       <label>Почта<input type="email" id="email" autocomplete="username" required></label>
@@ -56,6 +65,10 @@
     <div class="keys" id="keys" hidden></div>
     <div class="top-right">
       <button class="pill" id="days" hidden></button>
+      <button class="icon-btn" id="support-open" aria-label="Поддержка">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 1 1-3.8-7.1L21 3l-1.2 3.6a8.4 8.4 0 0 1 1.2 4.9z"/></svg>
+        <i class="dot" id="support-dot" hidden></i>
+      </button>
       <button class="icon-btn" id="settings-open" aria-label="Настройки">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       </button>
@@ -73,7 +86,8 @@
     <div class="stats" id="stats" hidden>
       <div class="stat"><span>В сети</span><b id="st-time">00:00</b></div>
       <div class="stat"><span>Твой IP</span><b id="st-ip">…</b></div>
-      <div class="stat"><span>Пинг</span><b id="st-ping">—</b></div>
+      <div class="stat"><span>↓ Загрузка</span><b id="st-down">—</b><small id="st-down-total"></small></div>
+      <div class="stat"><span>↑ Отдача</span><b id="st-up">—</b><small id="st-up-total"></small></div>
     </div>
     <div class="mode" id="mode" role="radiogroup" aria-label="Что идёт через Mognu VPN">
       <button data-mode="proxy" role="radio"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg>Браузеры и программы</button>
@@ -114,7 +128,7 @@
         <div class="sub-info"><b id="sub-name"></b><span id="sub-date"></span></div>
       </div>
       <div class="sub-acts">
-        <button class="btn sm primary" data-open="/?screen=subscriptions">Продлить</button>
+        <button class="btn sm primary" id="sub-renew">Продлить</button>
         <button class="btn sm" id="sub-devices">Устройства</button>
       </div>
     </section>
@@ -126,9 +140,19 @@
   <div class="sheet" role="dialog" aria-label="Настройки">
     <div class="sheet-head"><b>Настройки</b><button class="icon-btn" id="settings-close" aria-label="Закрыть">✕</button></div>
     <p class="muted small" id="account"></p>
+    <div class="toggles">
+      <label class="tog"><span><b>Запускать вместе с Windows</b><small>Mognu VPN тихо стартует в трее</small></span>
+        <input type="checkbox" id="opt-autostart"><i aria-hidden="true"></i></label>
+      <label class="tog"><span><b>Подключаться при запуске</b><small>Сразу к выбранному или самому быстрому серверу</small></span>
+        <input type="checkbox" id="opt-autoconnect"><i aria-hidden="true"></i></label>
+      <label class="tog"><span><b>Российские сайты — напрямую</b><small>Банки, Госуслуги и маркетплейсы открываются без VPN</small></span>
+        <input type="checkbox" id="opt-ru"><i aria-hidden="true"></i></label>
+      <label class="tog"><span><b>Защита от утечек</b><small>Если связь с сервером пропала, интернет на паузе, пока Mognu VPN переподключается</small></span>
+        <input type="checkbox" id="opt-guard"><i aria-hidden="true"></i></label>
+    </div>
     <button class="row-btn" data-open="/">Личный кабинет <span>↗</span></button>
     <button class="row-btn" id="devices-open">Устройства на ключе <span>→</span></button>
-    <button class="row-btn" data-open="/?screen=support">Поддержка <span>↗</span></button>
+    <button class="row-btn" id="settings-support">Поддержка <span>→</span></button>
     <button class="row-btn" id="copy-log">Скопировать журнал для поддержки</button>
     <button class="row-btn" id="update-check">Проверить обновления</button>
     <button class="row-btn danger" id="logout">Выйти</button>
@@ -144,8 +168,35 @@
   </div>
 </div>
 
+<!-- продление и покупка подписки -->
+<div class="sheet-wrap" id="renew" hidden>
+  <div class="sheet" role="dialog" aria-label="Продление">
+    <div class="sheet-head"><b id="renew-title">Продление</b><button class="icon-btn" id="renew-close" aria-label="Закрыть">✕</button></div>
+    <div id="renew-body"></div>
+  </div>
+</div>
+
+<!-- поддержка: тот же чат, что в кабинете и Android (Могну отвечает сразу, сложное — админу) -->
+<div class="sheet-wrap" id="support" hidden>
+  <div class="sheet chat" role="dialog" aria-label="Поддержка">
+    <div class="sheet-head">
+      <div class="chat-who"><span class="chat-ava mascot-slot" data-mood="on"></span><span><b>Поддержка</b><small id="sp-sub">Могну отвечает сразу, сложное передаёт админу</small></span></div>
+      <button class="icon-btn" id="support-close" aria-label="Закрыть">✕</button>
+    </div>
+    <div class="chat-list" id="sp-list" aria-live="polite"></div>
+    <form class="chat-input" id="sp-form">
+      <input id="sp-text" maxlength="2000" placeholder="Напиши, что случилось…" autocomplete="off">
+      <button class="btn primary" type="submit" id="sp-send" aria-label="Отправить">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 20.5 21.5 12 3 3.5 3 10l13 2-13 2z"/></svg>
+      </button>
+    </form>
+    <div class="chat-foot"><a href="#" id="sp-close-ticket" hidden>Вопрос решён — закрыть обращение</a></div>
+  </div>
+</div>
+
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script src="assets/qrcode.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>

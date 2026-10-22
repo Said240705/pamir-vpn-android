@@ -27,6 +27,7 @@ function hwid() {
 const S = {
   version: "",
   keys: [],
+  allKeys: [],
   keyId: store.get("key"),
   servers: [],
   pings: {},
@@ -96,6 +97,15 @@ function toast(msg) {
   t.textContent = msg; t.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3200);
 }
+// Уведомления Windows (tauri-plugin-notification): о том, что важно, когда окно спрятано в трее
+async function notify(title, body) {
+  const n = window.__TAURI__.notification;
+  if (!n || S.demo) return;
+  try {
+    if (!(await n.isPermissionGranted()) && (await n.requestPermission()) !== "granted") return;
+    n.sendNotification({ title, body });
+  } catch (e) { /* без уведомления */ }
+}
 function show(id) { for (const s of ["login", "home"]) $(s).hidden = s !== id; }
 function plural(n, one, few, many) {
   const m10 = n % 10, m100 = n % 100;
@@ -143,26 +153,52 @@ document.addEventListener("click", (e) => {
 // ── вход ─────────────────────────────────────────────────────────────────────
 function loginStatus(msg, error) { const s = $("login-status"); s.textContent = msg || ""; s.classList.toggle("error", !!error); }
 
+// Вход через Telegram: на этом компьютере (открываем ссылку) или с телефона (та же ссылка QR-кодом —
+// камера телефона откроет Telegram). Сервер выдаёт токен, мы ждём подтверждения до 5 минут.
 let tgTimer = 0;
-$("tg-login").onclick = async () => {
-  loginStatus("Открываем Telegram…");
+function showLoginStart() {
+  clearInterval(tgTimer);
+  for (const [id, on] of [["login-start", true], ["qr-box", false], ["email-form", false]]) $(id).hidden = !on;
+  loginStatus("");
+}
+async function telegramLogin(viaQr) {
+  clearInterval(tgTimer);
+  loginStatus(viaQr ? "Готовим код…" : "Открываем Telegram…");
   try {
     const { token, deep_link } = await api("/auth/telegram/start", { method: "POST", auth: false });
-    await invoke("open_url", { url: deep_link });
-    loginStatus("Подтверди вход в Telegram — мы подождём здесь");
+    if (viaQr) {
+      const q = window.qrcode(0, "M");
+      q.addData(deep_link); q.make();
+      $("qr").innerHTML = q.createSvgTag({ cellSize: 6, margin: 3, scalable: true });
+      $("qr").classList.remove("stale");
+      $("qr-refresh").hidden = true;
+      $("login-start").hidden = true; $("qr-box").hidden = false;
+      loginStatus("Ждём подтверждения на телефоне…");
+    } else {
+      await invoke("open_url", { url: deep_link });
+      loginStatus("Подтверди вход в Telegram — мы подождём здесь");
+    }
     let tries = 0;
-    clearInterval(tgTimer);
     tgTimer = setInterval(async () => {
-      if (++tries > 150) { clearInterval(tgTimer); loginStatus("Время ожидания вышло. Попробуй ещё раз", true); return; }
+      if (++tries > 150) {
+        clearInterval(tgTimer);
+        if (viaQr) { $("qr").classList.add("stale"); $("qr-refresh").hidden = false; loginStatus("Код устарел — обнови его", true); }
+        else loginStatus("Время ожидания вышло. Попробуй ещё раз", true);
+        return;
+      }
       try {
         const r = await api("/auth/telegram/poll?token=" + encodeURIComponent(token), { auth: false });
         if (r.status === "approved") { clearInterval(tgTimer); signedIn(r.access_token); }
       } catch (e) { /* ждём дальше */ }
     }, 2000);
   } catch (e) { loginStatus(e.message, true); }
-};
-$("email-open").onclick = () => { $("login-start").hidden = true; $("email-form").hidden = false; $("email").focus(); loginStatus(""); };
-$("email-back").onclick = (e) => { e.preventDefault(); $("email-form").hidden = true; $("login-start").hidden = false; loginStatus(""); };
+}
+$("tg-login").onclick = () => telegramLogin(false);
+$("qr-login").onclick = () => telegramLogin(true);
+$("qr-refresh").onclick = (e) => { e.preventDefault(); telegramLogin(true); };
+$("qr-back").onclick = (e) => { e.preventDefault(); showLoginStart(); };
+$("email-open").onclick = () => { clearInterval(tgTimer); $("login-start").hidden = true; $("email-form").hidden = false; $("email").focus(); loginStatus(""); };
+$("email-back").onclick = (e) => { e.preventDefault(); showLoginStart(); };
 $("email-form").onsubmit = async (e) => {
   e.preventDefault();
   loginStatus("Входим…");
@@ -176,7 +212,7 @@ $("email-form").onsubmit = async (e) => {
 
 function signedIn(token) {
   store.set("token", token);
-  loginStatus("");
+  showLoginStart();
   startHome();
 }
 
@@ -198,7 +234,17 @@ async function loadKeys() {
   }
   const r = await api("/auth/keys");
   const list = Array.isArray(r) ? r : r.keys || [];
+  S.allKeys = list; // для продления: и истёкшие тоже
   S.keys = list.filter((k) => k.is_active && String(k.subscription_url || "").startsWith("http"));
+  // подписка заканчивается — напомнить раз в день (за 3 дня и меньше)
+  for (const k of S.keys) {
+    const d = daysLeft(k), today = new Date().toDateString();
+    if (d !== null && d <= 3 && store.get("exp_note_" + k.id) !== today) {
+      store.set("exp_note_" + k.id, today);
+      notify(d <= 0 ? "Подписка заканчивается сегодня" : `Подписка заканчивается через ${d} ${plural(d, "день", "дня", "дней")}`,
+        `«${k.display_name || "Ключ"}» — продли в Mognu VPN, чтобы не остаться без интернета`);
+    }
+  }
   if (!S.keys.find((k) => k.id === S.keyId)) S.keyId = S.keys[0] ? S.keys[0].id : null;
   store.set("key", S.keyId);
   renderKeys();
@@ -286,7 +332,7 @@ $("keys").onclick = async (e) => {
   S.keyId = +b.dataset.key; store.set("key", S.keyId);
   renderKeys(); loadSubscription();
 };
-$("days").onclick = () => openSite("/?screen=subscriptions");
+$("days").onclick = () => openRenew();
 // карточка подписки справа (в широком окне вместо значка с днями)
 function renderSubCard() {
   const k = currentKey(), d = daysLeft(k), card = $("sub-card");
@@ -302,6 +348,7 @@ function renderSubCard() {
   card.classList.toggle("danger", d !== null && d <= 3);
 }
 $("sub-devices").onclick = () => openDevices();
+$("sub-renew").onclick = () => openRenew();
 
 const BARS = '<span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>';
 function pingHtml(k) {
@@ -331,7 +378,7 @@ function renderServers() {
   const notice = $("notice");
   if (!S.keys.length) {
     notice.hidden = false;
-    notice.innerHTML = '<b>Нет активной подписки</b>Оформи её в личном кабинете — серверы появятся здесь сами.<button class="btn primary" data-open="/?screen=balance">Купить подписку</button>';
+    notice.innerHTML = '<b>Нет активной подписки</b>Оформи её в личном кабинете — серверы появятся здесь сами.<button class="btn primary" id="notice-buy">Купить подписку</button>';
   } else if (S.servers.length && !usable.length) {
     // вместо серверов подписка прислала заглушки — почти всегда это занятые места для устройств на ключе
     notice.hidden = false;
@@ -409,21 +456,337 @@ $("devices-body").onclick = async (e) => {
 $("devices-open").onclick = openDevices;
 $("devices-close").onclick = () => ($("devices").hidden = true);
 $("devices").onclick = (e) => { if (e.target.id === "devices") $("devices").hidden = true; };
-$("notice").onclick = (e) => { if (e.target.closest("#notice-devices")) openDevices(); };
+$("notice").onclick = (e) => {
+  if (e.target.closest("#notice-devices")) openDevices();
+  if (e.target.closest("#notice-buy")) openRenew(true);
+};
 
-// ── подключено: время, IP снаружи и пинг ─────────────────────────────────────
+// ── продление и покупка (как в Android: тарифы, СБП/карта на странице ЮKassa или с баланса) ─────────────
+// /topup/renew {key_id, tariff_id, method} или /topup/purchase {tariff_id, method}: в ответ либо страница оплаты
+// (открываем в браузере и ждём /topup/payment-status), либо сразу «оплачено» (с баланса).
+const R = { buy: false, keyId: null, tariffs: [], balance: null, busy: null, state: null, order: null, url: null, timer: 0, error: "", keysBefore: [] };
+const rub = (minor) => {
+  const v = Number(minor) / 100;
+  return (Number.isInteger(v) ? v.toLocaleString("ru-RU") : v.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })) + " ₽";
+};
+const keyDate = (k) => {
+  if (!k || !k.expires_at) return "бессрочно";
+  const d = daysLeft(k), end = new Date(String(k.expires_at).replace(" ", "T") + (/[zZ+]/.test(k.expires_at) ? "" : "Z"));
+  return (d > 0 ? "до " : "истёк ") + end.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+};
+
+async function openRenew(buy = false) {
+  if (S.demo) { openSite("/?screen=subscriptions"); return; }
+  clearInterval(R.timer);
+  Object.assign(R, { buy, state: null, busy: null, error: "", order: null, url: null });
+  $("settings").hidden = true;
+  $("renew").hidden = false;
+  $("renew-title").textContent = buy ? "Купить подписку" : "Продление";
+  $("renew-body").innerHTML = '<p class="muted">Загружаем тарифы…</p>';
+  try {
+    const [keys, tar, me] = await Promise.all([api("/auth/keys"), api("/topup/tariffs"), api("/auth/me").catch(() => ({}))]);
+    S.allKeys = Array.isArray(keys) ? keys : keys.keys || [];
+    R.tariffs = tar.tariffs || [];
+    R.balance = me && me.balance != null ? Number(me.balance) : null;
+    const cur = currentKey();
+    R.keyId = buy ? null : (S.allKeys.find((k) => cur && k.id === cur.id) || S.allKeys.find((k) => k.is_active) || S.allKeys[0] || {}).id ?? null;
+    if (R.keyId === null) R.buy = true;
+    renderRenew();
+  } catch (e) {
+    $("renew-body").innerHTML = `<p class="muted">Не удалось загрузить тарифы: ${esc(e.message)}</p><button class="btn" data-open="/?screen=subscriptions">Продлить в кабинете</button>`;
+  }
+}
+
+function renderRenew() {
+  const b = $("renew-body");
+  if (R.state === "waiting") {
+    b.innerHTML = '<div class="pay-wait"><span class="spin" aria-hidden="true"></span><b>Ждём оплату</b>' +
+      '<p class="muted small">Оплати на открывшейся странице — по СБП или картой. Как только оплата пройдёт, подписка ' + (R.buy ? "появится" : "продлится") + ' сама.</p>' +
+      '<div class="dev-acts"><button class="btn" id="pay-reopen">Открыть страницу оплаты</button><button class="btn" id="pay-cancel">Отмена</button></div></div>';
+    return;
+  }
+  if (R.state === "paid") {
+    b.innerHTML = '<div class="pay-wait done"><span class="ok" aria-hidden="true">✓</span><b>Оплата прошла</b>' +
+      `<p class="muted small">${R.buy ? "Ключ готов — серверы уже загружаются." : "Подписка продлена, VPN работает без перерыва."}</p>` +
+      '<button class="btn primary" id="pay-done">Готово</button></div>';
+    return;
+  }
+  if (R.state === "failed") {
+    b.innerHTML = '<div class="pay-wait"><b>Оплата не прошла</b><p class="muted small">Деньги не списались. Можно попробовать ещё раз или выбрать другой способ.</p>' +
+      '<button class="btn primary" id="pay-again">Выбрать тариф</button></div>';
+    return;
+  }
+  const key = S.allKeys.find((k) => k.id === R.keyId);
+  const group = key ? Number(key.tariff_group_id) || 0 : 0;
+  let list = R.tariffs.filter((t) => !group || !Number(t.group_id) || Number(t.group_id) === group);
+  if (!list.length) list = R.tariffs;
+  const keys = !R.buy && S.allKeys.length > 1
+    ? `<div class="keys renew-keys">${S.allKeys.map((k) => `<button data-rkey="${k.id}" class="${k.id === R.keyId ? "on" : ""}">${esc(k.display_name || "Ключ")}</button>`).join("")}</div>`
+    : "";
+  b.innerHTML =
+    keys + (key && !R.buy ? `<p class="muted small" style="margin:0 0 8px">«${esc(key.display_name || "Ключ")}» · ${esc(keyDate(key))}</p>` : "") +
+    (R.error ? `<p class="small" style="color:var(--danger);margin:0 0 8px">${esc(R.error)}</p>` : "") +
+    (list.length ? list.map((t) => {
+      const price = Number(t.price_minor) || 0, days = Number(t.duration_days) || 0, id = t.id;
+      const canBalance = R.balance !== null && R.balance >= price;
+      return `<div class="tariff"><div class="t-head"><span><b>${esc(t.name || "Тариф")}</b>${days ? `<small>${days} ${plural(days, "день", "дня", "дней")}</small>` : ""}</span><b class="t-price">${rub(price)}</b></div>` +
+        `<div class="dev-acts"><button class="btn primary" data-pay="${id}:yookassa_qr"${R.busy ? " disabled" : ""}>${R.busy === id + ":yookassa_qr" ? "Создаём оплату…" : "СБП / Карта"}</button>` +
+        (canBalance ? `<button class="btn" data-pay="${id}:balance"${R.busy ? " disabled" : ""}>${R.busy === id + ":balance" ? "Оплачиваем…" : "С баланса"}</button>` : "") + "</div></div>";
+    }).join("") : '<p class="muted">Тарифы сейчас недоступны — попробуй позже или оформи в кабинете.</p>') +
+    (R.balance !== null ? `<p class="muted small center" style="margin:10px 0 0">На балансе: ${rub(R.balance)}</p>` : "") +
+    '<p class="small center" style="margin:6px 0 0"><a href="#" data-open="/?screen=balance">Промокод и пополнение — в кабинете</a></p>';
+}
+
+async function pay(tariffId, method) {
+  if (R.busy) return;
+  R.busy = tariffId + ":" + method; R.error = ""; renderRenew();
+  try {
+    const body = { tariff_id: Number(tariffId), method };
+    if (!R.buy) body.key_id = R.keyId;
+    R.keysBefore = S.allKeys.map((k) => k.id);
+    const r = await api(R.buy ? "/topup/purchase" : "/topup/renew", { method: "POST", body });
+    R.busy = null;
+    if (String(r.payment_url || "").startsWith("http")) {
+      R.url = r.payment_url; R.order = r.order_id || null; R.state = "waiting"; renderRenew();
+      invoke("open_url", { url: R.url }).catch(() => toast("Не удалось открыть браузер"));
+      watchPayment();
+    } else if (r.completed || r.ok) onPaid();
+    else { R.error = "Не получилось начать оплату — попробуй ещё раз"; renderRenew(); }
+  } catch (e) {
+    R.busy = null;
+    R.error = /недостаточно/i.test(e.message) ? "На балансе не хватает денег — выбери СБП / Карта" : e.message;
+    renderRenew();
+  }
+}
+
+function watchPayment() {
+  clearInterval(R.timer);
+  let tries = 0;
+  R.timer = setInterval(async () => {
+    if (R.state !== "waiting") { clearInterval(R.timer); return; }
+    if (++tries > 200) { // ~13 минут без ответа
+      clearInterval(R.timer); R.state = null; R.error = "Не дождались подтверждения оплаты. Если деньги списались — напиши в поддержку"; renderRenew();
+      return;
+    }
+    if (!R.order) return;
+    try {
+      const st = String((await api("/topup/payment-status?order_id=" + encodeURIComponent(R.order))).status || "");
+      if (st === "paid") onPaid();
+      else if (/cancel|fail|expire|reject|declin/.test(st)) { clearInterval(R.timer); R.state = "failed"; renderRenew(); }
+    } catch (e) { /* проверим через 4 секунды */ }
+  }, 4000);
+}
+
+async function onPaid() {
+  clearInterval(R.timer);
+  R.state = "paid"; renderRenew();
+  notify("Оплата прошла", R.buy ? "Подписка оформлена — Mognu VPN готов к подключению" : "Подписка продлена — VPN работает без перерыва");
+  // новый ключ сервер создаёт через несколько секунд после оплаты — ждём его до ~2 минут
+  for (let i = 0; i < 40; i++) {
+    try {
+      await loadKeys();
+      const fresh = R.buy ? S.keys.find((k) => !R.keysBefore.includes(k.id)) : currentKey();
+      if (fresh) { S.keyId = fresh.id; store.set("key", S.keyId); renderKeys(); await loadSubscription(true); return; }
+    } catch (e) { /* ещё подождём */ }
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+  toast("Оплата прошла. Ключ появится через минуту — нажми «Обновить» у серверов");
+}
+
+$("renew-body").onclick = (e) => {
+  const p = e.target.closest("[data-pay]"), k = e.target.closest("[data-rkey]");
+  if (p && !p.disabled) { const [id, m] = p.dataset.pay.split(":"); pay(id, m); }
+  if (k) { R.keyId = Number(k.dataset.rkey); renderRenew(); }
+  if (e.target.closest("#pay-reopen") && R.url) invoke("open_url", { url: R.url }).catch(() => {});
+  if (e.target.closest("#pay-cancel") || e.target.closest("#pay-again")) { clearInterval(R.timer); R.state = null; renderRenew(); }
+  if (e.target.closest("#pay-done")) $("renew").hidden = true;
+};
+// закрыть можно и во время ожидания: проверка оплаты идёт дальше, по её итогу придёт уведомление
+$("renew-close").onclick = () => {
+  if (R.state === "waiting") toast("Ждём оплату в фоне — сообщим, когда пройдёт");
+  $("renew").hidden = true;
+};
+$("renew").onclick = (e) => { if (e.target.id === "renew") $("renew-close").click(); };
+
+// ── поддержка: тот же чат, что в кабинете и Android ─────────────────────────────
+// GET /topup/support/messages — одно открытое обращение; POST /topup/support/send {text}; POST /topup/support/close.
+// Ответы Могну (сервер: mognu_assistant.py) начинаются с невидимого знака, за ним — знаки кнопок и просьбы об оценке.
+const MOGNU = "\u2063", RATE = "\u2064";
+const ACTS = { "\u2060": "connect", "\u2061": "renew", "\u2062": "status" };
+const HIDDEN = /^[\u2060-\u2064\u206f]+/;
+const SP = { thread: 0, status: null, messages: [], loaded: false, waitingSince: 0, rated: 0, busy: false, timer: 0, bg: 0 };
+const spIsMognu = (m) => m.sender_type === "admin" && (String(m.text || "").startsWith(MOGNU) || String(m.text || "").startsWith("Привет! Я Могну"));
+const spIsRate = (m) => { const t = String(m.text || ""); return t[0] === MOGNU && t[1] === RATE; };
+function spActions(m) {
+  const t = String(m.text || "");
+  if (t[0] !== MOGNU) return [];
+  const out = [];
+  for (const ch of t.slice(1)) { if (!/[\u2060-\u2064\u206f]/.test(ch)) break; if (ACTS[ch]) out.push(ACTS[ch]); }
+  return out;
+}
+// текст без HTML и невидимых знаков: разбираем как документ (скрипты при этом не выполняются) и берём только текст
+function spPlain(m) {
+  const raw = String(m.text || "").replace(HIDDEN, "").replace(/\n/g, "<br>");
+  const doc = new DOMParser().parseFromString(raw, "text/html");
+  doc.querySelectorAll("br").forEach((b) => b.replaceWith("\n"));
+  return (doc.body.textContent || "").trim() || (m.media_type === "photo" ? "Фото" : "");
+}
+const spLastAdmin = () => SP.messages.filter((m) => m.sender_type === "admin").reduce((a, m) => Math.max(a, Number(m.id) || 0), 0);
+const spOpen = () => SP.status === "open";
+
+async function spLoad(viewed) {
+  if (S.demo || !store.get("token")) return;
+  try {
+    const r = await api("/topup/support/messages");
+    const before = spLastAdmin();
+    SP.thread = Number(r.thread_id) || 0;
+    SP.status = r.thread_status && r.thread_status !== "null" ? r.thread_status : null;
+    SP.messages = r.messages || [];
+    SP.loaded = true;
+    const last = spLastAdmin(), seenKey = "sp_seen";
+    if (last > before && SP.waitingSince) SP.waitingSince = 0;
+    const seen = store.get(seenKey);
+    if (viewed || !seen || seen.thread !== SP.thread) store.set(seenKey, { thread: SP.thread, id: last });
+    else if (spOpen() && last > seen.id) {
+      // новый ответ, а чат закрыт — уведомление и точка на кнопке
+      store.set(seenKey, { thread: SP.thread, id: last });
+      const msg = SP.messages.find((m) => Number(m.id) === last);
+      notify(msg && spIsMognu(msg) ? "Могну ответил" : "Поддержка ответила", (msg && spPlain(msg).slice(0, 180)) || "Открой Mognu VPN, чтобы прочитать");
+      $("support-dot").hidden = false;
+    }
+    if (!$("support").hidden) renderSupport();
+  } catch (e) { /* без сети — в следующий раз */ }
+}
+
+function renderSupport() {
+  const list = $("sp-list");
+  const msgs = SP.messages.map((m) => [m, spPlain(m)]).filter(([, t]) => t).slice(-40);
+  const humans = msgs.some(([m]) => m.sender_type === "admin" && !spIsMognu(m));
+  const handed = msgs.some(([m, t]) => spIsMognu(m) && /позвал|передал админу/i.test(t));
+  $("sp-sub").textContent = SP.waitingSince ? "Могну печатает…" : SP.rated >= 3 ? "Обращение закрыто — пиши, я тут"
+    : humans ? "Админ на связи — отвечает здесь" : handed ? "Позвал админа — он ответит здесь" : "Могну отвечает сразу, сложное передаёт админу";
+  if (!msgs.length) {
+    list.innerHTML = '<div class="chat-empty"><b>Привет! Я Могну 👑</b><p class="muted small">Напиши, что случилось — отвечу сразу, а сложное передам админу.</p>' +
+      '<div class="chips">' + ["Не подключается", "Медленно работает", "Как продлить?", "Позвать человека"].map((c) => `<button data-ask="${c}">${c}</button>`).join("") + "</div></div>";
+  } else {
+    list.innerHTML = msgs.map(([m, t], i) => {
+      const mine = m.sender_type === "user", bot = spIsMognu(m);
+      const when = m.created_at ? new Date(String(m.created_at).replace(" ", "T") + (/[zZ+]/.test(m.created_at) ? "" : "Z")) : null;
+      const acts = bot ? spActions(m).map((a) => `<button data-act="${a}">${{ connect: "📲 Подключить", renew: "💳 Тарифы и оплата", status: "📊 Статус серверов" }[a]}</button>`).join("") : "";
+      const rate = bot && i === msgs.length - 1 && spIsRate(m) && !SP.waitingSince
+        ? '<div class="rate">' + [1, 2, 3, 4, 5].map((n) => `<button data-rate="${n}" aria-label="${n} из 5">★</button>`).join("") + "</div>" : "";
+      return `<div class="msg ${mine ? "me" : "them"}">${mine ? "" : `<span class="who">${bot ? "Могну" : "Поддержка"}</span>`}` +
+        `<div class="bubble">${esc(t).replace(/\n/g, "<br>")}</div>${acts ? `<div class="acts">${acts}</div>` : ""}${rate}` +
+        `${when && !isNaN(when) ? `<time>${when.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time>` : ""}</div>`;
+    }).join("") + (SP.waitingSince ? '<div class="msg them"><span class="who">Могну</span><div class="bubble typing"><i></i><i></i><i></i></div></div>' : "");
+  }
+  list.scrollTop = list.scrollHeight;
+  $("sp-close-ticket").hidden = !spOpen();
+  $("sp-send").disabled = SP.busy;
+}
+
+async function spSend(text, score = 0) {
+  const t = String(text || "").trim();
+  if (!t || SP.busy) return;
+  SP.busy = true; renderSupport();
+  try {
+    await api("/topup/support/send", { method: "POST", body: { text: t } });
+    $("sp-text").value = "";
+    if (score) SP.rated = score; else SP.waitingSince = Date.now();
+    await spLoad(true);
+  } catch (e) { toast(e.message); }
+  SP.busy = false; renderSupport();
+}
+
+function openSupport() {
+  $("settings").hidden = true;
+  $("support").hidden = false;
+  $("support-dot").hidden = true;
+  if (!SP.loaded) $("sp-list").innerHTML = '<p class="muted center">Загружаем переписку…</p>';
+  else renderSupport();
+  spLoad(true);
+  clearInterval(SP.timer);
+  // пока чат открыт — свежие ответы каждые 3 секунды, пока Могну «печатает» (до минуты), иначе каждые 8
+  let tick = 0;
+  SP.timer = setInterval(() => {
+    if ($("support").hidden) { clearInterval(SP.timer); return; }
+    if (SP.waitingSince && Date.now() - SP.waitingSince > 60000) { SP.waitingSince = 0; renderSupport(); }
+    if (SP.waitingSince || ++tick % 3 === 0) spLoad(true);
+  }, 3000);
+  setTimeout(() => $("sp-text").focus(), 50);
+}
+$("support-open").onclick = openSupport;
+$("settings-support").onclick = openSupport;
+$("support-close").onclick = () => { $("support").hidden = true; clearInterval(SP.timer); };
+$("support").onclick = (e) => { if (e.target.id === "support") $("support-close").click(); };
+$("sp-form").onsubmit = (e) => { e.preventDefault(); spSend($("sp-text").value); };
+$("sp-list").onclick = (e) => {
+  const ask = e.target.closest("[data-ask]"), act = e.target.closest("[data-act]"), rate = e.target.closest("[data-rate]");
+  if (ask) spSend(ask.dataset.ask);
+  if (rate) spSend(rate.dataset.rate + " ⭐", Number(rate.dataset.rate));
+  if (act) {
+    const a = act.dataset.act;
+    if (a === "connect") { $("support").hidden = true; if (S.state === "off") connect(); }
+    else if (a === "renew") { $("support").hidden = true; openRenew(); }
+    else invoke("open_url", { url: SITE + "/status.html" }).catch(() => {});
+  }
+};
+$("sp-close-ticket").onclick = async (e) => {
+  e.preventDefault();
+  try { await api("/topup/support/close", { method: "POST", body: {} }); toast(`Обращение${SP.thread ? " №" + SP.thread : ""} закрыто`); await spLoad(true); }
+  catch (err) { toast(err.message); }
+};
+// в фоне: раз в минуту, пока обращение открыто — чтобы ответ поддержки не потерялся, даже если окно в трее
+function spBackground() {
+  clearInterval(SP.bg);
+  SP.bg = setInterval(() => { if (spOpen() && $("support").hidden) spLoad(false); }, 60000);
+}
+
+// ── подключено: время, IP снаружи, скорость и трафик за сессию ───────────────
 let since = 0, clock = 0;
+// трафик через сервер: счётчики ядра растут с его запуска; после переподключения ядро считает заново, поэтому
+// за сессию складываем только приросты
+const T = { up: 0, down: 0, lastUp: null, lastDown: null, lastAt: 0, upRate: 0, downRate: 0 };
+function resetTraffic() { Object.assign(T, { up: 0, down: 0, lastUp: null, lastDown: null, lastAt: 0, upRate: 0, downRate: 0 }); }
+function bytes(n) {
+  if (n < 1024 * 1024) return Math.round(n / 1024) + " КБ";
+  if (n < 1024 ** 3) return (n / 1024 / 1024).toFixed(n < 100 * 1024 * 1024 ? 1 : 0).replace(".", ",") + " МБ";
+  return (n / 1024 ** 3).toFixed(2).replace(".", ",") + " ГБ";
+}
+function rate(bps) {
+  const bits = bps * 8;
+  if (bits < 1e6) return Math.round(bits / 1e3) + " Кбит/с";
+  return (bits / 1e6).toFixed(bits < 1e8 ? 1 : 0).replace(".", ",") + " Мбит/с";
+}
+async function pollTraffic() {
+  if (S.state !== "on" || !S.ports || !S.ports.metrics) return;
+  try {
+    const r = await invoke("http", { req: { url: "http://127.0.0.1:" + S.ports.metrics + "/debug/vars", timeout_ms: 2000 } });
+    const o = ((JSON.parse(r.body).stats || {}).outbound || {}).proxy || {};
+    const up = Number(o.uplink) || 0, down = Number(o.downlink) || 0, now = Date.now();
+    if (T.lastUp !== null && T.lastAt) {
+      const dUp = up >= T.lastUp ? up - T.lastUp : up, dDown = down >= T.lastDown ? down - T.lastDown : down;
+      const sec = Math.max(0.5, (now - T.lastAt) / 1000);
+      T.up += dUp; T.down += dDown;
+      // плавно, чтобы цифры не прыгали каждую секунду
+      T.upRate = T.upRate * 0.4 + (dUp / sec) * 0.6;
+      T.downRate = T.downRate * 0.4 + (dDown / sec) * 0.6;
+    }
+    Object.assign(T, { lastUp: up, lastDown: down, lastAt: now });
+    $("st-down").textContent = rate(T.downRate); $("st-down-total").textContent = "всего " + bytes(T.down);
+    $("st-up").textContent = rate(T.upRate); $("st-up-total").textContent = "всего " + bytes(T.up);
+  } catch (e) { /* ядро перезапускается — следующая секунда покажет */ }
+}
 function renderStats() {
   const on = S.state === "on";
   $("stats").hidden = !on;
   clearInterval(clock);
-  if (!on) { since = 0; return; }
-  if (!since) { since = Date.now(); $("st-ip").textContent = "…"; lookupIp(); }
-  const srv = current(), ping = srv && S.pings[keyOf(srv)];
-  $("st-ping").textContent = ping ? ping + " мс" : "—";
+  if (!on) { if (S.state === "off") { since = 0; resetTraffic(); } return; }
+  if (!since) { since = Date.now(); $("st-ip").textContent = "…"; resetTraffic(); lookupIp(); }
   const tick = () => {
     const s = Math.floor((Date.now() - since) / 1000), h = Math.floor(s / 3600), two = (n) => String(n).padStart(2, "0");
     $("st-time").textContent = (h ? h + ":" : "") + two(Math.floor(s / 60) % 60) + ":" + two(s % 60);
+    pollTraffic();
   };
   tick(); clock = setInterval(tick, 1000);
 }
@@ -452,7 +815,9 @@ function renderMode() {
 
 // Перезапуск с правами администратора: Windows спросит разрешение; новая копия подключится сама
 async function elevate() {
-  const ok = await invoke("relaunch_elevated").catch((e) => { toast(String(e)); return false; });
+  // запустились вместе с Windows и окно ещё в трее — новая копия с правами тоже останется в трее
+  const hidden = S.launch.autostart && document.visibilityState === "hidden";
+  const ok = await invoke("relaunch_elevated", { hidden }).catch((e) => { toast(String(e)); return false; });
   if (!ok) { S.mode = "proxy"; store.set("mode", "proxy"); renderMode(); toast("Без разрешения Windows режим «Весь трафик» не включить"); }
 }
 
@@ -475,13 +840,18 @@ function renderPower() {
   const p = $("power"), title = $("state-title"), sub = $("state-sub");
   p.dataset.state = S.state;
   renderMode();
-  $("power-mascot").dataset.mood = S.state;
+  $("power-mascot").dataset.mood = S.state === "paused" ? "busy" : S.state;
   document.body.classList.toggle("connected", S.state === "on");
-  p.setAttribute("aria-label", S.state === "on" ? "Отключить" : "Подключить");
+  p.setAttribute("aria-label", S.state === "on" || S.state === "paused" ? "Отключить" : "Подключить");
   const srv = current(), label = srv ? flagHtml(cleanName(srv.name).flag) + " " + esc(cleanName(srv.name).name) : "";
   title.classList.toggle("on", S.state === "on");
-  if (S.state === "on") { title.textContent = "Подключено"; sub.innerHTML = label; }
-  else if (S.state === "busy") { title.textContent = "Подключаем…"; sub.innerHTML = label; }
+  const ping = srv && S.pings[keyOf(srv)];
+  if (S.state === "on") { title.textContent = "Подключено"; sub.innerHTML = label + (ping ? ` <span class="muted">· ${ping} мс</span>` : ""); }
+  else if (S.state === "busy") { title.textContent = S.healing ? "Переподключаемся…" : "Подключаем…"; sub.innerHTML = label; }
+  else if (S.state === "paused") {
+    title.textContent = "Нет связи с сервером";
+    sub.textContent = "Интернет на паузе, чтобы ничего не ушло мимо VPN. Пробуем снова…";
+  }
   else { title.textContent = "Не подключено"; sub.textContent = "Нажми на Могну, чтобы подключиться"; }
   renderStats();
   // значок в трее повторяет состояние: салатовый и сервер в подсказке — подключено
@@ -509,11 +879,12 @@ async function connect() {
   S.active = srv; S.state = "busy"; renderPower();
   try {
     const ports = await invoke("free_ports");
-    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, { tun })) });
+    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, coreOpts())) });
     if (!(await verify(ports.http))) throw new Error("Сервер не отвечает — попробуй другой");
     // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
     if (!tun) await invoke("proxy_set", { port: ports.http });
     S.ports = ports; S.state = "on";
+    startWatch();
   } catch (e) {
     await invoke("core_stop").catch(() => {});
     S.state = "off"; S.ports = null; S.active = null;
@@ -524,12 +895,80 @@ async function connect() {
 }
 
 async function disconnect(quiet) {
+  stopWatch();
   await invoke("core_stop").catch(() => {});
   S.state = "off"; S.ports = null; S.active = null;
   if (!quiet) renderPower();
 }
 
-$("power").onclick = () => { if (S.state === "busy") return; if (S.state === "on") disconnect(); else connect(); };
+$("power").onclick = () => {
+  // во время подключения нажатие ждёт, во время переподключения — отключает
+  if (S.state === "busy" && !S.healing) return;
+  if (S.healing) { disconnect(); return; }
+  if (S.state === "on" || S.state === "paused") disconnect(); else connect();
+};
+
+// ── связь под присмотром: переподключение и защита от утечек ─────────────────
+// Каждые 15 секунд: ядро живо и сайт открывается через подключение? Две неудачи подряд, упавшее ядро или выход
+// из сна — переподключаемся: сначала к тому же серверу, потом к самым быстрым остальным. Ядро перезапускается на тех
+// же портах, поэтому системный прокси всё это время указывает на Mognu и браузеры не уходят в интернет напрямую.
+// Если не вышло: с защитой от утечек интернет остаётся на паузе и попытки идут дальше, без неё — VPN отключается
+// и интернет работает как без Mognu.
+const coreOpts = () => ({ tun: S.mode === "tun", ruDirect: store.get("ru_direct", true) });
+const guardOn = () => store.get("guard", true);
+let watchTimer = 0, watchFails = 0, watchLast = 0;
+function startWatch() { stopWatch(); watchFails = 0; watchLast = Date.now(); watchTimer = setInterval(checkHealth, 15000); }
+function stopWatch() { clearInterval(watchTimer); watchTimer = 0; }
+
+async function checkHealth() {
+  if (S.healing || !S.ports) return;
+  const now = Date.now(), woke = now - watchLast > 45000;
+  watchLast = now;
+  if (S.state === "paused") { heal(); return; }
+  if (S.state !== "on") return;
+  const alive = await invoke("core_running").catch(() => false);
+  if (alive && !woke && (await verify(S.ports.http))) { watchFails = 0; return; }
+  if (!alive || woke || ++watchFails >= 2) heal();
+}
+
+async function heal() {
+  if (S.healing || !S.ports) return;
+  S.healing = true;
+  const was = S.active, paused = S.state === "paused";
+  if (!paused) { S.state = "busy"; renderPower(); }
+  const others = S.servers.filter((p) => !isStub(p) && !S.down[keyOf(p)] && (isLte(p) === !!(was && isLte(was))))
+    .sort((a, b) => (S.pings[keyOf(a)] || 9e9) - (S.pings[keyOf(b)] || 9e9));
+  const order = [was, ...others].filter((p, i, a) => p && a.findIndex((q) => q && keyOf(q) === keyOf(p)) === i).slice(0, 4);
+  for (const srv of order) {
+    if (!S.ports) break; // пока пробовали, человек нажал «Отключить»
+    try {
+      await invoke("core_start", { config: JSON.stringify(buildConfig(srv, S.ports, coreOpts())) });
+      // «Отключить» нажали, пока ядро перезапускалось: оно не должно остаться работать (в TUN — держать адаптер)
+      if (!S.ports) { await invoke("core_stop").catch(() => {}); break; }
+      if (await verify(S.ports.http)) {
+        S.active = srv; S.state = "on"; S.healing = false; watchFails = 0;
+        invoke("core_note", { text: "переподключились: " + cleanName(srv.name).name }).catch(() => {});
+        if (was && keyOf(was) !== keyOf(srv)) {
+          const msg = cleanName(was.name).name + " не отвечает — переключились на " + cleanName(srv.name).name;
+          toast(msg);
+          if (document.visibilityState === "hidden") notify("Mognu VPN переключил сервер", msg);
+        }
+        renderPower(); renderServers();
+        return;
+      }
+    } catch (e) { /* следующий сервер */ }
+  }
+  S.healing = false;
+  if (!S.ports) return;
+  invoke("core_note", { text: "связь с серверами пропала" + (guardOn() ? ", интернет на паузе" : ", VPN отключён") }).catch(() => {});
+  if (guardOn()) {
+    if (S.state !== "paused") notify("Нет связи с сервером", "Интернет на паузе, чтобы ничего не ушло мимо VPN. Mognu VPN пробует переподключиться");
+    S.state = "paused"; renderPower(); return;
+  }
+  await disconnect();
+  toast("Связь с серверами пропала — VPN отключён, интернет работает напрямую");
+  notify("VPN отключился", "Серверы не отвечают — интернет работает напрямую, без Mognu VPN");
+}
 // «Подключить / Отключить» из меню значка в трее; до входа в аккаунт пункт ничего не делает
 window.__TAURI__.event.listen("tray-toggle", () => { if (!$("home").hidden) $("power").click(); });
 $("refresh").onclick = () => loadSubscription(true);
@@ -537,13 +976,35 @@ $("refresh").onclick = () => loadSubscription(true);
 // ── настройки ────────────────────────────────────────────────────────────────
 $("settings-open").onclick = async () => {
   $("settings").hidden = false;
+  $("opt-autostart").checked = await invoke("autostart_get").catch(() => false);
+  $("opt-autoconnect").checked = store.get("autoconnect", false);
+  $("opt-ru").checked = store.get("ru_direct", true);
+  $("opt-guard").checked = store.get("guard", true);
   try { const me = await api("/auth/me"); $("account").textContent = me.email || (me.username ? "@" + me.username : "") || ""; } catch (e) {}
 };
 $("settings-close").onclick = () => ($("settings").hidden = true);
+$("opt-autostart").onchange = async (e) => {
+  try { await invoke("autostart_set", { on: e.target.checked }); }
+  catch (err) { e.target.checked = !e.target.checked; toast("Не удалось изменить автозапуск: " + String(err).slice(0, 80)); }
+};
+$("opt-autoconnect").onchange = (e) => store.set("autoconnect", e.target.checked);
+$("opt-guard").onchange = (e) => store.set("guard", e.target.checked);
+// маршруты меняются в ядре: если подключены — переподключаемся к тому же серверу с новыми правилами
+$("opt-ru").onchange = async (e) => {
+  store.set("ru_direct", e.target.checked);
+  if (S.state === "on" && S.active) {
+    try { await invoke("core_start", { config: JSON.stringify(buildConfig(S.active, S.ports, coreOpts())) }); }
+    catch (err) { heal(); }
+  }
+  toast(e.target.checked ? "Российские сайты теперь открываются напрямую" : "Теперь все сайты идут через VPN");
+};
 $("settings").onclick = (e) => { if (e.target.id === "settings") $("settings").hidden = true; };
 $("logout").onclick = async () => {
   await disconnect();
-  for (const k of ["token", "key", "server"]) store.del(k);
+  for (const k of ["token", "key", "server", "sp_seen"]) store.del(k);
+  clearInterval(SP.bg); clearInterval(SP.timer);
+  Object.assign(SP, { thread: 0, status: null, messages: [], loaded: false, waitingSince: 0, rated: 0 });
+  $("support-dot").hidden = true; $("support").hidden = true; $("renew").hidden = true; clearInterval(R.timer);
   S.keys = []; S.servers = [];
   $("settings").hidden = true;
   show("login");
@@ -641,6 +1102,7 @@ function sky(snow) {
 
 // ── запуск ───────────────────────────────────────────────────────────────────
 async function startHome() {
+  spLoad(false).then(spBackground);
   show("home"); renderPower();
   try { await loadKeys(); }
   catch (e) {
@@ -669,6 +1131,7 @@ async function startHome() {
   }
   if (!store.get("token")) { show("login"); return; }
   await startHome();
-  // перезапуск с правами ради «весь трафик» — подключаемся сразу, человек уже нажал «Подключить»
-  if (S.launch.handoff) connect();
+  // перезапуск с правами ради «весь трафик» — подключаемся сразу, человек уже нажал «Подключить»;
+  // «Подключаться при запуске» — тоже сразу, к выбранному или самому быстрому серверу
+  if (S.launch.handoff || (store.get("autoconnect", false) && S.state === "off")) connect();
 })();

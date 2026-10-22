@@ -3,6 +3,7 @@
 // пустить запрос через уже работающее подключение.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod core;
 mod elevate;
 mod sysproxy;
@@ -31,8 +32,15 @@ struct Tray {
 const TRAY_ON: &[u8] = include_bytes!("../icons/tray-on.png");
 const TRAY_OFF: &[u8] = include_bytes!("../icons/tray-off.png");
 
+/// Окно создаётся скрытым и не развёрнутым (tauri.conf.json): на Windows развёрнутое окно сразу видно, а при
+/// запуске вместе с Windows оно должно остаться в трее. Разворачиваем его на весь экран при первом показе.
+static SHOWN_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        if !SHOWN_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let _ = w.maximize();
+        }
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
@@ -96,14 +104,17 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
 struct Ports {
     socks: u16,
     http: u16,
+    /// счётчики трафика ядра (metrics, /debug/vars) — для скорости на главном экране
+    metrics: u16,
 }
 
-/// Два свободных порта на 127.0.0.1 для входов ядра.
+/// Три свободных порта на 127.0.0.1: входы ядра и его счётчики. Слушатели держим до конца, чтобы порты не совпали.
 #[tauri::command]
 fn free_ports() -> Result<Ports, String> {
-    let a = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let b = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    Ok(Ports { socks: a.local_addr().map_err(|e| e.to_string())?.port(), http: b.local_addr().map_err(|e| e.to_string())?.port() })
+    let bind = || TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string());
+    let (a, b, c) = (bind()?, bind()?, bind()?);
+    let port = |l: &TcpListener| l.local_addr().map(|x| x.port()).map_err(|e| e.to_string());
+    Ok(Ports { socks: port(&a)?, http: port(&b)?, metrics: port(&c)? })
 }
 
 #[tauri::command]
@@ -222,18 +233,32 @@ struct Launch {
     elevated: bool,
     /// это перезапуск с правами ради режима — окно сразу подключается
     handoff: bool,
+    /// стартовали вместе с Windows: окно спрятано в трее
+    autostart: bool,
 }
 
 #[tauri::command]
 fn launch_info() -> Launch {
-    Launch { elevated: elevate::is_elevated(), handoff: std::env::args().any(|a| a == elevate::HANDOFF) }
+    let arg = |x: &str| std::env::args().any(|a| a == x);
+    Launch { elevated: elevate::is_elevated(), handoff: arg(elevate::HANDOFF), autostart: arg(autostart::ARG) }
+}
+
+/// Запуск вместе с Windows: включён ли и включить/выключить.
+#[tauri::command]
+fn autostart_get() -> bool {
+    autostart::enabled()
+}
+
+#[tauri::command]
+fn autostart_set(on: bool) -> Result<(), String> {
+    autostart::set(on)
 }
 
 /// Перезапуск с правами администратора: Windows спросит разрешение. Если человек согласился — эта копия
 /// отключается и закрывается, новая подключится сама. false — человек отказался, всё остаётся как было.
 #[tauri::command]
-fn relaunch_elevated(app: AppHandle) -> Result<bool, String> {
-    let ok = elevate::relaunch()?;
+fn relaunch_elevated(app: AppHandle, hidden: bool) -> Result<bool, String> {
+    let ok = elevate::relaunch(hidden)?;
     if ok {
         quit(&app);
     }
@@ -274,17 +299,26 @@ fn main() {
     }
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .manage(AppState { core: Mutex::new(core::Core::default()) })
         .setup(|app| {
             build_tray(app)?;
+            // окно создаётся скрытым (tauri.conf.json): при запуске вместе с Windows так и остаётся в трее
+            if !std::env::args().any(|a| a == autostart::ARG) {
+                show_main(app.handle());
+            }
             Ok(())
+        })
+        // запуск вместе с Windows: окно создаётся скрытым, но WebView2 может показать его, когда загрузит страницу —
+        // прячем снова, пока человек сам его не открыл (трей, ярлык)
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished
+                && std::env::args().any(|a| a == autostart::ARG)
+                && !SHOWN_ONCE.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                let _ = webview.window().hide();
+            }
         })
         // крестик окна не выходит из программы и не отключает: окно прячется, Mognu остаётся в трее
         .on_window_event(|w, e| {
@@ -293,7 +327,7 @@ fn main() {
                 let _ = w.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, update_check, update_install])
+        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, autostart_get, autostart_set, update_check, update_install])
         .build(tauri::generate_context!())
         .expect("Mognu VPN не запустился");
 

@@ -30,8 +30,9 @@ pub fn is_elevated() -> bool {
 }
 
 /// Запускает эту же программу с правами администратора. Ok(false) — человек нажал «Нет» в окне Windows.
+/// hidden — окно не показывать (стартовали вместе с Windows и ещё сидим в трее).
 #[cfg(windows)]
-pub fn relaunch() -> Result<bool, String> {
+pub fn relaunch(hidden: bool) -> Result<bool, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -39,7 +40,8 @@ pub fn relaunch() -> Result<bool, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let file = wide(exe.as_os_str());
     let verb = wide(std::ffi::OsStr::new("runas"));
-    let args = wide(std::ffi::OsStr::new(HANDOFF));
+    let args = if hidden { format!("{HANDOFF} {}", crate::autostart::ARG) } else { HANDOFF.to_string() };
+    let args = wide(std::ffi::OsStr::new(&args));
     unsafe {
         let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
         info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
@@ -60,4 +62,4 @@ pub fn relaunch() -> Result<bool, String> {
 #[cfg(not(windows))]
 pub fn is_elevated() -> bool { false }
 #[cfg(not(windows))]
-pub fn relaunch() -> Result<bool, String> { Err("только для Windows".into()) }
+pub fn relaunch(_hidden: bool) -> Result<bool, String> { Err("только для Windows".into()) }

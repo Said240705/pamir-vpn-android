@@ -143,7 +143,17 @@ function flagCode(emoji) {
 const flagHtml = (emoji) => flagSvg(flagCode(emoji));
 
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";"); }
-function openSite(path) { invoke("open_url", { url: SITE + path }).catch(() => toast("Не удалось открыть браузер")); }
+// Сайт открываем на адресе, который отвечает сейчас: при «белых списках» mognu.app молчит, и кабинет
+// открывается на зеркале из hosts.json (ceboukahusibod.begetcdn.cloud). Спрашиваем все адреса сразу.
+async function siteHost() {
+  const all = [SITE, ...hosts().filter((h) => h !== SITE)];
+  const ok = await Promise.all(all.map((h) => http(h + "/hosts.json", { timeout: 2500 })
+    .then((r) => r.status === 200 && r.body.trimStart().startsWith("{"), () => false)));
+  return all[ok.indexOf(true)] || SITE;
+}
+function openSite(path) {
+  siteHost().then((h) => invoke("open_url", { url: h + path })).catch(() => toast("Не удалось открыть браузер"));
+}
 
 document.addEventListener("click", (e) => {
   const a = e.target.closest("[data-open]");
@@ -728,7 +738,7 @@ $("sp-list").onclick = (e) => {
     const a = act.dataset.act;
     if (a === "connect") { $("support").hidden = true; if (S.state === "off") connect(); }
     else if (a === "renew") { $("support").hidden = true; openRenew(); }
-    else invoke("open_url", { url: SITE + "/status.html" }).catch(() => {});
+    else openSite("/status.html");
   }
 };
 $("sp-close-ticket").onclick = async (e) => {
@@ -880,7 +890,11 @@ async function connect() {
   try {
     const ports = await invoke("free_ports");
     await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, coreOpts())) });
-    if (!(await verify(ports.http))) throw new Error("Сервер не отвечает — попробуй другой");
+    // в режиме «весь трафик» Windows поднимает адаптер и маршруты не сразу: первая проверка может не пройти
+    // (так 0.4.0 один раз не подключился в CI), поэтому даём ещё одну попытку через пару секунд
+    let ok = await verify(ports.http);
+    if (!ok && tun) { await new Promise((r) => setTimeout(r, 2500)); ok = await verify(ports.http); }
+    if (!ok) throw new Error("Сервер не отвечает — попробуй другой");
     // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
     if (!tun) await invoke("proxy_set", { port: ports.http });
     S.ports = ports; S.state = "on";

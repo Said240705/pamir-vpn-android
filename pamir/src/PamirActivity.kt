@@ -1789,6 +1789,11 @@ open class PamirActivity : AppCompatActivity() {
         qrLink = QrLink(title, text, url, onClose)
     }
 
+    /** Opens a page of our site on the host that answers now: under «white lists» that is the mirror. */
+    private fun openSite(path: String) {
+        lifecycleScope.launch { openUrl(PamirHosts.reachableWeb(path)) }
+    }
+
     /**
      * Messages of this screen. Shadows the Context.toast extension: while the screen is visible and no
      * bottom sheet covers it, the message goes to the in-app snackbar (optionally with an action);
@@ -2782,7 +2787,7 @@ open class PamirActivity : AppCompatActivity() {
                     "Так вы сможете продлевать подписку прямо здесь — в пару касаний, через СБП, карту или с баланса.", Tone.ACCENT
                 ) {
                     LoginButtons()
-                    TextAction("Продлить в личном кабинете", Modifier.align(Alignment.CenterHorizontally)) { openUrl(PamirHosts.web("/?from=android")) }
+                    TextAction("Продлить в личном кабинете", Modifier.align(Alignment.CenterHorizontally)) { openSite("/?from=android") }
                 }
                 renewLoading -> {
                     SkeletonCard("Загружаем тарифы")
@@ -2859,7 +2864,7 @@ open class PamirActivity : AppCompatActivity() {
         if (list.isEmpty()) {
             Text("Тарифы сейчас недоступны. Попробуйте позже или продлите в кабинете.", style = PamirType.support, color = c.textDim)
             Spacer(Modifier.height(Gap.m))
-            SecondaryButton("Открыть кабинет") { openUrl(PamirHosts.web("/?from=android")) }
+            SecondaryButton("Открыть кабинет") { openSite("/?from=android") }
             return
         }
         list.forEach { t ->
@@ -3444,7 +3449,7 @@ open class PamirActivity : AppCompatActivity() {
                                     val (label, go) = when (a) {
                                         "connect" -> "📲 Подключить" to { onDismiss(); tab = Tab.HOME }
                                         "renew" -> "💳 Тарифы и оплата" to { onDismiss(); openRenew() }
-                                        else -> "📊 Статус серверов" to { openUrl("https://mognu.app/status.html") }
+                                        else -> "📊 Статус серверов" to { openSite("/status.html") }
                                     }
                                     Text(
                                         label, style = PamirType.label, color = c.text,

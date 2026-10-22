@@ -890,7 +890,11 @@ async function connect() {
   try {
     const ports = await invoke("free_ports");
     await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, coreOpts())) });
-    if (!(await verify(ports.http))) throw new Error("Сервер не отвечает — попробуй другой");
+    // в режиме «весь трафик» Windows поднимает адаптер и маршруты не сразу: первая проверка может не пройти
+    // (так 0.4.0 один раз не подключился в CI), поэтому даём ещё одну попытку через пару секунд
+    let ok = await verify(ports.http);
+    if (!ok && tun) { await new Promise((r) => setTimeout(r, 2500)); ok = await verify(ports.http); }
+    if (!ok) throw new Error("Сервер не отвечает — попробуй другой");
     // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
     if (!tun) await invoke("proxy_set", { port: ports.http });
     S.ports = ports; S.state = "on";

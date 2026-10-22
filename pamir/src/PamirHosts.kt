@@ -2,6 +2,11 @@ package com.v2ray.ang.pamir
 
 import android.util.Log
 import com.v2ray.ang.handler.MmkvManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -31,6 +36,21 @@ object PamirHosts {
 
     /** Absolute address on the preferred host, e.g. web("/pay-return.html"). */
     fun web(path: String): String = current() + path
+
+    /**
+     * Address on the first host whose site answers right now, for pages the user opens in the browser.
+     * The API may have worked through the tunnel or a minute ago, while the browser goes straight to a
+     * domain that «white lists» block — then the cabinet opens on the mirror that does answer
+     * (ceboukahusibod.begetcdn.cloud from hosts.json). All hosts are asked at once, so a blocked one
+     * costs at most [timeoutMs]; when none answers, the preferred host is used as before.
+     */
+    suspend fun reachableWeb(path: String, timeoutMs: Int = 2500): String = withContext(Dispatchers.IO) {
+        val hosts = ordered()
+        val answers = coroutineScope {
+            hosts.map { h -> async { runCatching { fetch("$h/hosts.json", null, timeoutMs) }.isSuccess } }.awaitAll()
+        }
+        (hosts.zip(answers).firstOrNull { it.second }?.first ?: current()) + path
+    }
 
     /** True for any of our hosts (payment return page, deep links back from the site). */
     fun isOurs(url: String): Boolean = ordered().any { url.startsWith(it) }
@@ -62,11 +82,11 @@ object PamirHosts {
         }
     }
 
-    private fun fetch(url: String, proxyPort: Int?): List<String> {
+    private fun fetch(url: String, proxyPort: Int?, timeoutMs: Int = 6000): List<String> {
         val u = URL(url)
         val c = (if (proxyPort != null) u.openConnection(java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress("127.0.0.1", proxyPort)))
         else u.openConnection()) as HttpURLConnection
-        c.connectTimeout = 6000; c.readTimeout = 6000
+        c.connectTimeout = timeoutMs; c.readTimeout = timeoutMs
         c.setRequestProperty("Cache-Control", "no-cache")
         try {
             if (c.responseCode != 200) error("HTTP ${c.responseCode}")

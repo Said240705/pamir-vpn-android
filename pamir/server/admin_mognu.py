@@ -1444,7 +1444,10 @@ async def _devices_scan(conn):
 async def suspicious(admin=Depends(auth.current_admin)):
     conn = await db.get_db()
     try:
-        users = lambda ids: _rows(conn, f"SELECT id, telegram_id, username, first_name, email FROM users WHERE id IN ({','.join('?' * len(ids))})", ids) if ids else []
+        async def users(ids):
+            if not ids:
+                return []
+            return await _rows(conn, f"SELECT id, telegram_id, username, first_name, email FROM users WHERE id IN ({','.join('?' * len(ids))})", ids)
         # Трафик за 7 дней по снимкам бота
         heavy = await _rows(conn, f"""
             SELECT h.key_id, k.user_id, MAX(h.traffic_used) - MIN(h.traffic_used) AS week_bytes
@@ -1454,7 +1457,10 @@ async def suspicious(admin=Depends(auth.current_admin)):
         # Пробный несколько раз
         trials = await _rows(conn, """SELECT user_id, COUNT(*) AS n, MAX(activated_at) AS last_at FROM trial_activations
                                       GROUP BY user_id HAVING n > 1 ORDER BY n DESC LIMIT 30""")
-        scan = await _devices_scan(conn)
+        try:
+            scan = await _devices_scan(conn)
+        except Exception:
+            scan = []
         many = [{"key_id": k["id"], "user_id": k["user_id"], "devices": len(k["devices"]), "limit": k["lim"]}
                 for k in scan if k["devices"] and (len(k["devices"]) > (k["lim"] or 1) or len(k["devices"]) >= 5)]
         by_hw = {}

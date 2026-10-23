@@ -7,6 +7,7 @@
    POST /mini-app-api/mognu-admin/fix-order {order_id, telegram_id} — поставить ключ заказа в панель так же, как
         после оплаты из приложения (_run_key_setup_without_delivery, как fix_draft_keys.py);
    POST /mini-app-api/mognu-admin/key-sync {key_id} — отправить срок и лимиты ключа из базы в панель (push_key_to_panel).
+3. main.py: pamir_admin_mognu.track_clients(app) — отметка, с чего человек заходит и платит (копия main.py.bak-adminclients).
 
     python3 patch_admin_mognu.py          показать, что изменится (ничего не меняет)
     python3 patch_admin_mognu.py --apply  применить; копии рядом: main.py.bak-adminmognu, mini_app_api.py.bak-adminmognu
@@ -112,6 +113,26 @@ else:
         print("  копия:", backup(MAIN))
         MAIN.write_text(main.replace(MAIN_ANCHOR, MAIN_NEW, 1), encoding="utf-8")
         py_compile.compile(str(MAIN), doraise=True)
+
+# 1б. отметки «откуда заходят и платят» (телефон, компьютер, Telegram, браузер)
+main = MAIN.read_text(encoding="utf-8")
+TRACK_ANCHOR = "app.include_router(pamir_admin_mognu.router)\n"
+if "track_clients" in main:
+    print("main.py уже отмечает, откуда заходят, — не трогаю.")
+elif TRACK_ANCHOR in main or APPLY:
+    step("main.py: отметки, с чего заходят и платят (pamir_admin_mognu.track_clients)")
+    if APPLY:
+        main = MAIN.read_text(encoding="utf-8")
+        if main.count(TRACK_ANCHOR) != 1:
+            sys.exit("Не нашёл подключение pamir_admin_mognu в main.py — отметки не включены.")
+        dst = MAIN.with_name("main.py.bak-adminclients")
+        if not dst.exists():
+            shutil.copy2(MAIN, dst)
+        print("  копия:", dst)
+        MAIN.write_text(main.replace(TRACK_ANCHOR, TRACK_ANCHOR + "pamir_admin_mognu.track_clients(app)\n", 1), encoding="utf-8")
+        py_compile.compile(str(MAIN), doraise=True)
+else:
+    step("main.py: отметки, с чего заходят и платят (после подключения роутера)")
 
 # 2. бот
 bot = BOT.read_text(encoding="utf-8")

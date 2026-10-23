@@ -7,7 +7,8 @@
 
 Стало: если у человека есть ОТКРЫТОЕ обращение в поддержку, его сообщение (текст, фото, ответ свайпом) уходит в это
 обращение — тем же обработчиком поддержки, что и после кнопки «Ответить»; кнопки поддержки тоже пропускаются. Без
-открытого обращения всё как раньше: карточка кабинета. Команды (/…) обращения не трогают.
+открытого обращения всё как раньше: карточка кабинета. Команды (/…) обращения не трогают. Кто только что нажал
+кнопку поддержки («Написать в поддержку», «Ответить»), тоже попадает в поддержку.
 
     python3 patch_support_replies.py          показать, что изменится (ничего не меняет)
     python3 patch_support_replies.py --apply  применить; копия: gateway.py.bak-supportreplies
@@ -54,12 +55,14 @@ async def _mognu_route_to_support(event, data, telegram_id: int) -> bool:
     if state is None:
         return False
     try:
-        thread_id = _mognu_open_thread_id(telegram_id)
-        if not thread_id:
-            return False
         from bot.handlers.user import support as _support
 
         waiting = _support.SupportUserStates.waiting_for_message
+        if data.get('raw_state') == waiting.state:
+            return True  # pressed «Написать в поддержку» / «Ответить»: the support handler takes it
+        thread_id = _mognu_open_thread_id(telegram_id)
+        if not thread_id:
+            return False
         await state.set_state(waiting)
         await state.update_data(support_thread_id=thread_id)
         data['raw_state'] = waiting.state

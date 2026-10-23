@@ -557,11 +557,27 @@ async def user_message(user_id: int, payload: MessageIn, admin=Depends(auth.curr
         await conn.close()
     if (u["telegram_id"] or 0) <= 0:
         raise HTTPException(409, "У человека нет Telegram — только почта")
-    ok, blocked = await _telegram(u["telegram_id"], text)
-    if not ok:
-        raise HTTPException(409, "Человек заблокировал бота — сообщение не дойдёт" if blocked else "Telegram не принял сообщение")
+    # Через обращение в поддержку: ответ человека придёт в «Поддержку», а не в карточку кабинета
+    conn = await db.get_db()
+    try:
+        thread_id = await _scalar(conn, "SELECT id FROM support_threads WHERE user_telegram_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1",
+                                  (u["telegram_id"],))
+        if not thread_id:
+            now = _now()
+            cur = await conn.execute(
+                """INSERT INTO support_threads (user_id, user_telegram_id, initiator_type, initiator_admin_id, assigned_admin_id,
+                                                status, created_at, updated_at, last_message_at)
+                   VALUES (?, ?, 'admin', ?, ?, 'open', ?, ?, ?)""",
+                (u["id"], u["telegram_id"], _tg(admin), _tg(admin), now, now, now))
+            await conn.commit()
+            thread_id = cur.lastrowid
+    finally:
+        await conn.close()
+    data = await _bot("POST", "/admin-support/reply", {"thread_id": int(thread_id), "text": text, "admin_telegram_id": _tg(admin)}, 30)
+    if not data.get("ok"):
+        raise HTTPException(409, "Бот не смог отправить сообщение: " + str(data.get("reason") or "ошибка"))
     await _audit(admin, "user.message", user_id, text[:200])
-    return {"ok": True}
+    return {"ok": True, "thread_id": thread_id}
 
 
 # ---------- списки: ключи и зависшие оплаты ----------

@@ -76,7 +76,7 @@ SEGMENTS = {
                     "AND k.expires_at > datetime('now', '-30 days'))",
 }
 REACHABLE = "u.telegram_id > 0 AND COALESCE(u.is_banned, 0) = 0 AND COALESCE(u.is_bot_blocked, 0) = 0"
-BUTTONS = {"renew": f"{SITE}/?screen=subscriptions", "cabinet": f"{SITE}/", "app": f"{SITE}/welcome.html",
+BUTTONS = {"renew": f"{SITE}/?screen=subscriptions", "cabinet": f"{SITE}/", "app": f"{SITE}/android.html",
            "support": f"https://t.me/{BOT_USERNAME}"}
 
 

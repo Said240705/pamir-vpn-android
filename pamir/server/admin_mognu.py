@@ -334,6 +334,11 @@ async def user_extra(user_id: int, admin=Depends(auth.current_admin)):
         out["keys"] = keys
         out["clients"] = await _rows(conn, "SELECT client, version, last_seen FROM pamir_user_clients WHERE user_id = ? ORDER BY last_seen DESC", (user_id,))
         out["clients_since"] = await _scalar(conn, "SELECT value FROM pamir_admin_meta WHERE key = 'clients_since'")
+        # Платежи полностью: скидка, промокод, списание с баланса — чтобы «90 ₽» и «0 ₽» было понятно
+        out["payments"] = await _rows(conn, """SELECT order_id, status, purpose, description, payment_type, paid_at, created_at,
+                                                      payable_amount_minor, nominal_amount_minor, balance_deduct_minor,
+                                                      discount_percent, promo_code
+                                               FROM payments WHERE user_id = ? ORDER BY id DESC LIMIT 50""", (user_id,))
         n = await (await conn.execute("SELECT note, tags, updated_at FROM pamir_user_notes WHERE user_id = ?", (user_id,))).fetchone()
         out["note"] = n["note"] if n else ""
         out["tags"] = [t for t in (n["tags"] or "").split(",") if t] if n else []

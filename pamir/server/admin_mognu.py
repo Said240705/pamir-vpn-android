@@ -8,12 +8,15 @@
 Время в базе — UTC; «сегодня» и графики по дням — по Москве (display_timezone бота).
 """
 import asyncio
+import json
 import os
+import time
 import re
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 import auth
@@ -107,6 +110,13 @@ async def _ensure(conn):
         text TEXT NOT NULL, button_text TEXT, button_action TEXT, scheduled_at TIMESTAMP, status TEXT NOT NULL,
         total INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
         finished_at TIMESTAMP)""")
+    await conn.execute("""CREATE TABLE IF NOT EXISTS pamir_user_clients (
+        user_id INTEGER NOT NULL, client TEXT NOT NULL, version TEXT, first_seen TIMESTAMP NOT NULL, last_seen TIMESTAMP NOT NULL,
+        PRIMARY KEY (user_id, client))""")
+    await conn.execute("""CREATE TABLE IF NOT EXISTS pamir_payment_clients (
+        order_id TEXT PRIMARY KEY, user_id INTEGER, client TEXT NOT NULL, created_at TIMESTAMP NOT NULL)""")
+    await conn.execute("CREATE TABLE IF NOT EXISTS pamir_admin_meta (key TEXT PRIMARY KEY, value TEXT)")
+    await conn.execute("INSERT OR IGNORE INTO pamir_admin_meta (key, value) VALUES ('clients_since', ?)", (_now(),))
     await conn.commit()
     _ready = True
 
@@ -313,6 +323,8 @@ async def user_extra(user_id: int, admin=Depends(auth.current_admin)):
             keys[str(k["id"])] = {"status": "draft" if k["draft"] else "active" if k["alive"] else "expired",
                                   "server_name": k["server_name"], "devices_limit": k["devices_limit"], "trial": bool(k["trial"])}
         out["keys"] = keys
+        out["clients"] = await _rows(conn, "SELECT client, version, last_seen FROM pamir_user_clients WHERE user_id = ? ORDER BY last_seen DESC", (user_id,))
+        out["clients_since"] = await _scalar(conn, "SELECT value FROM pamir_admin_meta WHERE key = 'clients_since'")
 
         tl = [{"at": u["created_at"], "kind": "", "title": "Зарегистрировался",
                "text": "через почту" if (u.get("telegram_id") or 0) <= 0 else ""}]
@@ -965,3 +977,128 @@ async def audit(offset: int = 0, limit: int = 50, admin=Depends(auth.current_adm
     finally:
         await conn.close()
 
+
+
+# ---------- откуда заходят и платят ----------
+# Бэкенд отмечает, с чего человек пользуется сервисом: Android-приложение и программа для Windows узнаются по
+# User-Agent, кабинет присылает X-Mognu-Client (telegram — внутри Telegram, web — браузер). Оплаты, созданные через
+# бэкенд, получают ту же отметку; оплата без отметки после начала учёта — значит, из Telegram-бота.
+
+PAY_PATH = re.compile(r"^(/api)?/topup/(purchase|renew|topup|buy-device-slot|card-bind/start)$")
+_seen = {}
+_uid_by_tg = {}
+
+
+def _client_of(request: Request):
+    ua = request.headers.get("user-agent", "")
+    m = re.search(r"(?:PamirVPN|Mognu)-Android/([\w.]+)", ua)
+    if m:
+        return "android", m.group(1)
+    m = re.search(r"Mognu-Desktop/?\s*([\w.]+)?", ua)
+    if m:
+        return "windows", m.group(1) or ""
+    x = request.headers.get("x-mognu-client", "")
+    if x == "telegram":
+        return "telegram", ""
+    if x == "web":
+        return ("web_phone" if re.search(r"Mobile|Android|iPhone|iPad", ua) else "web_pc"), ""
+    return None, ""
+
+
+async def _user_id_of(request: Request):
+    authz = request.headers.get("authorization", "")
+    if not authz.startswith("Bearer "):
+        return None
+    try:
+        p = auth.decode_app_token(authz[7:].strip())
+    except Exception:
+        return None
+    if not isinstance(p, dict) or p.get("is_admin"):
+        return None
+    for k in ("user_id", "uid", "id"):
+        if str(p.get(k, "")).isdigit():
+            return int(p[k])
+    sub = str(p.get("sub", ""))
+    if sub.split(":")[-1].isdigit() and not sub.startswith(("admin", "tg")):
+        return int(sub.split(":")[-1])
+    tg = p.get("tg_id") or p.get("telegram_id")
+    if tg:
+        if tg not in _uid_by_tg:
+            conn = await db.get_db()
+            try:
+                _uid_by_tg[tg] = await _scalar(conn, "SELECT id FROM users WHERE telegram_id = ?", (int(tg),))
+            finally:
+                await conn.close()
+        return _uid_by_tg[tg]
+    return None
+
+
+async def _remember(uid, client, version, order_id=None):
+    now = _now()
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        await conn.execute("""INSERT INTO pamir_user_clients (user_id, client, version, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)
+                              ON CONFLICT(user_id, client) DO UPDATE SET version = COALESCE(NULLIF(excluded.version, ''), version),
+                              last_seen = excluded.last_seen""", (uid, client, version, now, now))
+        if order_id:
+            await conn.execute("INSERT OR IGNORE INTO pamir_payment_clients (order_id, user_id, client, created_at) VALUES (?, ?, ?, ?)",
+                               (order_id, uid, client, now))
+        await conn.commit()
+    finally:
+        await conn.close()
+
+
+def track_clients(app):
+    """Подключается в main.py: отметка клиента на каждом запросе вошедшего человека (не чаще раза в 10 минут) и на оплатах."""
+    @app.middleware("http")
+    async def _mognu_track_clients(request: Request, call_next):
+        response = await call_next(request)
+        try:
+            client, version = _client_of(request)
+            if not client or response.status_code >= 400:
+                return response
+            uid = await _user_id_of(request)
+            if not uid:
+                return response
+            order_id = None
+            if request.method == "POST" and PAY_PATH.match(request.url.path):
+                body = b"".join([chunk async for chunk in response.body_iterator])
+                response = Response(content=body, status_code=response.status_code, headers=dict(response.headers),
+                                    media_type=response.media_type)
+                try:
+                    data = json.loads(body or b"{}")
+                    order_id = data.get("order_id") if isinstance(data, dict) else None
+                except ValueError:
+                    pass
+            key = (uid, client)
+            if order_id or time.monotonic() - _seen.get(key, -1e9) > 600:
+                _seen[key] = time.monotonic()
+                asyncio.get_running_loop().create_task(_remember(uid, client, version, str(order_id) if order_id else None))
+        except Exception:
+            pass
+        return response
+
+
+@router.get("/clients")
+async def clients(users: str = "", orders: str = "", admin=Depends(auth.current_admin)):
+    uids = [int(x) for x in users.split(",") if x.strip().isdigit()][:300]
+    oids = [x.strip() for x in orders.split(",") if x.strip()][:300]
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        since = await _scalar(conn, "SELECT value FROM pamir_admin_meta WHERE key = 'clients_since'")
+        out_u, out_o = {}, {}
+        if uids:
+            for r in await _rows(conn, f"SELECT user_id, client, version, last_seen FROM pamir_user_clients WHERE user_id IN ({','.join('?' * len(uids))}) ORDER BY last_seen DESC", uids):
+                out_u.setdefault(str(r["user_id"]), []).append({"client": r["client"], "version": r["version"], "last_seen": r["last_seen"]})
+        if oids:
+            known = {r["order_id"]: r["client"] for r in await _rows(conn, f"SELECT order_id, client FROM pamir_payment_clients WHERE order_id IN ({','.join('?' * len(oids))})", oids)}
+            for r in await _rows(conn, f"SELECT order_id, payment_type, COALESCE(created_at, paid_at) AS at FROM payments WHERE order_id IN ({','.join('?' * len(oids))})", oids):
+                if r["order_id"] in known:
+                    out_o[r["order_id"]] = known[r["order_id"]]
+                elif since and r["at"] and str(r["at"])[:19] >= since and r["payment_type"] != "trial":
+                    out_o[r["order_id"]] = "bot"
+        return {"users": out_u, "orders": out_o, "since": since}
+    finally:
+        await conn.close()

@@ -8,6 +8,7 @@
 Время в базе — UTC; «сегодня» и графики по дням — по Москве (display_timezone бота).
 """
 import asyncio
+import html
 import json
 import os
 import time
@@ -35,7 +36,8 @@ DRAFT = "(k.server_id IS NULL OR COALESCE(k.panel_email, '') = '')"
 TRIAL_KEY = "EXISTS (SELECT 1 FROM trial_activations ta WHERE ta.vpn_key_id = k.id)"
 ACTION_RU = {"key.extend": "продлил ключ", "key.delete": "удалил ключ", "key.fix": "доделал ключ", "key.reset_devices": "сбросил устройства",
              "key.sub_url": "смотрел ссылку подписки", "user.balance": "изменил баланс", "user.ban": "блокировка", "user.gift": "подарил дни",
-             "user.message": "написал через бота", "user.note": "заметка и метки", "payment.complete": "доделал оплату"}
+             "user.message": "написал через бота", "user.note": "заметка и метки", "payment.complete": "доделал оплату",
+             "report.send": "прислал утренний отчёт", "report.settings": "настроил утренний отчёт"}
 PURPOSE = {"key_purchase": "Покупка ключа", "key_renewal": "Продление", "balance_topup": "Пополнение баланса",
            "trial": "Пробный период", "device_slot": "Доп. устройство"}
 
@@ -1090,7 +1092,7 @@ def track_clients(app):
     (без startup-событий — их нет в новых версиях FastAPI)."""
     @app.middleware("http")
     async def _mognu_track_clients(request: Request, call_next):
-        if _online_task is None or _online_task.done():
+        if _online_task is None or _online_task.done() or _report_task is None or _report_task.done():
             try:
                 await _start_background()
             except Exception:
@@ -1156,10 +1158,12 @@ _online_task = None
 
 
 async def _start_background():
-    global _online_task
+    global _online_task, _report_task
     _start_worker()
     if _online_task is None or _online_task.done():
         _online_task = asyncio.get_running_loop().create_task(_online_loop())
+    if _report_task is None or _report_task.done():
+        _report_task = asyncio.get_running_loop().create_task(_report_loop())
 
 
 async def _online_loop():
@@ -1497,3 +1501,226 @@ async def suspicious(admin=Depends(auth.current_admin)):
                 "shared_devices": shared, "devices_checked": len(scan), "users": people}
     finally:
         await conn.close()
+
+
+# ---------- утренний отчёт ----------
+
+REPORT_HOUR = int(os.getenv("PAMIR_REPORT_HOUR", "6"))  # по Москве
+BOT_CONFIG = os.getenv("PAMIR_BOT_CONFIG", "/root/YadrenoVPN/config.py")
+CLIENT_RU = {"android": "Android", "windows": "Windows", "telegram": "Telegram", "web_phone": "сайт с телефона", "web_pc": "сайт с ПК"}
+WEEKDAY_RU = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+_report_task = None
+
+
+def _report_chats():
+    """Кому слать: PAMIR_REPORT_CHAT_IDS или ADMIN_IDS из config.py бота (как отчёты об ошибках приложения)."""
+    env = os.getenv("PAMIR_REPORT_CHAT_IDS", "")
+    if env:
+        return [x.strip() for x in env.split(",") if x.strip()]
+    try:
+        m = re.search(r"ADMIN_IDS\s*=\s*\[(.*?)\]", open(BOT_CONFIG, encoding="utf-8").read(), re.S)
+        return re.findall(r"\d{5,}", m.group(1)) if m else []
+    except OSError:
+        return []
+
+
+def _rub(minor):
+    return f"{(minor or 0) // 100:,}".replace(",", " ") + " ₽"
+
+
+def _trend(now, before):
+    return "↑" if now > before else "↓" if now < before else "="
+
+
+async def _meta(conn, key, default=None):
+    v = await _scalar(conn, "SELECT value FROM pamir_admin_meta WHERE key = ?", (key,))
+    return default if v is None else v
+
+
+async def _set_meta(conn, key, value):
+    await conn.execute("INSERT INTO pamir_admin_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+
+
+async def _report(conn, remember=False):
+    """Текст отчёта за вчера (по Москве). remember — запомнить число платящих, чтобы завтра показать изменение."""
+    await _ensure(conn)
+    day = await _scalar(conn, f"SELECT date('now', '{MSK}', '-1 day')")
+    on_day = f"date(p.paid_at, '{MSK}') = ?"
+
+    async def revenue(where, args):
+        r = await (await conn.execute(f"SELECT COUNT(*), COALESCE(SUM(p.payable_amount_minor), 0) FROM payments p WHERE {PAID} AND {where}", args)).fetchone()
+        return r[0], r[1]
+
+    n, rev = await revenue(on_day, (day,))
+    _, rev_before = await revenue(f"date(p.paid_at, '{MSK}') = date(?, '-1 day')", (day,))
+    _, rev_week = await revenue(f"date(p.paid_at, '{MSK}') BETWEEN date(?, '-6 days') AND ?", (day, day))
+    _, rev_month = await revenue(f"strftime('%Y-%m', p.paid_at, '{MSK}') = strftime('%Y-%m', ?)", (day,))
+    first_time = await _scalar(conn, f"""SELECT COUNT(DISTINCT p.user_id) FROM payments p WHERE {PAID} AND {on_day} AND p.purpose != 'key_renewal'
+        AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.user_id = p.user_id AND q.id != p.id AND q.status = 'paid'
+                        AND q.payable_amount_minor > 0 AND COALESCE(q.payment_type, '') NOT IN ('balance', 'trial') AND q.paid_at < p.paid_at)""", (day,))
+    renewals = await _scalar(conn, f"SELECT COUNT(*) FROM payments p WHERE {PAID} AND {on_day} AND p.purpose = 'key_renewal'", (day,))
+    bal = await (await conn.execute(f"""SELECT COUNT(*), COALESCE(SUM(CASE WHEN p.payment_type = 'balance' THEN MAX(p.payable_amount_minor, p.balance_deduct_minor) ELSE p.balance_deduct_minor END), 0)
+        FROM payments p WHERE p.status = 'paid' AND {on_day} AND (p.payment_type = 'balance' OR p.balance_deduct_minor > 0)""", (day,))).fetchone()
+    abandoned = await _scalar(conn, f"""SELECT COUNT(*) FROM payments p WHERE p.status != 'paid' AND COALESCE(p.payment_type, '') != 'trial'
+        AND date(COALESCE(p.created_at, p.paid_at), '{MSK}') = ?""", (day,))
+
+    new = await _scalar(conn, f"SELECT COUNT(*) FROM users WHERE date(created_at, '{MSK}') = ?", (day,))
+    src = await _rows(conn, f"""SELECT c.client, COUNT(*) AS n FROM users u JOIN pamir_user_clients c ON c.user_id = u.id
+        AND c.first_seen = (SELECT MIN(first_seen) FROM pamir_user_clients WHERE user_id = u.id)
+        WHERE date(u.created_at, '{MSK}') = ? GROUP BY c.client ORDER BY n DESC""", (day,))
+    tr = await (await conn.execute(f"""SELECT COUNT(DISTINCT ta.user_id),
+            COUNT(DISTINCT CASE WHEN EXISTS (SELECT 1 FROM payments p WHERE p.user_id = ta.user_id AND {PAID}) THEN ta.user_id END)
+        FROM trial_activations ta WHERE ta.activated_at >= datetime('now', '-30 days')""")).fetchone()
+    paying = await _scalar(conn, f"""SELECT COUNT(DISTINCT k.user_id) FROM vpn_keys k WHERE k.expires_at > datetime('now') AND NOT {TRIAL_KEY} AND NOT {DRAFT}""")
+    trial_now = await _scalar(conn, f"SELECT COUNT(*) FROM vpn_keys k WHERE k.expires_at > datetime('now') AND {TRIAL_KEY}")
+    paying_before = await _meta(conn, "report_paying")
+
+    exp = await (await conn.execute(f"""SELECT COUNT(*), COALESCE(SUM({TRIAL_KEY}), 0) FROM vpn_keys k
+        WHERE k.expires_at > datetime('now') AND k.expires_at <= datetime('now', '+2 days') AND NOT {DRAFT}""")).fetchone()
+    lost = await _scalar(conn, f"""SELECT COUNT(DISTINCT k.user_id) FROM vpn_keys k WHERE NOT {TRIAL_KEY}
+        AND date(k.expires_at, '{MSK}') = ? AND NOT EXISTS (SELECT 1 FROM vpn_keys k2 WHERE k2.user_id = k.user_id AND k2.expires_at > datetime('now'))""", (day,))
+
+    servers = await _rows(conn, """SELECT s.name, h.status FROM servers s LEFT JOIN server_health h ON h.server_id = s.id WHERE s.is_active = 1""")
+    down = [s["name"] for s in servers if s["status"] and s["status"] not in ("up", "unknown")]
+    locs_down = [r["name"] for r in await _rows(conn, "SELECT name FROM location_health WHERE status NOT IN ('up', 'unknown')")]
+    online = await _scalar(conn, """SELECT SUM(n) FROM pamir_online_samples WHERE at = (SELECT MAX(at) FROM pamir_online_samples)
+                                    AND at >= datetime('now', '-30 minutes') AND location != '—'""")
+    traffic = await _scalar(conn, """SELECT COALESCE(SUM(MAX(0, h1.traffic_used - COALESCE(h0.traffic_used, 0))), 0) FROM traffic_history h1
+        LEFT JOIN traffic_history h0 ON h0.key_id = h1.key_id AND h0.snapshot_date = date(h1.snapshot_date, '-1 day')
+        WHERE h1.snapshot_date = (SELECT MAX(snapshot_date) FROM traffic_history)""")
+    sup = await (await conn.execute("""SELECT COUNT(*), MIN(COALESCE(last_message_at, updated_at, created_at)) FROM support_threads WHERE status = 'open'""")).fetchone()
+    stuck = len(await _stuck(conn))
+    drafts = await _scalar(conn, f"SELECT COUNT(*) FROM vpn_keys k WHERE {DRAFT}")
+
+    warn = []
+    if down:
+        warn.append("Не отвечает сервер: " + html.escape(", ".join(down)))
+    if locs_down:
+        warn.append("Не работает локация: " + html.escape(", ".join(locs_down)))
+    if stuck:
+        warn.append(f"Зависших оплат: {stuck}")
+    if drafts:
+        warn.append(f"Черновых ключей: {drafts}")
+    if sup[0] and sup[1] and sup[1] <= (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S"):
+        warn.append("Обращение ждёт дольше 3 ч")
+
+    d = datetime.strptime(day, "%Y-%m-%d")
+    lines = [f"☀️ <b>Mognu — итоги {d:%d.%m} ({WEEKDAY_RU[d.weekday()]})</b>", ""]
+    if warn:
+        lines += ["⚠️ <b>Требует внимания</b>"] + [f"• {w}" for w in warn] + [""]
+    lines.append(f"💰 <b>Выручка: {_rub(rev)}</b> (позавчера {_rub(rev_before)} {_trend(rev, rev_before)})")
+    lines.append(f"   За 7 дней {_rub(rev_week)} · с начала месяца {_rub(rev_month)}")
+    if n:
+        lines.append(f"   Оплат: {n} · новых покупателей {first_time} · продлений {renewals}")
+    if bal[0]:
+        lines.append(f"   С баланса: {_rub(bal[1])} ({bal[0]})")
+    if abandoned:
+        lines.append(f"   Брошено заказов: {abandoned}")
+    lines.append("")
+    src_txt = " · ".join(f"{CLIENT_RU.get(r['client'], r['client'])} {r['n']}" for r in src)
+    lines.append(f"👥 Новых: {new}" + (f" ({src_txt})" if src_txt else ""))
+    if tr[0]:
+        lines.append(f"   Пробный → оплата за 30 дней: {tr[1]} из {tr[0]} ({round(tr[1] / tr[0] * 100)}%)")
+    delta = ""
+    if paying_before not in (None, ""):
+        diff = paying - int(paying_before)
+        delta = f" ({diff:+d})" if diff else " (=)"
+    lines.append(f"🔑 Платящих с подпиской: {paying}{delta} · на пробном: {trial_now}")
+    lines.append("")
+    lines.append(f"⏳ Истекают за 2 дня: {exp[0]}" + (f" (пробных {exp[1]})" if exp[1] else ""))
+    lines.append(f"🚪 Не продлили вчера: {lost}")
+    lines.append("")
+    srv = ("работает" if len(servers) == 1 else f"все {len(servers)} работают") if not down else f"работают {len(servers) - len(down)} из {len(servers)}"
+    lines.append(f"🖥 Серверы: {srv}" + (f" · онлайн сейчас {online}" if online is not None else ""))
+    if traffic:
+        lines.append(f"   Трафик за сутки: {traffic / 1e9:,.1f} ГБ".replace(",", " "))
+    lines.append(f"💬 Поддержка: открытых обращений {sup[0]}")
+    if remember:
+        await _set_meta(conn, "report_paying", paying)
+        await conn.commit()
+    return "\n".join(lines), day
+
+
+async def _send_report(text):
+    token = os.getenv("BOT_TOKEN", "")
+    chats = _report_chats()
+    if not token or not chats:
+        return 0
+    kb = {"inline_keyboard": [[{"text": "Открыть админку", "url": f"{SITE}/admin/"}, {"text": "Кто истекает", "url": f"{SITE}/admin/#/expiring"}]]}
+    sent = 0
+    async with aiohttp.ClientSession() as s:
+        for chat in chats:
+            try:
+                async with s.post(f"{TG_API}/bot{token}/sendMessage", timeout=aiohttp.ClientTimeout(total=20),
+                                  json={"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True, "reply_markup": kb}) as r:
+                    sent += bool((await r.json(content_type=None)).get("ok"))
+            except Exception:
+                pass
+    return sent
+
+
+async def _report_loop():
+    """Раз в минуту: после REPORT_HOUR по Москве, если за вчера ещё не отправляли, — отправить. День отмечается в базе
+    до отправки (UPDATE … WHERE value != day), поэтому перезапуск или второй процесс не пришлют отчёт дважды."""
+    while True:
+        try:
+            msk = datetime.now(timezone.utc) + timedelta(hours=3)
+            if msk.hour >= REPORT_HOUR:
+                conn = await db.get_db()
+                try:
+                    await _ensure(conn)
+                    if await _meta(conn, "report_enabled", "1") == "1":
+                        day = (msk - timedelta(days=1)).strftime("%Y-%m-%d")
+                        await conn.execute("INSERT OR IGNORE INTO pamir_admin_meta (key, value) VALUES ('report_last_day', '')")
+                        cur = await conn.execute("UPDATE pamir_admin_meta SET value = ? WHERE key = 'report_last_day' AND value < ?", (day, day))
+                        await conn.commit()
+                        if cur.rowcount == 1:
+                            text, _ = await _report(conn, remember=True)
+                            await _send_report(text)
+                finally:
+                    await conn.close()
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+
+
+class ReportIn(BaseModel):
+    enabled: bool
+
+
+@router.get("/report")
+async def report_preview(admin=Depends(auth.current_admin)):
+    conn = await db.get_db()
+    try:
+        text, day = await _report(conn)
+        return {"text": text, "day": day, "enabled": await _meta(conn, "report_enabled", "1") == "1",
+                "hour": REPORT_HOUR, "last_day": await _meta(conn, "report_last_day", ""), "chats": len(_report_chats())}
+    finally:
+        await conn.close()
+
+
+@router.post("/report/send")
+async def report_send(admin=Depends(auth.current_admin)):
+    conn = await db.get_db()
+    try:
+        text, _ = await _report(conn)
+    finally:
+        await conn.close()
+    sent = await _send_report(text)
+    if not sent:
+        raise HTTPException(502, "Не удалось отправить: нет BOT_TOKEN, администраторов или Telegram не ответил")
+    await _audit(admin, "report.send")
+    return {"sent": sent}
+
+
+@router.post("/report/settings")
+async def report_settings(payload: ReportIn, admin=Depends(auth.current_admin)):
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        await _set_meta(conn, "report_enabled", "1" if payload.enabled else "0")
+        await conn.commit()
+    finally:
+        await conn.close()
+    await _audit(admin, "report.settings", details="включён" if payload.enabled else "выключен")
+    return {"ok": True}

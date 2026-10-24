@@ -37,7 +37,8 @@ TRIAL_KEY = "EXISTS (SELECT 1 FROM trial_activations ta WHERE ta.vpn_key_id = k.
 ACTION_RU = {"key.extend": "продлил ключ", "key.delete": "удалил ключ", "key.fix": "доделал ключ", "key.reset_devices": "сбросил устройства",
              "key.sub_url": "смотрел ссылку подписки", "user.balance": "изменил баланс", "user.ban": "блокировка", "user.gift": "подарил дни",
              "user.message": "написал через бота", "user.note": "заметка и метки", "payment.complete": "доделал оплату",
-             "report.send": "прислал утренний отчёт", "report.settings": "настроил утренний отчёт"}
+             "report.send": "прислал утренний отчёт", "report.settings": "настроил утренний отчёт",
+             "key.router_links": "смотрел ссылки для роутера", "tariff.create": "создал тариф"}
 PURPOSE = {"key_purchase": "Покупка ключа", "key_renewal": "Продление", "balance_topup": "Пополнение баланса",
            "trial": "Пробный период", "device_slot": "Доп. устройство"}
 
@@ -1724,3 +1725,111 @@ async def report_settings(payload: ReportIn, admin=Depends(auth.current_admin)):
         await conn.close()
     await _audit(admin, "report.settings", details="включён" if payload.enabled else "выключен")
     return {"ok": True}
+
+
+# ---------- тариф «На весь дом»: прямые ссылки для роутера ----------
+
+try:
+    from routers import pamir_router_links as router_links  # кладёт patch_admin_mognu.py рядом
+except ImportError:  # проверка вне бэкенда
+    import router_links
+
+HOME_DEVICES = 3  # «Для роутера» — у ключей с лимитом от 3 устройств (тариф «На весь дом»)
+user_router = APIRouter(prefix="/topup/router", tags=["router"])
+LIMIT_SQL = """MAX(COALESCE(k.max_ips_override, t.max_ips, 1), COALESCE((SELECT device_limit FROM key_device_slots s WHERE s.key_id = k.id), 0))"""
+
+
+async def _key_links(conn, key_id, user_id=None):
+    """→ (ключ, ссылки) или HTTPException. user_id — только свой ключ; None — из админки."""
+    try:
+        has_slots = bool(await _scalar(conn, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='key_device_slots'"))
+    except Exception:
+        has_slots = False
+    limit_sql = LIMIT_SQL if has_slots else "COALESCE(k.max_ips_override, t.max_ips, 1)"
+    row = await (await conn.execute(f"""SELECT k.id, k.user_id, k.panel_email, k.expires_at > datetime('now') AS active, {limit_sql} AS devices
+        FROM vpn_keys k LEFT JOIN tariffs t ON t.id = k.tariff_id WHERE k.id = ?""", (key_id,))).fetchone()
+    if not row or (user_id is not None and row["user_id"] != user_id):
+        raise HTTPException(404, "Ключ не найден")
+    if not row["panel_email"]:
+        raise HTTPException(409, "Ключ ещё не готов — попробуйте через минуту")
+    if not row["active"]:
+        raise HTTPException(409, "Подписка закончилась — продлите её, и ссылки для роутера заработают")
+    try:
+        links = await asyncio.to_thread(router_links.build_links, row["panel_email"])
+    except Exception as error:
+        raise HTTPException(502, f"Не удалось собрать ссылки: {type(error).__name__}")
+    return dict(row), [{"location": l["location"], "link": l["link"]} for l in links]
+
+
+@user_router.get("/keys")
+async def router_keys(user=Depends(auth.current_user)):
+    """Какие ключи человека подходят для роутера (лимит от HOME_DEVICES устройств)."""
+    conn = await db.get_db()
+    try:
+        has_slots = bool(await _scalar(conn, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='key_device_slots'"))
+        limit_sql = LIMIT_SQL if has_slots else "COALESCE(k.max_ips_override, t.max_ips, 1)"
+        rows = await _rows(conn, f"""SELECT k.id, {limit_sql} AS devices FROM vpn_keys k LEFT JOIN tariffs t ON t.id = k.tariff_id
+                                     WHERE k.user_id = ? AND k.expires_at > datetime('now')""", (user["id"],))
+        return {"keys": [r["id"] for r in rows if (r["devices"] or 0) >= HOME_DEVICES], "min_devices": HOME_DEVICES}
+    finally:
+        await conn.close()
+
+
+@user_router.get("/links")
+async def router_links_for_user(key_id: int, user=Depends(auth.current_user)):
+    conn = await db.get_db()
+    try:
+        key, links = await _key_links(conn, key_id, user["id"])
+    finally:
+        await conn.close()
+    if (key["devices"] or 0) < HOME_DEVICES:
+        raise HTTPException(403, "Ключ для роутера есть в тарифе «На весь дом»")
+    if not links:
+        raise HTTPException(409, "Для этого ключа пока нет локаций, подходящих роутеру — напишите в поддержку")
+    return {"links": links, "guide": f"{SITE}/router.html"}
+
+
+@router.get("/keys/{key_id}/router-links")
+async def admin_router_links(key_id: int, admin=Depends(auth.current_admin)):
+    """Те же ссылки — для поддержки: помочь человеку настроить роутер (без проверки тарифа)."""
+    conn = await db.get_db()
+    try:
+        key, links = await _key_links(conn, key_id)
+    finally:
+        await conn.close()
+    await _audit(admin, "key.router_links", key["user_id"], f"ключ {key_id}")
+    return {"links": links, "devices": key["devices"]}
+
+
+class TariffNewIn(BaseModel):
+    name: str
+    duration_days: int
+    price_minor: int
+    devices: int = 1
+    group_id: int = 0
+    is_active: bool = True
+
+
+@router.post("/tariff-create")  # не /tariffs/create: его перехватил бы /tariffs/{tariff_id}
+async def tariff_create(payload: TariffNewIn, admin=Depends(auth.current_admin)):
+    name = payload.name.strip()
+    if not name or len(name) > 60:
+        raise HTTPException(400, "Название — от 1 до 60 символов")
+    if not 1 <= payload.duration_days <= 3660 or not 0 <= payload.price_minor <= 100_000_00 or not 1 <= payload.devices <= 20:
+        raise HTTPException(400, "Срок 1–3660 дней, цена до 100 000 ₽, устройств 1–20")
+    conn = await db.get_db()
+    try:
+        group = payload.group_id or await _scalar(conn, "SELECT id FROM tariff_groups ORDER BY sort_order, id LIMIT 1") or 1
+        if await _scalar(conn, "SELECT 1 FROM tariffs WHERE name = ? AND group_id = ?", (name, group)):
+            raise HTTPException(409, "Тариф с таким названием уже есть")
+        cols = {r[1] for r in await (await conn.execute("PRAGMA table_info(tariffs)")).fetchall()}
+        data = {"name": name, "duration_days": payload.duration_days, "price_minor": payload.price_minor, "max_ips": payload.devices,
+                "group_id": group, "is_active": 1 if payload.is_active else 0, "traffic_limit_gb": 0, "display_order": 0}
+        data = {k: v for k, v in data.items() if k in cols}
+        cur = await conn.execute(f"INSERT INTO tariffs ({', '.join(data)}) VALUES ({', '.join('?' * len(data))})", tuple(data.values()))
+        await conn.commit()
+        new_id = cur.lastrowid
+    finally:
+        await conn.close()
+    await _audit(admin, "tariff.create", None, f"{name}: {payload.duration_days} дн., {payload.price_minor // 100} ₽, устройств {payload.devices}")
+    return {"ok": True, "id": new_id}

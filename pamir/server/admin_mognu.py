@@ -1867,3 +1867,115 @@ async def tariff_create(payload: TariffNewIn, admin=Depends(auth.current_admin))
         await conn.close()
     await _audit(admin, "tariff.create", None, f"{name}: {payload.duration_days} дн., {payload.price_minor // 100} ₽, устройств {payload.devices}")
     return {"ok": True, "id": new_id}
+
+
+# ---------- переход на «Весь дом» для тех, кто уже платит ----------
+
+HOME_UPGRADE_MIN = 10_00  # меньше 10 ₽ не берём
+
+
+def _is_home(name):
+    return str(name or "").lstrip().startswith("🏠")
+
+
+async def _upgrade_offer(conn, user_id):
+    """Тарифы для расчёта и ключи, которые можно перевести: активные, не пробные, не «Весь дом», уже в панели.
+    Цена — разница месячных цен («Весь дом» − обычный) за оставшиеся дни, вверх до рубля, не меньше HOME_UPGRADE_MIN."""
+    trial_ids = {r["tariff_id"] for r in await _rows(conn, "SELECT tariff_id FROM trial_offers WHERE tariff_id IS NOT NULL")}
+    tariffs = [t for t in await _rows(conn, """SELECT id, name, duration_days, price_minor, is_active FROM tariffs
+                                               WHERE COALESCE(system_type, '') = '' AND is_active = 1 AND duration_days BETWEEN 1 AND 31""")
+               if t["id"] not in trial_ids]
+    home = min((t for t in tariffs if _is_home(t["name"])), key=lambda t: t["price_minor"], default=None)
+    regular = min((t for t in tariffs if not _is_home(t["name"])), key=lambda t: t["price_minor"], default=None)
+    if not home or not regular:
+        return None, []
+    diff = max(0, home["price_minor"] - regular["price_minor"])
+    keys = await _rows(conn, f"""SELECT k.id, k.custom_name, k.expires_at, k.tariff_id, k.max_ips_override, t.name AS tariff_name,
+            CAST((julianday(k.expires_at) - julianday('now')) AS REAL) AS days
+        FROM vpn_keys k LEFT JOIN tariffs t ON t.id = k.tariff_id
+        WHERE k.user_id = ? AND k.expires_at > datetime('now') AND NOT {DRAFT} AND NOT {TRIAL_KEY}""", (user_id,))
+    out = []
+    for k in keys:
+        if _is_home(k["tariff_name"]):
+            continue
+        days = max(1, int(-(-k["days"] // 1)))
+        price = max(HOME_UPGRADE_MIN, -(-(diff * days // 30) // 100) * 100)
+        out.append({"key_id": k["id"], "name": k["custom_name"] or f"Ключ {k['id']}", "expires_at": k["expires_at"],
+                    "days_left": days, "price_minor": price, "_tariff_id": k["tariff_id"], "_override": k["max_ips_override"]})
+    return {"tariff": home, "monthly_diff_minor": diff}, out
+
+
+@user_router.get("/upgrade")
+async def home_upgrade_offer(user=Depends(auth.current_user)):
+    conn = await db.get_db()
+    try:
+        offer, keys = await _upgrade_offer(conn, user["id"])
+        balance = await _scalar(conn, "SELECT personal_balance FROM users WHERE id = ?", (user["id"],)) or 0
+    finally:
+        await conn.close()
+    return {"available": bool(offer and keys), "balance_minor": balance, "home_devices": HOME_DEVICES,
+            "monthly_diff_minor": offer["monthly_diff_minor"] if offer else None,
+            "keys": [{k: v for k, v in x.items() if not k.startswith("_")} for x in keys]}
+
+
+class UpgradeIn(BaseModel):
+    key_id: int
+
+
+@user_router.post("/upgrade")
+async def home_upgrade(payload: UpgradeIn, user=Depends(auth.current_user)):
+    """Списать доплату с баланса, перевести ключ на тариф «Весь дом» (срок тот же) и отправить лимит в панель.
+    Если панель не приняла — всё возвращаем: деньги на баланс, тариф и лимит как были."""
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        await conn.execute("""CREATE TABLE IF NOT EXISTS pamir_home_upgrades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, at TIMESTAMP NOT NULL, user_id INTEGER NOT NULL, key_id INTEGER NOT NULL,
+            price_minor INTEGER NOT NULL, days_left INTEGER, old_tariff_id INTEGER, new_tariff_id INTEGER, status TEXT NOT NULL)""")
+        offer, keys = await _upgrade_offer(conn, user["id"])
+        key = next((k for k in keys if k["key_id"] == payload.key_id), None)
+        if not offer or not key:
+            raise HTTPException(409, "Этот ключ нельзя перевести на «Весь дом» — он уже на нём, пробный или закончился")
+        price = key["price_minor"]
+        cur = await conn.execute("UPDATE users SET personal_balance = personal_balance - ? WHERE id = ? AND personal_balance >= ?",
+                                 (price, user["id"], price))
+        if cur.rowcount != 1:
+            await conn.rollback()
+            balance = await _scalar(conn, "SELECT personal_balance FROM users WHERE id = ?", (user["id"],)) or 0
+            raise HTTPException(402, f"На балансе не хватает {(price - balance + 99) // 100} ₽ — пополните баланс и повторите")
+        new_override = None if key["_override"] is None else max(int(key["_override"]), HOME_DEVICES)
+        await conn.execute("UPDATE vpn_keys SET tariff_id = ?, max_ips_override = ? WHERE id = ?", (offer["tariff"]["id"], new_override, key["key_id"]))
+        up = await conn.execute("""INSERT INTO pamir_home_upgrades (at, user_id, key_id, price_minor, days_left, old_tariff_id, new_tariff_id, status)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                                (_now(), user["id"], key["key_id"], price, key["days_left"], key["_tariff_id"], offer["tariff"]["id"]))
+        await conn.commit()
+        up_id = up.lastrowid
+        try:
+            data = await _bot("POST", "/mognu-admin/key-sync", {"key_id": key["key_id"]}, 30)
+            ok = bool(data.get("ok"))
+        except HTTPException:
+            ok = False
+        if not ok:
+            await conn.execute("UPDATE users SET personal_balance = personal_balance + ? WHERE id = ?", (price, user["id"]))
+            await conn.execute("UPDATE vpn_keys SET tariff_id = ?, max_ips_override = ? WHERE id = ?", (key["_tariff_id"], key["_override"], key["key_id"]))
+            await conn.execute("UPDATE pamir_home_upgrades SET status = 'refunded' WHERE id = ?", (up_id,))
+            await conn.commit()
+            raise HTTPException(502, "Не получилось применить — деньги вернулись на баланс. Попробуйте через минуту или напишите в поддержку")
+        await conn.execute("UPDATE pamir_home_upgrades SET status = 'done' WHERE id = ?", (up_id,))
+        await conn.commit()
+    finally:
+        await conn.close()
+    return {"ok": True, "key_id": key["key_id"], "price_minor": price, "expires_at": key["expires_at"], "devices": HOME_DEVICES}
+
+
+@router.get("/home-upgrades")
+async def home_upgrades_list(admin=Depends(auth.current_admin)):
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        if not await _scalar(conn, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pamir_home_upgrades'"):
+            return {"items": []}
+        return {"items": await _rows(conn, """SELECT h.*, u.username, u.first_name, u.telegram_id, u.email FROM pamir_home_upgrades h
+                                              LEFT JOIN users u ON u.id = h.user_id ORDER BY h.id DESC LIMIT 100""")}
+    finally:
+        await conn.close()

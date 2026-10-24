@@ -145,7 +145,7 @@ else:
         if t in tables:
             print(f"  {t}: {x.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]} строк; колонки: {', '.join(cols(x, t))}")
     if "nodes" in tables:
-        safe = [c for c in cols(x, "nodes") if not re.search(r"addr|host|ip|url|token|secret|pass|key|cert", c, re.I)]
+        safe = [c for c in cols(x, "nodes") if not re.search(r"addr|host|ip|url|token|secret|pass|key|cert|path|guid|port", c, re.I)]
         for r in x.execute(f"SELECT {', '.join(safe)} FROM nodes"):
             print("    node:", {k: clean(v) for k, v in dict(r).items()})
     if "hosts" in tables:

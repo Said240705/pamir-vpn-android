@@ -26,7 +26,8 @@ def section(t):
 
 def clean(s):
     s = LONG.sub("***", s)
-    return re.sub(r"https?://[^\s'\"]+", "<url>", s)
+    s = re.sub(r"https?://[^\s'\"]+", "<url>", s)
+    return re.sub(r"\b\d{1,3}(\.\d{1,3}){3}\b", "*.*.*.*", s)
 
 
 def func(path, name, limit=70):

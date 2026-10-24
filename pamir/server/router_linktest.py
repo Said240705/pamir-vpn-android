@@ -74,13 +74,17 @@ def check(link, port):
         time.sleep(1.5)
         if proc.poll() is not None:
             return "xray не запустился: " + proc.stderr.read().decode("utf-8", "replace").strip().splitlines()[-1][:120]
-        r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "--max-time", "12",
-                            "--socks5-hostname", f"127.0.0.1:{port}", "https://www.gstatic.com/generate_204"], capture_output=True, text=True)
-        code, _, sec = r.stdout.partition(" ")
-        cc = subprocess.run(["curl", "-s", "--max-time", "8", "--socks5-hostname", f"127.0.0.1:{port}", "https://ipinfo.io/country"],
+        tries = []
+        for url in ("https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204", "https://www.gstatic.com/generate_204"):
+            r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "--max-time", "15",
+                                "--socks5-hostname", f"127.0.0.1:{port}", url], capture_output=True, text=True)
+            code, _, sec = r.stdout.partition(" ")
+            tries.append(f"{code or '—'}/{float(sec or 0):.1f}с")
+        cc = subprocess.run(["curl", "-s", "--max-time", "10", "--socks5-hostname", f"127.0.0.1:{port}", "https://ipinfo.io/country"],
                             capture_output=True, text=True).stdout.strip()[:3]
-        ok = code == "204"
-        return f"{'✅ работает' if ok else '❌ нет связи'} (ответ {code or '—'}, {float(sec or 0):.2f} с" + (f", выход: {cc}" if cc else "") + ")"
+        good = sum(t.startswith("204") for t in tries)
+        verdict = "✅ работает" if good == len(tries) else "⚠️ с перебоями" if good else "❌ нет связи"
+        return f"{verdict} (попытки: {', '.join(tries)}" + (f"; выход: {cc}" if cc else "") + ")"
     finally:
         proc.terminate()
         try:

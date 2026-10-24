@@ -38,7 +38,8 @@ ACTION_RU = {"key.extend": "продлил ключ", "key.delete": "удали�
              "key.sub_url": "смотрел ссылку подписки", "user.balance": "изменил баланс", "user.ban": "блокировка", "user.gift": "подарил дни",
              "user.message": "написал через бота", "user.note": "заметка и метки", "payment.complete": "доделал оплату",
              "report.send": "прислал утренний отчёт", "report.settings": "настроил утренний отчёт",
-             "key.router_links": "смотрел ссылки для роутера", "tariff.create": "создал тариф"}
+             "key.router_links": "смотрел ссылки для роутера", "tariff.create": "создал тариф",
+             "key.devices": "изменил лимит устройств"}
 PURPOSE = {"key_purchase": "Покупка ключа", "key_renewal": "Продление", "balance_topup": "Пополнение баланса",
            "trial": "Пробный период", "device_slot": "Доп. устройство"}
 
@@ -329,7 +330,7 @@ async def user_extra(user_id: int, admin=Depends(auth.current_admin)):
         keys = {}
         for k in await _rows(conn, f"""
                 SELECT k.id, {DRAFT} AS draft, k.expires_at > datetime('now') AS alive, s.name AS server_name,
-                       COALESCE(k.max_ips_override, ds.device_limit, t.max_ips) AS devices_limit, {TRIAL_KEY} AS trial
+                       MAX(COALESCE(k.max_ips_override, t.max_ips, 1), COALESCE(ds.device_limit, 0)) AS devices_limit, {TRIAL_KEY} AS trial
                 FROM vpn_keys k LEFT JOIN servers s ON s.id = k.server_id LEFT JOIN tariffs t ON t.id = k.tariff_id
                 LEFT JOIN key_device_slots ds ON ds.key_id = k.id WHERE k.user_id = ?""", (user_id,)):
             keys[str(k["id"])] = {"status": "draft" if k["draft"] else "active" if k["alive"] else "expired",
@@ -411,6 +412,39 @@ async def key_extend(key_id: int, payload: DaysIn, admin=Depends(auth.current_ad
     data = await _extend(key_id, payload.days)
     await _audit(admin, "key.extend", uid, f"ключ #{key_id} +{payload.days} дн. → до {data.get('expires_at')}")
     return data
+
+
+class DevicesIn(BaseModel):
+    devices: int
+
+
+@router.post("/keys/{key_id}/devices")
+async def key_devices(key_id: int, payload: DevicesIn, admin=Depends(auth.current_admin)):
+    """Личный лимит устройств ключа (max_ips_override) — и сразу в панель через бота. Не вышло в панели — возвращаем как было."""
+    if not 1 <= payload.devices <= 20:
+        raise HTTPException(400, "От 1 до 20 устройств")
+    conn = await db.get_db()
+    try:
+        row = await (await conn.execute("SELECT user_id, max_ips_override, panel_email FROM vpn_keys WHERE id = ?", (key_id,))).fetchone()
+        if not row:
+            raise HTTPException(404, "Ключ не найден")
+        if not row["panel_email"]:
+            raise HTTPException(409, "Ключ ещё не в панели — сначала «Доделать ключ»")
+        old = row["max_ips_override"]
+        await conn.execute("UPDATE vpn_keys SET max_ips_override = ? WHERE id = ?", (payload.devices, key_id))
+        await conn.commit()
+        try:
+            data = await _bot("POST", "/mognu-admin/key-sync", {"key_id": key_id}, 30)
+            if not data.get("ok"):
+                raise HTTPException(502, "Панель не приняла новый лимит")
+        except HTTPException:
+            await conn.execute("UPDATE vpn_keys SET max_ips_override = ? WHERE id = ?", (old, key_id))
+            await conn.commit()
+            raise
+    finally:
+        await conn.close()
+    await _audit(admin, "key.devices", row["user_id"], f"ключ #{key_id}: устройств {old if old is not None else 'по тарифу'} → {payload.devices}")
+    return {"ok": True, "devices": payload.devices}
 
 
 @router.post("/keys/{key_id}/delete")

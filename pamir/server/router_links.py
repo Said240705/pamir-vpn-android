@@ -9,11 +9,12 @@ VLESS + Reality по TCP (их понимают sing-box/Podkop, PassWall, HomeP
 пользуется проверка router_linktest.py.
 """
 import json
+import os
 import re
 import sqlite3
 from urllib.parse import quote, urlparse
 
-XUI_DB = "/etc/x-ui/x-ui.db"
+XUI_DB = os.getenv("PAMIR_XUI_DB", "/etc/x-ui/x-ui.db")
 
 
 def _host(value):

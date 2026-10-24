@@ -8,6 +8,8 @@
         после оплаты из приложения (_run_key_setup_without_delivery, как fix_draft_keys.py);
    POST /mini-app-api/mognu-admin/key-sync {key_id} — отправить срок и лимиты ключа из базы в панель (push_key_to_panel).
 3. main.py: pamir_admin_mognu.track_clients(app) — отметка, с чего человек заходит и платит (копия main.py.bak-adminclients).
+4. Тариф «На весь дом»: router_links.py → routers/pamir_router_links.py и в main.py app.include_router(pamir_admin_mognu.user_router)
+   (адреса кабинета /api/topup/router/keys и /links — прямые ссылки ключа для роутера).
 
     python3 patch_admin_mognu.py          показать, что изменится (ничего не меняет)
     python3 patch_admin_mognu.py --apply  применить; копии рядом: main.py.bak-adminmognu, mini_app_api.py.bak-adminmognu
@@ -23,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 BACKEND = Path(os.getenv("PAMIR_BACKEND", "/root/pamir-vpn-miniapp/backend"))
 MAIN = BACKEND / "main.py"
 ROUTER = BACKEND / "routers" / "pamir_admin_mognu.py"
+LINKS = BACKEND / "routers" / "pamir_router_links.py"
 BOT = Path(os.getenv("PAMIR_BOT_SERVICES", "/root/YadrenoVPN/bot/services")) / "mini_app_api.py"
 APPLY = "--apply" in sys.argv
 MARK = "# Mognu: admin endpoints"
@@ -94,11 +97,13 @@ def backup(path):
 
 
 # 1. роутер и main.py
-for p in (MAIN, BOT, HERE / "admin_mognu.py"):
+for p in (MAIN, BOT, HERE / "admin_mognu.py", HERE / "router_links.py"):
     if not p.exists():
         sys.exit(f"Не нашёл {p} — ничего не менял.")
-step(f"{ROUTER} ← admin_mognu.py")
+step(f"{ROUTER} ← admin_mognu.py, {LINKS.name} ← router_links.py")
 if APPLY:
+    shutil.copyfile(HERE / "router_links.py", LINKS)
+    py_compile.compile(str(LINKS), doraise=True)
     shutil.copyfile(HERE / "admin_mognu.py", ROUTER)
     py_compile.compile(str(ROUTER), doraise=True)
 
@@ -133,6 +138,26 @@ elif TRACK_ANCHOR in main or APPLY:
         py_compile.compile(str(MAIN), doraise=True)
 else:
     step("main.py: отметки, с чего заходят и платят (после подключения роутера)")
+
+# 1в. ссылки для роутера (тариф «На весь дом»)
+main = MAIN.read_text(encoding="utf-8")
+USER_ANCHOR = "pamir_admin_mognu.track_clients(app)\n"
+if "pamir_admin_mognu.user_router" in main:
+    print("main.py уже подключает ссылки для роутера — не трогаю.")
+elif USER_ANCHOR in main or APPLY:
+    step("main.py: ссылки для роутера (pamir_admin_mognu.user_router)")
+    if APPLY:
+        main = MAIN.read_text(encoding="utf-8")
+        if main.count(USER_ANCHOR) != 1:
+            sys.exit("Не нашёл pamir_admin_mognu.track_clients(app) в main.py — ссылки для роутера не подключены.")
+        dst = MAIN.with_name("main.py.bak-routerlinks")
+        if not dst.exists():
+            shutil.copy2(MAIN, dst)
+        print("  копия:", dst)
+        MAIN.write_text(main.replace(USER_ANCHOR, USER_ANCHOR + "app.include_router(pamir_admin_mognu.user_router)\n", 1), encoding="utf-8")
+        py_compile.compile(str(MAIN), doraise=True)
+else:
+    step("main.py: ссылки для роутера (после подключения админки)")
 
 # 2. бот
 bot = BOT.read_text(encoding="utf-8")

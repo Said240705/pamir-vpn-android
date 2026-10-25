@@ -1,6 +1,6 @@
 [package]
 name = "mognu"
-version = "0.4.3"
+version = "0.4.4"
 description = "Mognu для компьютера"
 edition = "2021"
 publish = false

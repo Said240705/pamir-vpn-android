@@ -56,8 +56,43 @@ fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
     Some((it.next()??, it.next()??, it.next().flatten().unwrap_or(0)))
 }
 
-/// Новая версия, если она есть; None — эта самая свежая.
+/// Зеркала на наших сайтах (sync-release.py кладёт туда установщик и windows.json) — если GitHub не открывается.
+const MIRRORS: [&str; 2] = ["https://mognu.app", "https://app.pamirlink.ru"];
+
+#[derive(Deserialize)]
+struct MirrorMeta {
+    version: String,
+    file: String,
+    size: u64,
+    sha256: String,
+}
+
+/// Новая версия, если она есть; None — эта самая свежая. Сначала GitHub, при ошибке — зеркала.
 pub async fn check(proxy: Option<u16>) -> Result<Option<Update>, String> {
+    let err = match check_github(proxy).await {
+        Ok(u) => return Ok(u),
+        Err(e) => e,
+    };
+    let current = parse_version(env!("CARGO_PKG_VERSION")).ok_or("версия программы")?;
+    for host in MIRRORS {
+        let Ok(res) = client(proxy, Duration::from_secs(12))?.get(format!("{host}/download/windows.json")).send().await else { continue };
+        let Ok(text) = res.text().await else { continue };
+        let Ok(m) = serde_json::from_str::<MirrorMeta>(&text) else { continue };
+        let Some(v) = parse_version(&m.version) else { continue };
+        // имя файла только из букв, цифр, точек и дефисов — без путей
+        if m.sha256.len() != 64 || !m.file.chars().all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c)) {
+            continue;
+        }
+        if v <= current {
+            return Ok(None);
+        }
+        let version = format!("{}.{}.{}", v.0, v.1, v.2);
+        return Ok(Some(Update { version, url: format!("{host}/download/{}", m.file), size: m.size, sha256: m.sha256.to_lowercase() }));
+    }
+    Err(err)
+}
+
+async fn check_github(proxy: Option<u16>) -> Result<Option<Update>, String> {
     let current = parse_version(env!("CARGO_PKG_VERSION")).ok_or("версия программы")?;
     let text = client(proxy, Duration::from_secs(20))?
         .get(RELEASES)

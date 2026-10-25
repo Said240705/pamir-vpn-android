@@ -1153,14 +1153,16 @@ $("update").onclick = (e) => {
   if (id === "update-go") startUpdate();
   else if (id === "update-now") applyUpdate();
   else if (id === "update-later") renderUpdate("");
-  else if (id === "update-manual" && pendingUpdate) invoke("open_url", { url: releasePage(pendingUpdate.version) }).catch(() => {});
+  // прямая ссылка на установщик (GitHub или зеркало на нашем сайте) — браузер скачает его сам
+  else if (id === "update-manual" && pendingUpdate) invoke("open_url", { url: pendingUpdate.url || releasePage(pendingUpdate.version) }).catch(() => {});
 };
 
 // «Проверить обновления» в настройках: ответ прямо в строке, окно настроек не закрывается
 $("update-check").onclick = async () => {
   const st = $("update-check-state"), btn = $("update-check");
   if (btn.dataset.busy) return;
-  if (btn.dataset.found) { $("settings").hidden = true; renderUpdate("ready"); return; }
+  // уже нашли версию — показать баннер (если обновление уже идёт, просто к нему)
+  if (btn.dataset.found) { $("settings").hidden = true; if (!upState || upState === "error") renderUpdate("ready"); return; }
   btn.dataset.busy = "1"; st.className = "uc-state busy"; st.innerHTML = '<i class="mini-spin" aria-hidden="true"></i>Проверяем…';
   try {
     const u = await checkUpdate();

@@ -6,10 +6,15 @@ download/android.json, it downloads both APKs to temporary files, checks their s
 keeps the previous files in bak-<old version>/, then swaps the APKs and android.json in.
 Nothing changes when the release is not newer or any download fails.
 
+Windows: the newest desktop-v* pre-release goes to Mognu-Setup-<version>.exe and Mognu-Setup.exe (the site's
+download button) with windows.json {version, file, size, sha256}. The installer is checked against GitHub's
+SHA-256 before it replaces anything. The Windows app falls back to windows.json when GitHub is unreachable.
+
 Env:
   PAMIR_REPO  GitHub repository, default Said240705/pamir-vpn-android
   PAMIR_DIR   site download folder, default /var/www/pamir-miniapp/frontend/download
 """
+import hashlib
 import json
 import os
 import re
@@ -42,7 +47,7 @@ def fetch(url, timeout=60):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def main():
+def sync_android():
     meta_path = os.path.join(DIR, 'android.json')
     try:
         current = json.load(open(meta_path, encoding='utf-8')).get('version', '0')
@@ -99,6 +104,64 @@ def main():
         if d.startswith('bak-') and d != os.path.basename(bak):
             shutil.rmtree(os.path.join(DIR, d), ignore_errors=True)
     log(f'done: {version}')
+
+
+def sync_windows():
+    meta_path = os.path.join(DIR, 'windows.json')
+    try:
+        current = json.load(open(meta_path, encoding='utf-8')).get('version', '0')
+    except (OSError, ValueError):
+        current = '0'
+    best = None
+    for r in json.load(fetch(f'https://api.github.com/repos/{REPO}/releases?per_page=30')):
+        tag = r.get('tag_name', '')
+        if r.get('draft') or not re.fullmatch(r'desktop-v\d+\.\d+\.\d+', tag):
+            continue
+        version = tag[len('desktop-v'):]
+        exe = next((a for a in r.get('assets', []) if re.fullmatch(r'Mognu-Setup-[\d.]+\.exe', a['name'])), None)
+        digest = (exe or {}).get('digest') or ''
+        if exe and digest.startswith('sha256:') and (best is None or newer(version, best[0])):
+            best = (version, exe, digest[len('sha256:'):].lower())
+    if not best or not newer(best[0], current):
+        return
+    version, exe, sha = best
+    log(f'windows {current} -> {version}')
+    name = f'Mognu-Setup-{version}.exe'
+    path = os.path.join(DIR, name + '.new')
+    try:
+        digest = hashlib.sha256()
+        with fetch(exe['browser_download_url'], timeout=300) as src, open(path, 'wb') as out:
+            while chunk := src.read(1024 * 1024):
+                digest.update(chunk)
+                out.write(chunk)
+        if os.path.getsize(path) != exe['size'] or digest.hexdigest() != sha:
+            raise IOError(f'{exe["name"]}: size or SHA-256 does not match GitHub')
+    except Exception:
+        if os.path.exists(path):
+            os.remove(path)
+        raise
+    os.replace(path, os.path.join(DIR, name))
+    shutil.copy2(os.path.join(DIR, name), os.path.join(DIR, 'Mognu-Setup.exe.new'))
+    os.replace(os.path.join(DIR, 'Mognu-Setup.exe.new'), os.path.join(DIR, 'Mognu-Setup.exe'))
+    with open(meta_path + '.new', 'w', encoding='utf-8') as out:
+        json.dump({'version': version, 'file': name, 'size': exe['size'], 'sha256': sha}, out)
+    os.replace(meta_path + '.new', meta_path)
+    # only the current versioned installer stays
+    for f in os.listdir(DIR):
+        if re.fullmatch(r'Mognu-Setup-[\d.]+\.exe', f) and f != name:
+            os.remove(os.path.join(DIR, f))
+    log(f'windows done: {version}')
+
+
+def main():
+    code = 0
+    for step in (sync_android, sync_windows):
+        try:
+            code = step() or code
+        except Exception as e:  # one platform failing must not stop the other
+            log(f'{step.__name__}: {e}')
+            code = 1
+    return code
 
 
 if __name__ == '__main__':

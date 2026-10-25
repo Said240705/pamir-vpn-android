@@ -141,7 +141,7 @@ jobs:
         echo "min version: ${MIN:-none}"
 
     - name: Publish release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: v${{ inputs.version }}
         name: Mognu VPN ${{ inputs.version }}${{ inputs.prerelease && ' (тест)' || '' }}

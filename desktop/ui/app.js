@@ -530,19 +530,32 @@ function renderRenew() {
   const group = key ? Number(key.tariff_group_id) || 0 : 0;
   let list = R.tariffs.filter((t) => !group || !Number(t.group_id) || Number(t.group_id) === group);
   if (!list.length) list = R.tariffs;
+  // «Весь дом» продлевается только тарифами «Весь дом», обычный ключ — только обычными; при покупке — два блока
+  const home = (name) => /^\s*🏠/.test(name || "");
+  if (key && !R.buy) {
+    const same = list.filter((t) => home(t.name) === home(key.tariff_name));
+    if (same.length) list = same;
+  }
+  const regular = list.filter((t) => !home(t.name)), homes = list.filter((t) => home(t.name));
+  $("renew-title").textContent = R.buy ? "Купить подписку" : key && home(key.tariff_name) ? "🏠 Продлить «Весь дом»" : "Продление";
+  const card = (t) => {
+    const price = Number(t.price_minor) || 0, days = Number(t.duration_days) || 0, id = t.id, isHome = home(t.name);
+    const name = isHome ? String(t.name).replace(/^\s*🏠\s*Весь дом\s*·\s*/, "") : t.name;
+    const canBalance = R.balance !== null && R.balance >= price;
+    return `<div class="tariff${isHome ? " t-home" : ""}"><div class="t-head"><span><b>${esc(name || "Тариф")}</b>${days ? `<small>${days} ${plural(days, "день", "дня", "дней")}</small>` : ""}</span><b class="t-price">${rub(price)}</b></div>` +
+      `<div class="dev-acts"><button class="btn primary" data-pay="${id}:yookassa_qr"${R.busy ? " disabled" : ""}>${R.busy === id + ":yookassa_qr" ? "Создаём оплату…" : "СБП / Карта"}</button>` +
+      (canBalance ? `<button class="btn" data-pay="${id}:balance"${R.busy ? " disabled" : ""}>${R.busy === id + ":balance" ? "Оплачиваем…" : "С баланса"}</button>` : "") + "</div></div>";
+  };
+  const homeBlock = homes.length
+    ? `<div class="t-home-block"><div class="t-home-head"><b>🏠 Весь дом</b><small>Один ключ: роутер дома + 2 устройства с собой. Безлимитный трафик.</small></div>${homes.map(card).join("")}</div>`
+    : "";
   const keys = !R.buy && S.allKeys.length > 1
     ? `<div class="keys renew-keys">${S.allKeys.map((k) => `<button data-rkey="${k.id}" class="${k.id === R.keyId ? "on" : ""}">${esc(k.display_name || "Ключ")}</button>`).join("")}</div>`
     : "";
   b.innerHTML =
     keys + (key && !R.buy ? `<p class="muted small" style="margin:0 0 8px">«${esc(key.display_name || "Ключ")}» · ${esc(keyDate(key))}</p>` : "") +
     (R.error ? `<p class="small" style="color:var(--danger);margin:0 0 8px">${esc(R.error)}</p>` : "") +
-    (list.length ? list.map((t) => {
-      const price = Number(t.price_minor) || 0, days = Number(t.duration_days) || 0, id = t.id;
-      const canBalance = R.balance !== null && R.balance >= price;
-      return `<div class="tariff"><div class="t-head"><span><b>${esc(t.name || "Тариф")}</b>${days ? `<small>${days} ${plural(days, "день", "дня", "дней")}</small>` : ""}</span><b class="t-price">${rub(price)}</b></div>` +
-        `<div class="dev-acts"><button class="btn primary" data-pay="${id}:yookassa_qr"${R.busy ? " disabled" : ""}>${R.busy === id + ":yookassa_qr" ? "Создаём оплату…" : "СБП / Карта"}</button>` +
-        (canBalance ? `<button class="btn" data-pay="${id}:balance"${R.busy ? " disabled" : ""}>${R.busy === id + ":balance" ? "Оплачиваем…" : "С баланса"}</button>` : "") + "</div></div>";
-    }).join("") : '<p class="muted">Тарифы сейчас недоступны — попробуй позже или оформи в кабинете.</p>') +
+    (list.length ? regular.map(card).join("") + homeBlock : '<p class="muted">Тарифы сейчас недоступны — попробуй позже или оформи в кабинете.</p>') +
     (R.balance !== null ? `<p class="muted small center" style="margin:10px 0 0">На балансе: ${rub(R.balance)}</p>` : "") +
     '<p class="small center" style="margin:6px 0 0"><a href="#" data-open="/?screen=balance">Промокод и пополнение — в кабинете</a></p>';
 }

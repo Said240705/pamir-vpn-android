@@ -348,6 +348,14 @@ label.tog:hover { background: rgba(255, 255, 255, .04); }
 .t-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .t-head small { display: block; color: var(--dim); font-size: 12.5px; }
 .t-price { font: 800 19px var(--display); color: var(--mint); white-space: nowrap; }
+/* тарифы «Весь дом» — отдельный ночной блок под обычными */
+.t-home-block { margin-top: 14px; padding: 12px; border-radius: 20px; background: linear-gradient(180deg, #1A0F4C, #120A36);
+  box-shadow: 0 0 0 1.5px rgba(200, 255, 46, .4), 0 14px 32px -18px rgba(200, 255, 46, .45); }
+.t-home-head { padding: 2px 4px 10px; }
+.t-home-head b { display: block; font: 800 16px var(--display); }
+.t-home-head small { display: block; margin-top: 3px; color: var(--dim); font-size: 12.5px; }
+.tariff.t-home { background: rgba(255, 255, 255, .06); border-color: rgba(200, 255, 46, .18); }
+.tariff.t-home:last-child { margin-bottom: 0; }
 .pay-wait { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 16px 4px 4px; }
 .pay-wait b { font: 800 18px var(--display); }
 .pay-wait p { margin: 0 0 6px; max-width: 340px; }

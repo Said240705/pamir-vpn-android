@@ -130,21 +130,24 @@ fn core_stop(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn core_running(state: State<AppState>) -> bool {
-    state.core.lock().map(|mut c| c.running()).unwrap_or(false)
+// async: core_start держит ядро ~0,7 с — эти команды подождут его не в главном потоке окна
+// (async-команды со State Tauri требует возвращать Result)
+#[tauri::command(async)]
+fn core_running(state: State<AppState>) -> Result<bool, String> {
+    Ok(state.core.lock().map(|mut c| c.running()).unwrap_or(false))
 }
 
-#[tauri::command]
-fn core_note(state: State<AppState>, text: String) {
+#[tauri::command(async)]
+fn core_note(state: State<AppState>, text: String) -> Result<(), String> {
     if let Ok(c) = state.core.lock() {
         c.note(text);
     }
+    Ok(())
 }
 
-#[tauri::command]
-fn core_log(state: State<AppState>) -> String {
-    state.core.lock().map(|c| c.log_tail()).unwrap_or_default()
+#[tauri::command(async)]
+fn core_log(state: State<AppState>) -> Result<String, String> {
+    Ok(state.core.lock().map(|c| c.log_tail()).unwrap_or_default())
 }
 
 #[tauri::command(async)]
@@ -294,7 +297,7 @@ async fn update_download(app: AppHandle, u: update::Update, proxy: Option<u16>) 
     Ok(())
 }
 
-/// Поставить скачанную версию: снять прокси, остановить ядро, запустить установщик и выйти — он откроет новую версию.
+/// Поставить скачанную версию: запустить установщик, снять прокси, остановить ядро и выйти — он откроет новую версию.
 #[tauri::command]
 fn update_apply(app: AppHandle, reconnect: bool) -> Result<(), String> {
     let setup = UPDATE_SETUP.lock().map_err(|e| e.to_string())?.clone().ok_or("обновление ещё не скачано")?;
@@ -303,11 +306,18 @@ fn update_apply(app: AppHandle, reconnect: bool) -> Result<(), String> {
         let note = serde_json::json!({ "from": env!("CARGO_PKG_VERSION"), "reconnect": reconnect });
         let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(AFTER_UPDATE), note.to_string()));
     }
+    // сначала установщик: не запустился — ничего не трогаем, VPN остаётся как был
+    if let Err(e) = update::run_installer(&setup) {
+        if let Ok(dir) = app.path().app_data_dir() {
+            let _ = std::fs::remove_file(dir.join(AFTER_UPDATE));
+        }
+        return Err(e);
+    }
+    // установщик подождёт 1,5 с (hooks.nsh): за это время снимаем прокси, останавливаем ядро и выходим
     let _ = sysproxy::clear_ours();
     if let Ok(mut c) = app.state::<AppState>().core.lock() {
         c.stop();
     }
-    update::run_installer(&setup)?;
     app.exit(0);
     Ok(())
 }

@@ -1,8 +1,11 @@
 //! Обновление Mognu для Windows: новые версии — пре-релизы desktop-v<версия> на GitHub с установщиком Mognu-Setup-*.exe.
 //! Проверка — список релизов GitHub; скачивание — установщик с проверкой размера и SHA-256 из самого GitHub (поле digest).
 //! Пока Mognu подключён, всё идёт через подключение — так обновление работает и там, где GitHub закрыт.
-//! Установка — после выхода программы: маленький командный файл ждёт, пока mognu.exe закроется, тихо ставит новую
-//! версию поверх (ключ и настройки остаются) и запускает её снова.
+//! Установка: программа сама снимает прокси и останавливает ядро, запускает установщик тихо (/S) с /MOGNURUN и выходит.
+//! Установщик закрывает оставшуюся копию, ставит новую версию поверх (ключ и настройки остаются) и по /MOGNURUN
+//! открывает её снова (installer/hooks.nsh). До 0.4.3 это делал командный файл .cmd: cmd читает его в кодировке OEM,
+//! и при русских буквах в имени пользователя (а значит, и в пути к TEMP) путь к установщику ломался — обновление
+//! тихо не ставилось. Установщик теперь запускается напрямую, с путём в Юникоде.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -84,17 +87,26 @@ pub async fn check(proxy: Option<u16>) -> Result<Option<Update>, String> {
 }
 
 /// Скачивает установщик во временную папку и проверяет размер и SHA-256. Возвращает путь к файлу.
-pub async fn download(u: &Update, proxy: Option<u16>) -> Result<std::path::PathBuf, String> {
-    let bytes = client(proxy, Duration::from_secs(600))?
+/// progress(скачано, всего) вызывается по ходу — для полоски в окне.
+pub async fn download(u: &Update, proxy: Option<u16>, progress: impl Fn(u64, u64)) -> Result<std::path::PathBuf, String> {
+    let mut res = client(proxy, Duration::from_secs(600))?
         .get(&u.url)
         .send()
         .await
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .bytes()
-        .await
         .map_err(|e| e.to_string())?;
+    let mut bytes: Vec<u8> = Vec::with_capacity(u.size as usize);
+    let mut last = 0u64;
+    while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+        bytes.extend_from_slice(&chunk);
+        let done = bytes.len() as u64;
+        // не чаще, чем раз в ~100 КБ: окну хватает, а событий не тысячи
+        if done - last >= 100_000 || done == u.size {
+            last = done;
+            progress(done, u.size);
+        }
+    }
     if bytes.len() as u64 != u.size {
         return Err(format!("скачалось не полностью ({} из {} байт)", bytes.len(), u.size));
     }
@@ -107,34 +119,19 @@ pub async fn download(u: &Update, proxy: Option<u16>) -> Result<std::path::PathB
     Ok(path)
 }
 
-/// Запускает тихую установку, которая дождётся выхода этой копии и потом откроет новую версию.
-/// Сама программа после этого должна выйти (main.rs: quit).
+/// Запускает тихую установку с повторным открытием программы (/MOGNURUN, installer/hooks.nsh).
+/// Перед этим программа уже сняла прокси и остановила ядро; сразу после — выходит (main.rs: update_apply).
 #[cfg(windows)]
-pub fn install_after_exit(setup: &std::path::Path) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let pid = std::process::id();
-    let script = std::env::temp_dir().join("mognu-update.cmd");
-    // ждём, пока закроется эта копия (иначе файлы программы заняты), ставим тихо (/S) и запускаем новую
-    let body = format!(
-        "@echo off\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | find \"{pid}\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n\"{setup}\" /S\r\nstart \"\" \"{exe}\"\r\ndel \"%~f0\"\r\n",
-        setup = setup.display(),
-        exe = exe.display(),
-    );
-    std::fs::write(&script, body).map_err(|e| e.to_string())?;
-    std::process::Command::new("cmd")
-        .arg("/C")
-        .arg(&script)
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+pub fn run_installer(setup: &std::path::Path) -> Result<(), String> {
+    std::process::Command::new(setup)
+        .args(["/S", "/MOGNURUN"])
         .spawn()
         .map_err(|e| format!("не удалось запустить установку: {e}"))?;
     Ok(())
 }
 
 #[cfg(not(windows))]
-pub fn install_after_exit(_setup: &std::path::Path) -> Result<(), String> {
+pub fn run_installer(_setup: &std::path::Path) -> Result<(), String> {
     Err("только для Windows".into())
 }
 

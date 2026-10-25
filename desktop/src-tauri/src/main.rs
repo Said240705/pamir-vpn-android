@@ -109,7 +109,7 @@ struct Ports {
 }
 
 /// Три свободных порта на 127.0.0.1: входы ядра и его счётчики. Слушатели держим до конца, чтобы порты не совпали.
-#[tauri::command]
+#[tauri::command(async)]
 fn free_ports() -> Result<Ports, String> {
     let bind = || TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string());
     let (a, b, c) = (bind()?, bind()?, bind()?);
@@ -117,13 +117,13 @@ fn free_ports() -> Result<Ports, String> {
     Ok(Ports { socks: port(&a)?, http: port(&b)?, metrics: port(&c)? })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn core_start(app: tauri::AppHandle, state: State<AppState>, config: String) -> Result<(), String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     state.core.lock().map_err(|e| e.to_string())?.start(&dir, &config)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn core_stop(state: State<AppState>) -> Result<(), String> {
     let _ = sysproxy::clear_ours();
     state.core.lock().map_err(|e| e.to_string())?.stop();
@@ -147,7 +147,7 @@ fn core_log(state: State<AppState>) -> String {
     state.core.lock().map(|c| c.log_tail()).unwrap_or_default()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn proxy_set(port: Option<u16>) -> Result<(), String> {
     match port {
         Some(p) => sysproxy::set(p),
@@ -235,12 +235,21 @@ struct Launch {
     handoff: bool,
     /// стартовали вместе с Windows: окно спрятано в трее
     autostart: bool,
+    /// первый запуск после автообновления: {from, reconnect} из update_apply (файл after_update.json, читается один раз)
+    after_update: Option<serde_json::Value>,
 }
 
+const AFTER_UPDATE: &str = "after_update.json";
+
 #[tauri::command]
-fn launch_info() -> Launch {
+fn launch_info(app: AppHandle) -> Launch {
     let arg = |x: &str| std::env::args().any(|a| a == x);
-    Launch { elevated: elevate::is_elevated(), handoff: arg(elevate::HANDOFF), autostart: arg(autostart::ARG) }
+    let after_update = app.path().app_data_dir().ok().map(|d| d.join(AFTER_UPDATE)).and_then(|f| {
+        let v = std::fs::read_to_string(&f).ok().and_then(|t| serde_json::from_str(&t).ok());
+        let _ = std::fs::remove_file(&f);
+        v
+    });
+    Launch { elevated: elevate::is_elevated(), handoff: arg(elevate::HANDOFF), autostart: arg(autostart::ARG), after_update }
 }
 
 /// Запуск вместе с Windows: включён ли и включить/выключить.
@@ -271,12 +280,35 @@ async fn update_check(proxy: Option<u16>) -> Result<Option<update::Update>, Stri
     update::check(proxy).await
 }
 
-/// Скачать и проверить новую версию, затем выйти: установка пройдёт тихо и откроет обновлённый Mognu.
+/// Скачанный и проверенный установщик ждёт, пока человек увидит «Готово» и программа перезапустится.
+static UPDATE_SETUP: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+/// Скачать и проверить новую версию. Ход скачивания — событие update-progress {done, total}.
 #[tauri::command]
-async fn update_install(app: AppHandle, u: update::Update, proxy: Option<u16>) -> Result<(), String> {
-    let setup = update::download(&u, proxy).await?;
-    update::install_after_exit(&setup)?;
-    quit(&app);
+async fn update_download(app: AppHandle, u: update::Update, proxy: Option<u16>) -> Result<(), String> {
+    let setup = update::download(&u, proxy, |done, total| {
+        let _ = app.emit("update-progress", serde_json::json!({ "done": done, "total": total }));
+    })
+    .await?;
+    *UPDATE_SETUP.lock().map_err(|e| e.to_string())? = Some(setup);
+    Ok(())
+}
+
+/// Поставить скачанную версию: снять прокси, остановить ядро, запустить установщик и выйти — он откроет новую версию.
+#[tauri::command]
+fn update_apply(app: AppHandle, reconnect: bool) -> Result<(), String> {
+    let setup = UPDATE_SETUP.lock().map_err(|e| e.to_string())?.clone().ok_or("обновление ещё не скачано")?;
+    // новая копия прочитает это при запуске (launch_info): покажет «Обновлено» и, если VPN был включён, подключится
+    if let Ok(dir) = app.path().app_data_dir() {
+        let note = serde_json::json!({ "from": env!("CARGO_PKG_VERSION"), "reconnect": reconnect });
+        let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(dir.join(AFTER_UPDATE), note.to_string()));
+    }
+    let _ = sysproxy::clear_ours();
+    if let Ok(mut c) = app.state::<AppState>().core.lock() {
+        c.stop();
+    }
+    update::run_installer(&setup)?;
+    app.exit(0);
     Ok(())
 }
 
@@ -286,6 +318,18 @@ fn open_url(url: String) -> Result<(), String> {
         return Err("только https и tg ссылки".into());
     }
     open::that_detached(url).map_err(|e| e.to_string())
+}
+
+/// Номер сборки Windows (10 — до 22000, 11 — от 22000); 0, если прочитать не удалось.
+#[cfg(windows)]
+fn windows_build() -> u32 {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        .and_then(|k| k.get_value::<String, _>("CurrentBuildNumber"))
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 fn main() {
@@ -304,6 +348,14 @@ fn main() {
         .manage(AppState { core: Mutex::new(core::Core::default()) })
         .setup(|app| {
             build_tray(app)?;
+            // Windows 10 (сборка < 22000): у окна без рамки с тенью система рисует светлую полоску по краю — там тень
+            // выключаем. Убрать, когда перестанем поддерживать Windows 10. На Windows 11 тень и скругления остаются.
+            #[cfg(windows)]
+            if (1..22000).contains(&windows_build()) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_shadow(false);
+                }
+            }
             // окно создаётся скрытым (tauri.conf.json): при запуске вместе с Windows так и остаётся в трее
             if !std::env::args().any(|a| a == autostart::ARG) {
                 show_main(app.handle());
@@ -327,7 +379,7 @@ fn main() {
                 let _ = w.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, autostart_get, autostart_set, update_check, update_install])
+        .invoke_handler(tauri::generate_handler![free_ports, core_start, core_stop, core_running, core_log, core_note, proxy_set, http, tcp_ping, open_url, demo, tray_state, launch_info, relaunch_elevated, autostart_get, autostart_set, update_check, update_download, update_apply])
         .build(tauri::generate_context!())
         .expect("Mognu VPN не запустился");
 

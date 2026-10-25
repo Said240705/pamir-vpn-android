@@ -20,6 +20,8 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+/* фон и у html: при масштабе 125% окно бывает на долю пикселя выше страницы — без него снизу светлая полоска */
+html { background: #0A0826; }
 html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
@@ -169,13 +171,21 @@ input:focus { border-color: var(--mint); }
 .halo { position: absolute; inset: 0; pointer-events: none; }
 .halo i { position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(var(--mint-rgb), .5); opacity: 0; }
 .power[data-state="on"] .halo i { animation: ripple 3.6s ease-out infinite; }
+/* подключаем: быстрые волны и второе встречное кольцо — видно, что идёт работа */
+.power[data-state="busy"] .halo i { animation: ripple 1.6s ease-out infinite; }
+.power[data-state="busy"] .halo i:nth-child(2) { animation-delay: .53s; }
+.power[data-state="busy"] .halo i:nth-child(3) { animation-delay: 1.06s; }
+.power[data-state="busy"]::after { content: ""; position: absolute; inset: -12px; border-radius: 50%; border: 2px dashed rgba(var(--mint-rgb), .35);
+  animation: spin 6s linear infinite reverse; pointer-events: none; }
 .power[data-state="on"] .halo i:nth-child(2) { animation-delay: 1.2s; }
 .power[data-state="on"] .halo i:nth-child(3) { animation-delay: 2.4s; }
 @keyframes ripple { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.55); opacity: 0; } }
 
 .stage h2 { font: 800 24px var(--display); margin: 0 0 6px; letter-spacing: -.02em; transition: color .3s; }
 .stage h2.on { color: var(--mint); }
-.state-sub { margin: 0; font-size: 14.5px; color: var(--dim); display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 22px; }
+.state-sub { margin: 0; font-size: 14.5px; color: var(--dim); display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; min-height: 22px; }
+.state-sub .step { flex-basis: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--mint); animation: in .3s ease; }
+.state-sub .step i { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(var(--mint-rgb), .25); border-top-color: var(--mint); animation: spin .8s linear infinite; }
 .state-sub b { color: var(--text); }
 
 .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: 100%; max-width: 440px; margin-top: 16px; }
@@ -198,9 +208,42 @@ input:focus { border-color: var(--mint); }
 .notice > .btn { margin-top: 10px; }
 .ask-btns { display: flex; gap: 8px; margin-top: 12px; }
 .ask-btns .btn { padding: 10px 14px; }
-.update { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 16px; border-radius: 18px; background: rgba(var(--mint-rgb), .1); border: 1px solid rgba(var(--mint-rgb), .4); }
-.update > div { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.update .btn { width: auto; padding: 9px 14px; }
+/* баннер обновления: шаги «есть версия → скачиваем → перезапуск», ошибка с «Повторить» */
+.update { flex: none; position: relative; overflow: hidden; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 14px; padding: 14px 14px 14px 16px; border-radius: 20px;
+  background: linear-gradient(120deg, rgba(var(--mint-rgb), .16), rgba(106, 61, 245, .16) 60%, rgba(255, 255, 255, .04));
+  border: 1px solid rgba(var(--mint-rgb), .45); box-shadow: 0 14px 40px -18px rgba(var(--mint-rgb), .5); animation: upIn .45s cubic-bezier(.2, .9, .3, 1.15); }
+.update::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .09) 50%, transparent 70%);
+  transform: translateX(-100%); animation: upShine 4.5s ease-in-out 1s infinite; }
+@keyframes upIn { from { opacity: 0; transform: translateY(-8px) scale(.98); } }
+@keyframes upShine { 0%, 60% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+.up-ico { flex: none; width: 46px; height: 46px; border-radius: 15px; display: grid; place-items: center; background: var(--mint); color: var(--on-mint);
+  box-shadow: 0 8px 22px -6px rgba(var(--mint-rgb), .6); }
+.up-ico svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; animation: upNudge 2.4s ease-in-out infinite; }
+@keyframes upNudge { 50% { transform: translateY(3px); } }
+.update[data-state="download"] .up-ico svg { animation-duration: .9s; }
+.update[data-state="error"] .up-ico { background: rgba(255, 107, 107, .18); color: var(--danger); box-shadow: none; }
+.update[data-state="done"] .up-ico svg { animation: none; }
+.up-text { flex: 1 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.up-tag { align-self: flex-start; padding: 2px 9px; border-radius: 99px; font: 800 10.5px var(--display); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--mint); background: rgba(var(--mint-rgb), .14); }
+.up-text b { font: 800 16px var(--display); }
+.up-bar { display: block; height: 6px; margin-top: 6px; border-radius: 99px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.up-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, #A3E000, var(--mint)); transition: width .3s ease;
+  background-size: 200% 100%; animation: upFlow 1.2s linear infinite; }
+@keyframes upFlow { from { background-position: 200% 0; } to { background-position: 0 0; } }
+.update[data-state="verify"] .up-bar i, .update[data-state="restart"] .up-bar i { animation: upPulse 1s ease-in-out infinite alternate; }
+@keyframes upPulse { to { opacity: .55; } }
+.up-acts { flex: 1 1 100%; display: flex; align-items: center; justify-content: flex-end; gap: 14px; position: relative; z-index: 1; }
+.up-acts:empty { display: none; }
+.up-acts .btn { width: auto; padding: 10px 16px; }
+.up-acts .link { font-size: 13.5px; color: var(--dim); }
+.up-acts .link:hover { color: var(--text); }
+/* «Проверить обновления» в настройках: ответ в той же строке */
+.uc-state { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13px; }
+.row-btn .uc-state.ok { color: var(--mint); }
+.row-btn .uc-state.found { color: var(--on-mint); background: var(--mint); padding: 3px 10px; border-radius: 99px; font-weight: 800; }
+.row-btn .uc-state.err { color: var(--warn); }
+.mini-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(var(--mint-rgb), .25); border-top-color: var(--mint); animation: spin .8s linear infinite; }
 
 /* ── серверы ──────────────────────────────────────────────────────────────── */
 .panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
@@ -397,3 +440,16 @@ label.tog:hover { background: rgba(255, 255, 255, .04); }
 .chat-foot { text-align: center; min-height: 18px; }
 .chat-foot a { font-size: 12.5px; color: var(--dim); font-weight: 600; }
 @media (min-width: 900px) { .sheet.chat { width: 560px; height: min(680px, 86vh); } }
+
+/* «Обновить» у серверов: значок крутится, пинги «ищутся» */
+#refresh.busy svg { animation: spin .8s linear infinite; }
+#refresh.busy { color: var(--dim); pointer-events: none; }
+#refresh.done { color: var(--mint); }
+.ping.wait { gap: 4px; }
+.ping.wait i { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); opacity: .3; animation: pingDot 1s ease-in-out infinite; }
+.ping.wait i:nth-child(2) { animation-delay: .15s; } .ping.wait i:nth-child(3) { animation-delay: .3s; }
+@keyframes pingDot { 40% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .update, .update::after, .up-ico svg, .up-bar i, .power[data-state="busy"]::after, .ping.wait i, #refresh.busy svg { animation: none !important; }
+}
+#update-check > span:first-child { color: var(--text); }

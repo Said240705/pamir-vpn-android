@@ -364,7 +364,8 @@ const BARS = '<span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>
 function pingHtml(k) {
   const ping = S.pings[k];
   const cls = ping == null ? "" : ping < 150 ? "good" : ping < 400 ? "mid" : "bad";
-  return `<span class="ping ${cls}">${ping == null ? (k in S.pings ? "нет ответа" : "…") : ping + " мс"}${BARS}</span>`;
+  if (ping == null && !(k in S.pings)) return '<span class="ping wait" aria-label="Измеряем"><i></i><i></i><i></i></span>';
+  return `<span class="ping ${cls}">${ping == null ? "нет ответа" : ping + " мс"}${BARS}</span>`;
 }
 
 function row(p) {
@@ -870,7 +871,10 @@ function renderPower() {
   title.classList.toggle("on", S.state === "on");
   const ping = srv && S.pings[keyOf(srv)];
   if (S.state === "on") { title.textContent = "Подключено"; sub.innerHTML = label + (ping ? ` <span class="muted">· ${ping} мс</span>` : ""); }
-  else if (S.state === "busy") { title.textContent = S.healing ? "Переподключаемся…" : "Подключаем…"; sub.innerHTML = label; }
+  else if (S.state === "busy") {
+    title.textContent = S.healing ? "Переподключаемся…" : "Подключаем…";
+    sub.innerHTML = label + (S.step ? `<span class="step" aria-live="polite"><i></i>${esc(S.step)}</span>` : "");
+  }
   else if (S.state === "paused") {
     title.textContent = "Нет связи с сервером";
     sub.textContent = "Интернет на паузе, чтобы ничего не ушло мимо VPN. Пробуем снова…";
@@ -899,22 +903,27 @@ async function connect() {
   // режим «весь трафик» без прав администратора — сначала перезапуск через окно Windows, подключится новая копия
   if (S.mode === "tun" && !S.launch.elevated) { elevate(); return; }
   const tun = S.mode === "tun";
-  S.active = srv; S.state = "busy"; renderPower();
+  // шаги под кнопкой: человек видит, что идёт работа, а не зависание
+  const step = (t) => { S.step = t; if (S.state === "busy") renderPower(); };
+  S.active = srv; S.state = "busy"; step("Запускаем защищённый туннель");
   try {
     const ports = await invoke("free_ports");
     await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, coreOpts())) });
+    step("Стучимся на сервер " + cleanName(srv.name).name);
+    await new Promise((r) => setTimeout(r, 350));
+    step("Проверяем, что интернет идёт через VPN");
     // в режиме «весь трафик» Windows поднимает адаптер и маршруты не сразу: первая проверка может не пройти
     // (так 0.4.0 один раз не подключился в CI), поэтому даём ещё одну попытку через пару секунд
     let ok = await verify(ports.http);
     if (!ok && tun) { await new Promise((r) => setTimeout(r, 2500)); ok = await verify(ports.http); }
     if (!ok) throw new Error("Сервер не отвечает — попробуй другой");
     // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
-    if (!tun) await invoke("proxy_set", { port: ports.http });
-    S.ports = ports; S.state = "on";
+    if (!tun) { step("Включаем VPN для браузеров и программ"); await invoke("proxy_set", { port: ports.http }); }
+    S.ports = ports; S.state = "on"; S.step = "";
     startWatch();
   } catch (e) {
     await invoke("core_stop").catch(() => {});
-    S.state = "off"; S.ports = null; S.active = null;
+    S.state = "off"; S.ports = null; S.active = null; S.step = "";
     invoke("core_note", { text: "не подключилось: " + String(e.message || e).slice(0, 300) }).catch(() => {});
     toast(String(e.message || e).split("\n")[0].slice(0, 140));
   }
@@ -998,7 +1007,21 @@ async function heal() {
 }
 // «Подключить / Отключить» из меню значка в трее; до входа в аккаунт пункт ничего не делает
 window.__TAURI__.event.listen("tray-toggle", () => { if (!$("home").hidden) $("power").click(); });
-$("refresh").onclick = () => loadSubscription(true);
+// «Обновить» у серверов: значок крутится, пинги заново «ищутся», в конце — «Обновлено»
+$("refresh").onclick = async () => {
+  const b = $("refresh");
+  if (b.classList.contains("busy")) return;
+  b.classList.add("busy"); b.lastChild.textContent = "Обновляем…";
+  S.pings = {}; S.refreshing = true; renderServers();
+  const started = Date.now();
+  try { await loadSubscription(true); } finally {
+    // крутится хотя бы секунду — иначе мелькает и непонятно, было ли что-то
+    await new Promise((r) => setTimeout(r, Math.max(0, 1000 - (Date.now() - started))));
+    S.refreshing = false; renderServers();
+    b.classList.remove("busy"); b.classList.add("done"); b.lastChild.textContent = "Обновлено";
+    setTimeout(() => { b.classList.remove("done"); b.lastChild.textContent = "Обновить"; }, 1800);
+  }
+};
 
 // ── настройки ────────────────────────────────────────────────────────────────
 $("settings-open").onclick = async () => {
@@ -1044,35 +1067,112 @@ $("copy-log").onclick = async () => {
 };
 
 // ── обновления (update.rs): новые версии — пре-релизы desktop-v* на GitHub ───────
-let pendingUpdate = null;
+// Баннер на главной ведёт по шагам: есть версия → скачиваем (полоска) → готово, перезапуск через 5 секунд →
+// установщик закрывает Mognu и открывает уже новую. Если не вышло — «Повторить» и «Скачать вручную».
+let pendingUpdate = null, upState = "", upTimer = 0, upChecking = null;
 const viaCore = () => (S.state === "on" && S.ports ? S.ports.http : null);
+const UP_LINES = [
+  "Mognu подкрутил гайки и смазал шестерёнки — обновление займёт меньше минуты.",
+  "Свежая версия уже ждёт: быстрее, аккуратнее, надёжнее.",
+  "Mognu принёс обновление — пара секунд, и всё как было, только лучше.",
+];
+const mb = (n) => (n / 1048576).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+const releasePage = (v) => "https://github.com/Said240705/pamir-vpn-android/releases/tag/desktop-v" + v;
 
-async function checkUpdate(manual) {
-  try {
-    const u = await invoke("update_check", { proxy: viaCore() });
-    if (u) {
-      pendingUpdate = u;
-      $("update-title").textContent = "Mognu VPN " + u.version + " готов";
-      $("update").hidden = false;
-    } else if (manual) toast("У тебя последняя версия — " + S.version);
-  } catch (e) {
-    if (manual) toast("Не удалось проверить обновления");
+function renderUpdate(state, extra = {}) {
+  upState = state;
+  const u = pendingUpdate || {}, box = $("update"), acts = $("update-acts"), bar = $("update-bar");
+  box.hidden = !state; box.dataset.state = state;
+  if (!state) return;
+  const set = (tag, title, sub) => { $("update-tag").textContent = tag; $("update-title").textContent = title; $("update-sub").textContent = sub; };
+  bar.hidden = !(state === "download" || state === "verify" || state === "restart");
+  const ico = { done: "M5 12.5l4.5 4.5L19 7.5", error: "M12 7v6M12 17h.01", restart: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" }[state] || "M12 3v12M7 10l5 5 5-5M5 21h14";
+  box.querySelector(".up-ico").innerHTML = `<svg viewBox="0 0 24 24"><path d="${ico}"/></svg>`;
+  if (state === "ready") {
+    set("Новая версия", "Вышла Mognu VPN " + u.version, UP_LINES[Math.floor(Math.random() * UP_LINES.length)] + " Ключ и настройки останутся на месте.");
+    acts.innerHTML = '<button class="link" id="update-later">Позже</button><button class="btn primary" id="update-go">Обновить</button>';
+  } else if (state === "download") {
+    const pct = extra.total ? Math.min(100, Math.round((extra.done / extra.total) * 100)) : 0;
+    set("Обновление", "Скачиваем Mognu VPN " + u.version, extra.total ? `${mb(extra.done)} из ${mb(extra.total)} МБ · ${pct}%` : "Начинаем скачивание…");
+    $("update-fill").style.width = pct + "%";
+    acts.innerHTML = "";
+  } else if (state === "verify") {
+    set("Обновление", "Проверяем файл", "Сверяем контрольную сумму — так мы знаем, что скачалось именно обновление Mognu.");
+    $("update-fill").style.width = "100%";
+    acts.innerHTML = "";
+  } else if (state === "restart") {
+    const was = S.state === "on" ? " VPN подключится снова сам." : "";
+    set("Всё готово", `Перезапуск через ${extra.left} с`, "Mognu VPN закроется на пару секунд и откроется уже новым — ничего делать не нужно." + was);
+    $("update-fill").style.width = "100%";
+    acts.innerHTML = '<button class="btn primary" id="update-now">Перезапустить сейчас</button>';
+  } else if (state === "error") {
+    set("Обновление", "Не получилось обновить", extra.msg || "Проверь интернет и попробуй ещё раз.");
+    acts.innerHTML = '<button class="link" id="update-manual">Скачать вручную</button><button class="btn primary" id="update-go">Повторить</button>';
+  } else if (state === "done") {
+    set("Обновлено", "Mognu VPN " + S.version + " — уже здесь", "Спасибо, что с нами! Хорошего пользования 👑");
+    acts.innerHTML = '<button class="btn" id="update-later">Отлично</button>';
   }
 }
 
-$("update-go").onclick = async () => {
-  const b = $("update-go");
-  if (!pendingUpdate || b.disabled) return;
-  b.disabled = true; b.textContent = "Скачиваем…";
+async function checkUpdate() {
+  // одна проверка за раз: из настроек и по таймеру
+  if (!upChecking) upChecking = invoke("update_check", { proxy: viaCore() }).finally(() => { upChecking = null; });
+  const u = await upChecking;
+  if (u && !upState) { pendingUpdate = u; renderUpdate("ready"); }
+  return u;
+}
+
+async function startUpdate() {
+  if (!pendingUpdate || upState === "download" || upState === "verify" || upState === "restart") return;
+  renderUpdate("download", { done: 0, total: pendingUpdate.size });
   try {
-    // после скачивания и проверки программа сама закроется, обновится и откроется снова
-    await invoke("update_install", { u: pendingUpdate, proxy: viaCore() });
+    await invoke("update_download", { u: pendingUpdate, proxy: viaCore() });
+    renderUpdate("verify");
+    await new Promise((r) => setTimeout(r, 600));
+    let left = 5;
+    renderUpdate("restart", { left });
+    clearInterval(upTimer);
+    upTimer = setInterval(() => { left -= 1; if (left <= 0) applyUpdate(); else renderUpdate("restart", { left }); }, 1000);
   } catch (e) {
-    b.disabled = false; b.textContent = "Обновить";
-    toast("Не удалось обновить: " + String(e).slice(0, 100));
+    renderUpdate("error", { msg: "Не скачалось: " + String(e).slice(0, 90) + ". Проверь интернет и попробуй ещё раз." });
   }
+}
+
+async function applyUpdate() {
+  clearInterval(upTimer);
+  // новая копия покажет «Обновлено» и, если VPN был включён, подключится снова (launch_info.after_update)
+  try { await invoke("update_apply", { reconnect: S.state === "on" }); }
+  catch (e) { renderUpdate("error", { msg: "Не запустилась установка: " + String(e).slice(0, 90) }); }
+}
+
+window.__TAURI__.event.listen("update-progress", (e) => {
+  if (upState === "download") renderUpdate("download", e.payload || {});
+});
+$("update").onclick = (e) => {
+  const id = e.target.closest("button")?.id;
+  if (id === "update-go") startUpdate();
+  else if (id === "update-now") applyUpdate();
+  else if (id === "update-later") renderUpdate("");
+  else if (id === "update-manual" && pendingUpdate) invoke("open_url", { url: releasePage(pendingUpdate.version) }).catch(() => {});
 };
-$("update-check").onclick = () => { $("settings").hidden = true; checkUpdate(true); };
+
+// «Проверить обновления» в настройках: ответ прямо в строке, окно настроек не закрывается
+$("update-check").onclick = async () => {
+  const st = $("update-check-state"), btn = $("update-check");
+  if (btn.dataset.busy) return;
+  if (btn.dataset.found) { $("settings").hidden = true; renderUpdate("ready"); return; }
+  btn.dataset.busy = "1"; st.className = "uc-state busy"; st.innerHTML = '<i class="mini-spin" aria-hidden="true"></i>Проверяем…';
+  try {
+    const u = await checkUpdate();
+    if (u) {
+      pendingUpdate = u; btn.dataset.found = "1";
+      st.className = "uc-state found"; st.textContent = "Есть " + u.version + " — обновить →";
+    } else { st.className = "uc-state ok"; st.textContent = "✓ У тебя последняя версия"; }
+  } catch (e) {
+    st.className = "uc-state err"; st.textContent = "Нет связи — попробовать ещё";
+  }
+  delete btn.dataset.busy;
+};
 
 // ── окно: своя шапка вместо системной (tauri.conf.json: decorations false) ────────
 const win = () => window.__TAURI__.window.getCurrentWindow();
@@ -1146,8 +1246,9 @@ async function startHome() {
   try { S.version = await window.__TAURI__.app.getVersion(); } catch (e) { S.version = "0.1.0"; }
   $("version").textContent = "Mognu VPN для Windows " + S.version;
   refreshHosts();
-  setTimeout(checkUpdate, 8000);
-  setInterval(checkUpdate, 6 * 3600e3);
+  const quietCheck = () => checkUpdate().catch(() => {});
+  setTimeout(quietCheck, 8000);
+  setInterval(quietCheck, 6 * 3600e3);
   S.launch = await invoke("launch_info").catch(() => S.launch);
   S.demo = await invoke("demo").catch(() => null);
   if (S.demo) {
@@ -1160,5 +1261,8 @@ async function startHome() {
   await startHome();
   // перезапуск с правами ради «весь трафик» — подключаемся сразу, человек уже нажал «Подключить»;
   // «Подключаться при запуске» — тоже сразу, к выбранному или самому быстрому серверу
-  if (S.launch.handoff || (store.get("autoconnect", false) && S.state === "off")) connect();
+  // после автообновления — «Обновлено» и, если VPN был включён, подключаемся снова
+  const after = S.launch.after_update;
+  if (after && after.from !== S.version) renderUpdate("done");
+  if (S.launch.handoff || (after && after.reconnect) || (store.get("autoconnect", false) && S.state === "off")) connect();
 })();

@@ -141,7 +141,22 @@ jobs:
           $app = Start-Process (Join-Path $dir 'mognu.exe') -PassThru
           Start-Sleep -Seconds 8
           if ($app.HasExited) { throw "mognu.exe завершился с кодом $($app.ExitCode)" }
-          Stop-Process -Id $app.Id -Force
+          # автообновление так, как его делает программа (src/update.rs): установщик из TEMP с русскими буквами в пути
+          # (до 0.4.3 командный файл ломался на таком пути), /S /MOGNURUN поверх работающей копии — она должна
+          # закрыться, а новая открыться сама
+          $tmp = Join-Path $env:RUNNER_TEMP 'Обновление Могну'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          $copy = Join-Path $tmp $setup.Name
+          Copy-Item $setup.FullName $copy
+          $p = Start-Process $copy -ArgumentList '/S', '/MOGNURUN' -PassThru
+          if (!$p.WaitForExit(300000)) { throw 'автообновление: установщик не закончил за 5 минут' }
+          Start-Sleep 4
+          $after = @(Get-Process mognu -ErrorAction SilentlyContinue)
+          $relaunched = $after | Where-Object { $_.Id -ne $app.Id }
+          Write-Host "автообновление: код установщика $($p.ExitCode), старая копия закрыта: $(-not (Get-Process -Id $app.Id -ErrorAction SilentlyContinue)), новая открылась: $([bool]$relaunched)"
+          if ($p.ExitCode -ne 0 -or -not $relaunched -or (Get-Process -Id $app.Id -ErrorAction SilentlyContinue)) { throw 'автообновление с /MOGNURUN не сработало' }
+          'Автообновление (/S /MOGNURUN, путь с русскими буквами): старая копия закрыта, новая открылась ✅' | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Get-Process mognu -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Host 'OK'
 
       - name: Connect through every server (test subscription)

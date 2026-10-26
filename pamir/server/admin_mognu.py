@@ -8,6 +8,7 @@
 Время в базе — UTC; «сегодня» и графики по дням — по Москве (display_timezone бота).
 """
 import asyncio
+import hashlib
 import html
 import json
 import os
@@ -19,6 +20,7 @@ import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
+from typing import List
 
 import auth
 import db
@@ -1979,3 +1981,61 @@ async def home_upgrades_list(admin=Depends(auth.current_admin)):
                                               LEFT JOIN users u ON u.id = h.user_id ORDER BY h.id DESC LIMIT 100""")}
     finally:
         await conn.close()
+
+
+# ── «Почему ушёл»: страница mognu.app/bye.html открывается из удаления программы для Windows ─────────────
+# Ответы без входа в аккаунт: причины (из списка), короткий комментарий, версия программы. Адрес не храним —
+# только его хеш, чтобы с одного адреса нельзя было завалить таблицу (не больше 5 ответов в час).
+BYE_REASONS = {"connect": "Не подключается", "slow": "Медленно работает", "price": "Дорого", "other_vpn": "Пользуюсь другим VPN",
+               "temporary": "Нужен был ненадолго", "phone_only": "Хватает телефона", "other": "Другое"}
+
+
+class ByeIn(BaseModel):
+    reasons: List[str] = []
+    comment: str = ""
+    version: str = ""
+
+
+async def _bye_table(conn):
+    await conn.execute("""CREATE TABLE IF NOT EXISTS pamir_bye_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, at TIMESTAMP NOT NULL, reasons TEXT NOT NULL, comment TEXT,
+        version TEXT, ip_hash TEXT)""")
+
+
+@user_router.post("/bye")
+async def bye_feedback(body: ByeIn, request: Request):
+    reasons = [r for r in dict.fromkeys(body.reasons) if r in BYE_REASONS][:7]
+    comment = body.comment.strip()[:600]
+    if not reasons and not comment:
+        raise HTTPException(400, "Выберите причину или напишите пару слов")
+    ip = (request.headers.get("x-real-ip") or (request.client.host if request.client else "") or "").strip()
+    ip_hash = hashlib.sha256(("mognu-bye:" + ip).encode()).hexdigest()[:16]
+    version = re.sub(r"[^0-9.]", "", body.version)[:16]
+    conn = await db.get_db()
+    try:
+        await _bye_table(conn)
+        recent = await _scalar(conn, "SELECT COUNT(*) FROM pamir_bye_feedback WHERE ip_hash = ? AND at > datetime('now', '-1 hour')", (ip_hash,))
+        if (recent or 0) >= 5:
+            raise HTTPException(429, "Спасибо, мы уже получили ваш ответ")
+        await conn.execute("INSERT INTO pamir_bye_feedback (at, reasons, comment, version, ip_hash) VALUES (?, ?, ?, ?, ?)",
+                           (_now(), json.dumps(reasons), comment, version, ip_hash))
+        await conn.commit()
+    finally:
+        await conn.close()
+    return {"ok": True}
+
+
+@router.get("/bye")
+async def bye_list(admin=Depends(auth.current_admin)):
+    conn = await db.get_db()
+    try:
+        await _bye_table(conn)
+        items = await _rows(conn, "SELECT id, at, reasons, comment, version FROM pamir_bye_feedback ORDER BY id DESC LIMIT 200")
+    finally:
+        await conn.close()
+    counts = {k: 0 for k in BYE_REASONS}
+    for it in items:
+        it["reasons"] = json.loads(it["reasons"] or "[]")
+        for r in it["reasons"]:
+            counts[r] = counts.get(r, 0) + 1
+    return {"items": items, "labels": BYE_REASONS, "counts": counts, "total": len(items)}

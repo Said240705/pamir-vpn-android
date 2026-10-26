@@ -5,6 +5,9 @@
 ; уходят вместе с ней). Ключ, вход и настройки лежат отдельно — в %APPDATA%\app.mognu.desktop и
 ; %LOCALAPPDATA%\app.mognu.desktop — и остаются: удаление идёт как обновление (/UPDATE), без стирания данных.
 
+; Папка с картинками Mognu (installer/): шаблон installer.nsi берёт отсюда окна «Готово!» и удаления
+!define MOGNU_ART "${__FILEDIR__}"
+
 Var MognuMoved
 ; /MOGNURUN — так установщик запускает автообновление программы (src/update.rs): после установки открыть Mognu снова
 Var MognuRun

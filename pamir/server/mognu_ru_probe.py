@@ -1,20 +1,27 @@
 #!/usr/bin/env python3
-"""Проверка из России: доходят ли люди до основного сервера. Ставится на российский VPS (AdminVPS, mognu.app).
+"""Проверка из России: доходят ли люди до основного сервера. Две половины в одном файле.
 
-Раз в минуту открывает соединение с портом 443 основного сервера (как приложение) и пингует его. Если порт не
-отвечает 2 проверки подряд — пишет админу в Telegram; когда заработает — сколько длился сбой и был ли пинг.
-Пинг есть, а порт нет — похоже на фильтрацию соединений; нет даже пинга — пропал маршрут до сервера.
-Каждая проверка пишется в /var/log/mognu-probe.log, так что видны и короткие провалы, о которых не писали.
-mognu_watch.py на основном сервере смотрит обратный путь (до mognu.app); этот скрипт — путь из России до сервера.
+На российском VPS (AdminVPS, mognu.app) — проверка: раз в минуту открывает соединение с портом 443 основного
+сервера (как приложение) и пингует его. Порт не отвечает 2 проверки подряд — сбой; после восстановления — сколько
+длился и был ли пинг (пинг есть, порт нет — похоже на фильтрацию; нет даже пинга — пропал маршрут). Каждая проверка
+пишется в /var/log/mognu-probe.log, так что видны и короткие провалы. Telegram из России не открывается, поэтому
+сообщения публикуются в https://mognu.app/.well-known/acme-challenge/mognu-probe.json (там уже лежит папка для
+сертификатов, которую nginx отдаёт сам; внутри только время и состояние, без адресов людей и секретов).
 
-    python3 mognu_ru_probe.py            одна проверка (так её запускает таймер)
-    python3 mognu_ru_probe.py status     проверить сейчас и показать провалы за сутки, ничего не отправлять
-    python3 mognu_ru_probe.py test       отправить пробное сообщение админу
-    python3 mognu_ru_probe.py install    поставить таймер systemd (каждую минуту)
-    python3 mognu_ru_probe.py env        на ОСНОВНОМ сервере: вывести настройки бота для /etc/mognu-probe.env
-                                         (токен и ID админов из /root/YadrenoVPN/config.py) — только в канал ssh
+На основном сервере — пересылка: раз в минуту забирает этот файл и шлёт новые сообщения админу в Telegram. Если
+файл не открывается 2 раза подряд — связь между сервером и Россией пропала, об этом пишет сам основной сервер.
+Если файл давно не обновлялся — проверка на VPS остановилась. mognu_watch.py смотрит сайт; это — путь до VPN.
 
-Настройки — /etc/mognu-probe.env: BOT_TOKEN=…, ADMIN_IDS=1,2, TARGETS="Испания=78.17.158.230:443" (через запятую).
+    на российском VPS:   python3 mognu_ru_probe.py               одна проверка (так её запускает таймер)
+                         python3 mognu_ru_probe.py status        проверить сейчас и показать провалы за сутки
+                         python3 mognu_ru_probe.py install       таймер systemd (каждую минуту)
+    на основном сервере: python3 mognu_ru_probe.py relay         одна пересылка (так её запускает таймер)
+                         python3 mognu_ru_probe.py relay-status  что видно сейчас, ничего не отправлять
+                         python3 mognu_ru_probe.py test          пробное сообщение админу
+                         python3 mognu_ru_probe.py install-relay таймер systemd (каждую минуту)
+
+Цели проверки — /etc/mognu-probe.env на VPS (необязательно): TARGETS="Испания=78.17.158.230:443" (через запятую).
+Токен бота и ID админов пересылка берёт из /root/YadrenoVPN/config.py, как mognu_watch.py; в вывод не попадают.
 """
 import datetime as dt
 import json
@@ -30,16 +37,21 @@ from zoneinfo import ZoneInfo
 
 CONF = '/etc/mognu-probe.env'
 STATE = '/var/lib/mognu-probe/state.json'
+RELAY_STATE = '/var/lib/mognu-probe/relay.json'
 LOG = '/var/log/mognu-probe.log'
+PUBLIC = '/var/www/acme/.well-known/acme-challenge/mognu-probe.json'
+PUBLIC_URL = 'https://mognu.app/.well-known/acme-challenge/mognu-probe.json'
 CONFIG_PY = '/root/YadrenoVPN/config.py'
 DEFAULT_TARGETS = 'Испания=78.17.158.230:443'
 FAILS_TO_ALERT = 2
 TRIES, TIMEOUT, PAUSE = 3, 5, 5  # three connection attempts ~10 s apart: one lost packet is not an outage
+STALE_MIN = 5                    # the VPS publishes every minute; older than this means its timer stopped
+KEEP_EVENTS = 30
 MSK = ZoneInfo('Europe/Moscow')
 
 
 def conf():
-    c = {'TARGETS': DEFAULT_TARGETS, 'BOT_TOKEN': '', 'ADMIN_IDS': ''}
+    c = {'TARGETS': DEFAULT_TARGETS}
     try:
         for line in open(CONF, encoding='utf-8'):
             m = re.match(r'\s*([A-Z_]+)\s*=\s*"?([^"\n]*)"?', line)
@@ -60,19 +72,29 @@ def targets(c):
     return out
 
 
-def send(c, text):
-    token, ids = c['BOT_TOKEN'], re.findall(r'-?\d{5,}', c['ADMIN_IDS'])
-    if not token or not ids:
-        print('нет BOT_TOKEN или ADMIN_IDS в', CONF); return False
-    ok = True
-    for chat in ids:
-        data = urllib.parse.urlencode({'chat_id': chat, 'text': text, 'parse_mode': 'HTML'}).encode()
-        try:
-            urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=20).read()
-        except Exception as e:  # noqa: BLE001
-            print('не отправлено админу:', type(e).__name__); ok = False
-    return ok
+def msk(iso):
+    try:
+        return dt.datetime.fromisoformat(iso).astimezone(MSK).strftime('%d.%m %H:%M')
+    except (TypeError, ValueError):
+        return '?'
 
+
+def load(path):
+    try:
+        return json.load(open(path, encoding='utf-8'))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def save(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    json.dump(data, open(tmp, 'w', encoding='utf-8'), ensure_ascii=False)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)  # the relay must never read a half-written file
+
+
+# ---------- проверка (российский VPS) ----------
 
 def tcp_ok(host, port):
     for i in range(TRIES):
@@ -93,25 +115,6 @@ def ping_ok(host):
         return None
 
 
-def msk(iso):
-    try:
-        return dt.datetime.fromisoformat(iso).astimezone(MSK).strftime('%d.%m %H:%M')
-    except (TypeError, ValueError):
-        return '?'
-
-
-def load():
-    try:
-        return json.load(open(STATE, encoding='utf-8'))
-    except Exception:  # noqa: BLE001
-        return {}
-
-
-def save(st):
-    os.makedirs(os.path.dirname(STATE), exist_ok=True)
-    json.dump(st, open(STATE, 'w', encoding='utf-8'), ensure_ascii=False)
-
-
 def log(line):
     try:
         with open(LOG, 'a', encoding='utf-8') as f:
@@ -121,7 +124,7 @@ def log(line):
 
 
 def step(s, name, ok, ping, now):
-    """Advance one target's state by one check; return the message to send, if any."""
+    """Advance one target's state by one check; return the message to publish, if any."""
     s['fails'] = 0 if ok else s.get('fails', 0) + 1
     if not ok:
         s.setdefault('first_fail', now.isoformat(timespec='seconds'))
@@ -144,9 +147,9 @@ def step(s, name, ok, ping, now):
 
 
 def run(dry=False):
-    c, st = conf(), load()
+    c, st = conf(), load(STATE)
     now = dt.datetime.now(dt.timezone.utc)
-    pending = st.get('pending', [])
+    events = st.get('events', [])
     for name, host, port in targets(c):
         ok, ms = tcp_ok(host, port)
         ping = None if ok else ping_ok(host)
@@ -156,70 +159,169 @@ def run(dry=False):
             print(f'  {"✓" if ok else "✗"} {name}: порт {port} ' + (f'отвечает за {ms} мс' if ok else
                   f'не отвечает, пинг {"есть" if ping else "нет"}'))
             continue
-        msg = step(st.setdefault(name, {}), name, ok, ping, now)
+        msg = step(st.setdefault('targets', {}).setdefault(name, {}), name, ok, ping, now)
         if msg:
-            pending.append(msg)
+            st['seq'] = st.get('seq', 0) + 1
+            events.append({'id': st['seq'], 'at': now.isoformat(timespec='seconds'), 'text': msg})
     if dry:
         blips()
         return
-    # Telegram may be unreachable from Russia for a while: keep undelivered messages and retry next minute
-    st['pending'] = [m for m in pending[-20:] if not send(c, m)]
-    save(st)
+    st['events'] = events[-KEEP_EVENTS:]
+    save(STATE, st)
+    # what the relay on the main server reads: no client addresses, only check times and outage messages
+    save(PUBLIC, {'updated': now.isoformat(timespec='seconds'), 'events': st['events'],
+                  'down': sorted(n for n, s in st.get('targets', {}).items() if s.get('down'))})
 
 
 def blips():
-    """Failed checks in the last 24 h, grouped into runs of consecutive minutes."""
-    since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
+    """Failed checks in the last 24 h."""
+    since = f'{dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1):%Y-%m-%dT%H:%M:%SZ}'
     bad = []
     try:
         for line in open(LOG, encoding='utf-8'):
             ts, _, rest = line.partition(' ')
-            if 'tcp=fail' in rest and ts >= f'{since:%Y-%m-%dT%H:%M:%SZ}':
+            if 'tcp=fail' in rest and ts >= since:
                 bad.append(ts)
     except OSError:
         pass
     print(f'  провалов за сутки: {len(bad)}' + (f' (последний {msk(bad[-1].replace("Z", "+00:00"))} МСК)' if bad else ''))
 
 
-def install():
-    me = os.path.abspath(__file__)
-    open('/etc/systemd/system/mognu-probe.service', 'w').write(
-        f'[Unit]\nDescription=Mognu probe: main server reachable from Russia\n\n'
-        f'[Service]\nType=oneshot\nExecStart=/usr/bin/python3 {me}\n')
-    open('/etc/systemd/system/mognu-probe.timer', 'w').write(
-        '[Unit]\nDescription=Mognu probe every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\nAccuracySec=5s\n\n'
-        '[Install]\nWantedBy=timers.target\n')
-    open('/etc/logrotate.d/mognu-probe', 'w').write(f'{LOG} {{\n  weekly\n  rotate 8\n  compress\n  missingok\n  notifempty\n}}\n')
-    subprocess.run(['systemctl', 'daemon-reload'], check=True)
-    subprocess.run(['systemctl', 'enable', '--now', 'mognu-probe.timer'], check=True)
-    print('Таймер поставлен: проверка каждую минуту. Журнал проверок —', LOG)
+# ---------- пересылка (основной сервер) ----------
 
-
-def export_env():
+def bot():
     try:
         text = open(CONFIG_PY, encoding='utf-8').read()
     except OSError:
-        sys.exit(f'нет {CONFIG_PY} — команду env запускают на основном сервере')
+        return None, []
     tok = re.search(r'^\s*(?:BOT_TOKEN|TELEGRAM_BOT_TOKEN|TOKEN)\s*=\s*["\']([0-9]+:[A-Za-z0-9_-]+)', text, re.M)
     ids = re.search(r'ADMIN_IDS\s*=\s*\[([^\]]*)\]', text, re.S)
-    if not tok or not ids:
-        sys.exit('в config.py не найден токен бота или ADMIN_IDS')
-    if sys.stdout.isatty():
-        sys.exit('это вывод с токеном — передавай его только через ssh: python3 mognu_ru_probe.py env | ssh …')
-    admins = ','.join(re.findall(r'-?\d{5,}', ids.group(1)))
-    print(f'BOT_TOKEN={tok.group(1)}\nADMIN_IDS={admins}\nTARGETS="{DEFAULT_TARGETS}"')
+    return (tok.group(1) if tok else None), (re.findall(r'-?\d{5,}', ids.group(1)) if ids else [])
+
+
+def send(text):
+    token, ids = bot()
+    if not token or not ids:
+        print('нет токена бота или ADMIN_IDS в', CONFIG_PY); return False
+    ok = True
+    for chat in ids:
+        data = urllib.parse.urlencode({'chat_id': chat, 'text': text, 'parse_mode': 'HTML'}).encode()
+        try:
+            urllib.request.urlopen(f'https://api.telegram.org/bot{token}/sendMessage', data, timeout=20).read()
+        except Exception as e:  # noqa: BLE001
+            print('не отправлено админу:', type(e).__name__); ok = False
+    return ok
+
+
+def fetch():
+    req = urllib.request.Request(PUBLIC_URL, headers={'User-Agent': 'mognu-probe-relay/1', 'Cache-Control': 'no-cache'})
+    for i in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode()), None
+        except urllib.error.HTTPError as e:
+            return None, f'HTTP {e.code}'  # the VPS answered: the link is up, the file is missing
+        except Exception as e:  # noqa: BLE001
+            err = type(e).__name__
+            if i == 0:
+                time.sleep(5)
+    return None, err
+
+
+def relay_step(rs, pub, err, now):
+    """Advance the relay state by one fetch; return messages to send (oldest first)."""
+    out = []
+    link_lost = pub is None and not (err or '').startswith('HTTP')
+    rs['fails'] = rs.get('fails', 0) + 1 if link_lost else 0
+    if link_lost:
+        rs.setdefault('first_fail', now.isoformat(timespec='seconds'))
+        if not rs.get('link_down') and rs['fails'] >= FAILS_TO_ALERT:
+            rs['link_down'] = True
+            out.append(f'🔴 Основной сервер не достаёт до российского сервера (mognu.app) с {msk(rs["first_fail"])} МСК '
+                       f'({err}). Похоже, пропала связь между сервером и Россией — у людей из России VPN может не '
+                       'подключаться. Подробности пришлю, когда связь вернётся.')
+        return out
+    if rs.get('link_down'):
+        mins = max(1, round((now - dt.datetime.fromisoformat(rs['first_fail'])).total_seconds() / 60))
+        out.append(f'🟢 Связь с российским сервером вернулась. Не было с {msk(rs["first_fail"])} до '
+                   f'{now.astimezone(MSK):%H:%M} МСК, около {mins} мин.')
+    for k in ('link_down', 'first_fail'):
+        rs.pop(k, None)
+    if pub is None:  # HTTP error: the file is not published, so the probe on the VPS is not running
+        if not rs.get('stale_warned'):
+            rs['stale_warned'] = True
+            out.append(f'🟡 Проверка из России не публикует результаты ({err}). На российском сервере: '
+                       '<code>systemctl status mognu-probe.timer</code>')
+        return out
+    first = 'last_id' not in rs
+    last = rs.get('last_id', 0)
+    for ev in pub.get('events', []):
+        if ev.get('id', 0) > last:
+            if not first:  # on the first run only remember where the feed is, do not replay old outages
+                out.append(ev['text'])
+            rs['last_id'] = ev['id']
+    rs.setdefault('last_id', 0)
+    try:
+        age = (now - dt.datetime.fromisoformat(pub['updated'])).total_seconds() / 60
+    except (KeyError, TypeError, ValueError):
+        age = None
+    if age is not None and age > STALE_MIN:
+        if not rs.get('stale_warned'):
+            rs['stale_warned'] = True
+            out.append(f'🟡 Проверка из России остановилась: последняя была {msk(pub["updated"])} МСК. На российском '
+                       'сервере: <code>systemctl status mognu-probe.timer</code>')
+    elif age is not None:
+        rs.pop('stale_warned', None)
+    return out
+
+
+def relay(dry=False):
+    rs = load(RELAY_STATE)
+    now = dt.datetime.now(dt.timezone.utc)
+    pub, err = fetch()
+    if dry:
+        if pub is None:
+            print(f'  ✗ {PUBLIC_URL}: {err}')
+        else:
+            print(f'  ✓ проверка из России обновлялась {msk(pub.get("updated"))} МСК; '
+                  f'сейчас недоступно: {", ".join(pub.get("down", [])) or "ничего"}; сообщений в ленте: {len(pub.get("events", []))}')
+        return
+    msgs = rs.get('pending', []) + relay_step(rs, pub, err, now)
+    rs['pending'] = [m for m in msgs[-20:] if not send(m)]
+    save(RELAY_STATE, rs)
+
+
+def install(relay_side):
+    me = os.path.abspath(__file__)
+    unit, what, arg = ('mognu-probe-relay', 'relay from the RU probe to Telegram', ' relay') if relay_side else \
+        ('mognu-probe', 'main server reachable from Russia', '')
+    open(f'/etc/systemd/system/{unit}.service', 'w').write(
+        f'[Unit]\nDescription=Mognu probe: {what}\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 {me}{arg}\n')
+    open(f'/etc/systemd/system/{unit}.timer', 'w').write(
+        f'[Unit]\nDescription=Mognu probe ({unit}) every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\n'
+        'AccuracySec=5s\n\n[Install]\nWantedBy=timers.target\n')
+    if not relay_side:
+        open('/etc/logrotate.d/mognu-probe', 'w').write(
+            f'{LOG} {{\n  weekly\n  rotate 8\n  compress\n  missingok\n  notifempty\n}}\n')
+    subprocess.run(['systemctl', 'daemon-reload'], check=True)
+    subprocess.run(['systemctl', 'enable', '--now', f'{unit}.timer'], check=True)
+    print(f'Таймер {unit} поставлен: каждую минуту.')
 
 
 if __name__ == '__main__':
     mode = sys.argv[1] if len(sys.argv) > 1 else 'run'
     if mode == 'status':
         run(dry=True)
-    elif mode == 'test':
-        print('отправлено' if send(conf(), '👑 Проверка из России подключена: напишу, если основной сервер '
-                                           'станет недоступен из России, и когда он вернётся.') else 'не отправлено')
     elif mode == 'install':
-        install(); run(dry=True)
-    elif mode == 'env':
-        export_env()
+        install(False); run(); run(dry=True)
+    elif mode == 'relay':
+        relay()
+    elif mode == 'relay-status':
+        relay(dry=True)
+    elif mode == 'install-relay':
+        install(True); relay(dry=True)
+    elif mode == 'test':
+        print('отправлено' if send('👑 Проверка из России подключена: напишу, если основной сервер станет '
+                                   'недоступен из России или пропадёт связь с российским сервером.') else 'не отправлено')
     else:
         run()

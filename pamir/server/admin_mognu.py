@@ -503,8 +503,8 @@ async def keys_fix_drafts(admin=Depends(auth.current_admin)):
     return {"fixed": fixed, "failed": failed}
 
 
-@router.post("/keys/{key_id}/reset-devices")
-async def key_reset_devices(key_id: int, admin=Depends(auth.current_admin)):
+async def _key_devices(key_id: int):
+    """Владелец ключа и его устройства — тем же адресом бота, что «Устройства» в кабинете. → (ключ, ответ бота, устройства)."""
     conn = await db.get_db()
     try:
         k = await (await conn.execute("SELECT k.user_id, u.telegram_id FROM vpn_keys k JOIN users u ON u.id = k.user_id WHERE k.id = ?", (key_id,))).fetchone()
@@ -515,7 +515,35 @@ async def key_reset_devices(key_id: int, admin=Depends(auth.current_admin)):
     data = await _bot("GET", "/devices", {"telegram_id": k["telegram_id"], "key_id": key_id}, 20)
     if not data.get("ok", True):
         raise HTTPException(400, "Бот не отдал список устройств: " + str(data.get("reason")))
-    devices = data.get("devices") or data.get("items") or []
+    return k, data, [d for d in (data.get("devices") or data.get("items") or []) if isinstance(d, dict)]
+
+
+@router.get("/keys/{key_id}/devices")
+async def key_devices_list(key_id: int, admin=Depends(auth.current_admin)):
+    """Список устройств ключа для админки: модель, система, приложение, когда выходило на связь."""
+    _, data, devices = await _key_devices(key_id)
+    keep = ("id", "device_model", "device_os", "os_version", "user_agent", "last_seen", "created_at")
+    return {"limit": data.get("limit"), "used": len(devices), "devices": [{f: d.get(f) for f in keep} for d in devices]}
+
+
+@router.post("/keys/{key_id}/devices/{device_id}/remove")
+async def key_device_remove(key_id: int, device_id: int, admin=Depends(auth.current_admin)):
+    """Отключить одно устройство — как «Отключить» в кабинете: место освобождается, остальные устройства работают."""
+    k, _, devices = await _key_devices(key_id)
+    dev = next((d for d in devices if d.get("id") == device_id), None)
+    if not dev:
+        raise HTTPException(404, "Устройство уже отключено")
+    r = await _bot("POST", "/devices/remove", {"telegram_id": k["telegram_id"], "key_id": key_id, "device_id": device_id}, 20)
+    if not (r.get("removed") == device_id or r.get("ok", True)):
+        raise HTTPException(400, "Бот не отключил устройство: " + str(r.get("reason")))
+    label = " ".join(str(dev.get(f)) for f in ("device_model", "device_os", "os_version") if dev.get(f)) or f"#{device_id}"
+    await _audit(admin, "key.device_remove", k["user_id"], f"ключ #{key_id}: {label}")
+    return {"ok": True}
+
+
+@router.post("/keys/{key_id}/reset-devices")
+async def key_reset_devices(key_id: int, admin=Depends(auth.current_admin)):
+    k, _, devices = await _key_devices(key_id)
     removed = 0
     for d in devices:
         did = d.get("id") if isinstance(d, dict) else None

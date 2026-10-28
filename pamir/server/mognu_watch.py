@@ -121,10 +121,21 @@ def nginx_capacity():
         return None
 
 
+def nginx_ports():
+    """Ports nginx listens on — only connections to them load nginx (xray's own ports do not)."""
+    try:
+        out = subprocess.run(['ss', '-Hltnp'], capture_output=True, text=True, timeout=15).stdout
+        return {line.split()[3].rsplit(':', 1)[1] for line in out.splitlines() if '"nginx"' in line}
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return set()
+
+
 def established():
+    """Established client connections to nginx's ports (proxied ones count twice in nginx, see nginx_capacity)."""
+    ports = nginx_ports()
     try:
         out = subprocess.run(['ss', '-Htn', 'state', 'established'], capture_output=True, text=True, timeout=15).stdout
-        return sum(1 for line in out.splitlines() if line.strip())
+        return sum(1 for line in out.splitlines() if line.split() and (not ports or line.split()[2].rsplit(':', 1)[-1] in ports))
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -177,7 +188,7 @@ def run(dry=False):
     # nginx on the main server: connection headroom (the 14.10 outage was nginx running out of connections)
     cap, conns, over = nginx_capacity(), established(), nginx_overflows(st)
     if dry:
-        print(f'  соединений: {conns if conns is not None else "?"} из ~{cap or "?"} (nginx), переполнений в логе: {over}')
+        print(f'  соединений с nginx: {conns if conns is not None else "?"} из ~{cap or "?"}, переполнений в логе: {over}')
     else:
         hour = now.strftime('%Y-%m-%d %H')
         if over and st.get('over_warned') != hour:
@@ -187,7 +198,7 @@ def run(dry=False):
                  'и посмотри <code>tail /var/log/nginx/error.log</code> — кто открывает соединения.')
         elif cap and conns is not None and conns > cap * CONN_WARN and st.get('conn_warned') != hour:
             st['conn_warned'] = hour
-            send(f'🟡 Много соединений: {conns} из ~{cap}, которые держит nginx ({conns * 100 // cap}%). '
+            send(f'🟡 Много соединений с nginx: {conns} из ~{cap} ({conns * 100 // cap}%). '
                  'Если рост продолжится — поднять <code>worker_connections</code> или добавить памяти/сервер.')
     days = cert_days()
     if dry:

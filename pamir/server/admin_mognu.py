@@ -1248,7 +1248,12 @@ async def support_receipts(thread_id: int, admin=Depends(auth.current_admin)):
             else:
                 st = "sent"
             items[at] = st
-        return {"items": items, "support_seen_at": seen, "last_active_at": active, "bot_blocked": bool(u["blocked"])}
+        # вложения (скриншоты): /admin/support/messages отдаёт только текст, поэтому файл берём здесь
+        media = {}
+        for m in await _rows(conn, """SELECT created_at, sender_type, media_type, media_file_id FROM support_messages
+                                      WHERE thread_id = ? AND media_type IS NOT NULL AND media_type != '' ORDER BY id""", (thread_id,)):
+            media.setdefault(f'{m["sender_type"]}|{m["created_at"]}', []).append({"type": m["media_type"], "file": m["media_file_id"] or ""})
+        return {"items": items, "media": media, "support_seen_at": seen, "last_active_at": active, "bot_blocked": bool(u["blocked"])}
     finally:
         await conn.close()
 

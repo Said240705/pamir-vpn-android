@@ -130,6 +130,8 @@ async def _ensure(conn):
     await conn.execute("""CREATE TABLE IF NOT EXISTS pamir_online_samples (
         at TIMESTAMP NOT NULL, location TEXT NOT NULL, n INTEGER NOT NULL)""")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_pamir_online_samples_at ON pamir_online_samples(at)")
+    # когда человек последний раз открывал чат поддержки в кабинете или приложении (для «прочитано» в админке)
+    await conn.execute("CREATE TABLE IF NOT EXISTS pamir_support_seen (user_id INTEGER PRIMARY KEY, seen_at TIMESTAMP NOT NULL)")
     await conn.execute("INSERT OR IGNORE INTO pamir_admin_meta (key, value) VALUES ('clients_since', ?)", (_now(),))
     await conn.commit()
     _ready = True
@@ -1135,6 +1137,21 @@ async def _user_id_of(request: Request):
     return None
 
 
+SUPPORT_READ_PATH = "/topup/support/messages"
+_support_seen: dict = {}
+
+
+async def _mark_support_seen(uid):
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        await conn.execute("""INSERT INTO pamir_support_seen (user_id, seen_at) VALUES (?, ?)
+                              ON CONFLICT(user_id) DO UPDATE SET seen_at = excluded.seen_at""", (uid, _now()))
+        await conn.commit()
+    finally:
+        await conn.close()
+
+
 async def _remember(uid, client, version, order_id=None):
     now = _now()
     conn = await db.get_db()
@@ -1164,6 +1181,15 @@ def track_clients(app):
                 pass
         response = await call_next(request)
         try:
+            if request.method == "GET" and request.url.path.endswith(SUPPORT_READ_PATH) and response.status_code < 400:
+                sid = await _user_id_of(request)
+                # чат опрашивается каждые 4 с — пишем в базу не чаще раза в 20 с на человека
+                if sid and time.monotonic() - _support_seen.get(sid, -1e9) > 20:
+                    _support_seen[sid] = time.monotonic()
+                    asyncio.get_running_loop().create_task(_mark_support_seen(sid))
+        except Exception:
+            pass
+        try:
             client, version = _client_of(request)
             if not client or response.status_code >= 400:
                 return response
@@ -1187,6 +1213,44 @@ def track_clients(app):
         except Exception:
             pass
         return response
+
+
+@router.get("/support/receipts")
+async def support_receipts(thread_id: int, admin=Depends(auth.current_admin)):
+    """Статусы наших ответов в обращении. Telegram не сообщает ботам о прочтении, поэтому:
+    read — человек открыл чат поддержки в кабинете/приложении после ответа (точно);
+    visited — заходил в кабинет/приложение после ответа, но чат не открывал;
+    blocked — бот заблокирован, в Telegram не дошло; delivered — Telegram принял сообщение;
+    app — аккаунт без Telegram, ответ ждёт в кабинете; sent — отправлено, подтверждения нет."""
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        u = await (await conn.execute("""SELECT u.id, u.telegram_id, COALESCE(u.is_bot_blocked, 0) AS blocked FROM support_threads t
+                                         JOIN users u ON u.id = t.user_id WHERE t.id = ?""", (thread_id,))).fetchone()
+        if not u:
+            raise HTTPException(404, "Обращение не найдено")
+        seen = await _scalar(conn, "SELECT seen_at FROM pamir_support_seen WHERE user_id = ?", (u["id"],))
+        active = await _scalar(conn, "SELECT MAX(last_seen) FROM pamir_user_clients WHERE user_id = ?", (u["id"],))
+        items = {}
+        for m in await _rows(conn, """SELECT created_at, delivered_message_id FROM support_messages
+                                      WHERE thread_id = ? AND sender_type = 'admin' ORDER BY id""", (thread_id,)):
+            at = str(m["created_at"])
+            if seen and seen >= at:
+                st = "read"
+            elif active and active >= at:
+                st = "visited"
+            elif (u["telegram_id"] or 0) <= 0:
+                st = "app"
+            elif u["blocked"]:
+                st = "blocked"
+            elif m["delivered_message_id"]:
+                st = "delivered"
+            else:
+                st = "sent"
+            items[at] = st
+        return {"items": items, "support_seen_at": seen, "last_active_at": active, "bot_blocked": bool(u["blocked"])}
+    finally:
+        await conn.close()
 
 
 @router.get("/clients")

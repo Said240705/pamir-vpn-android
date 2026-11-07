@@ -16,7 +16,6 @@ import datetime
 import os
 import sqlite3
 import sys
-import urllib.parse
 
 ROOT = os.getenv("PAMIR_BOT_ROOT", "/root/YadrenoVPN")
 DB = os.path.join(ROOT, "database", "vpn_bot.db")
@@ -42,7 +41,7 @@ def db():
 c = db()
 if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='pamir_home_optin'").fetchone():
     sys.exit(0)  # кабинет ещё ни разу не включал «Домой»
-rows = [dict(r) for r in c.execute("""SELECT h.key_id, h.want, h.status, k.server_id, k.panel_email,
+rows = [dict(r) for r in c.execute("""SELECT h.key_id, h.want, h.status, h.requested_at, k.server_id, k.panel_email,
                                        k.expires_at > datetime('now') AS active
                                        FROM pamir_home_optin h JOIN vpn_keys k ON k.id = h.key_id
                                        WHERE h.status = 'pending' OR h.want = 1""")]
@@ -53,6 +52,10 @@ if not rows:
     sys.exit(0)
 
 from bot.services.panels.xui import XUIClient  # noqa: E402
+
+for _name in ("_attach_one", "_detach_one", "_get_client_record", "_split_record", "get_inbounds"):
+    if not hasattr(XUIClient, _name):
+        sys.exit(f"Клиент панели бота устроен иначе (нет {_name}) — ничего не делаю.")
 
 
 def mark(key_id, status, error=None):
@@ -65,7 +68,8 @@ def mark(key_id, status, error=None):
 
 
 async def set_home(client, email, hid, on):
-    """Добавить (_attach_one) или убрать вход hid у клиента; → привязан ли вход после этого."""
+    """Добавить (_attach_one) или убрать (_detach_one) вход hid у клиента; → привязан ли вход после этого.
+    Просто сохранить клиента с новым списком входов нельзя — эта панель вход при этом не убирает."""
     rec = await client._get_client_record(email)
     if not rec:
         raise RuntimeError("клиента нет в панели")
@@ -76,16 +80,9 @@ async def set_home(client, email, hid, on):
     if on:
         await client._attach_one(email, hid)
     else:
-        rest = sorted(attached - {hid})
-        if not rest:
+        if not attached - {hid}:
             raise RuntimeError("у ключа не осталось бы входов — не трогаю")
-        payload = client._client_payload(current, email=email)
-        endpoint = f"/panel/api/clients/update/{urllib.parse.quote(email, safe='')}?inboundIds=" + ",".join(map(str, rest))
-
-        def ok(r):
-            return bool(r) and hid not in set(client._split_record(r)[1] or ())
-
-        await client._write_with_state_check("POST", endpoint, data=payload, email=email, validator=ok)
+        await client._detach_one(email, hid)
     _, after = client._split_record(await client._get_client_record(email))
     return hid in set(after or ())
 
@@ -111,8 +108,13 @@ async def main():
                     elif want:
                         pass  # проверка включивших: на месте
                 except Exception as error:
-                    mark(r["key_id"], "pending" if r["status"] == "pending" else "error", f"{type(error).__name__}: {error}"[:300])
-                    log(f"ключ {r['key_id']}: не получилось ({type(error).__name__})")
+                    # запрос из кабинета пробуем 5 минут, потом «ошибка» — кабинет покажет «напишите в поддержку»
+                    fresh = r["status"] == "pending" and r["requested_at"] and r["requested_at"] > (
+                        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+                    if r["status"] == "pending":
+                        mark(r["key_id"], "pending" if fresh else "error", f"{type(error).__name__}: {error}"[:300])
+                    # у уже включённых (проверка раз в минуту) статус не трогаем — попробуем в следующий раз
+                    log(f"ключ {r['key_id']}: не получилось ({type(error).__name__}: {str(error)[:120]})")
         finally:
             close = getattr(client, "close", None)
             if close:

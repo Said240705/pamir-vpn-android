@@ -132,6 +132,10 @@ async def _ensure(conn):
     await conn.execute("""CREATE TABLE IF NOT EXISTS pamir_online_samples (
         at TIMESTAMP NOT NULL, location TEXT NOT NULL, n INTEGER NOT NULL)""")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_pamir_online_samples_at ON pamir_online_samples(at)")
+    # «🏠 Домой» по желанию: кнопка в кабинете ставит запрос, home_optin.py (бот) добавляет/убирает вход у ключа
+    await conn.execute("""CREATE TABLE IF NOT EXISTS pamir_home_optin (
+        key_id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, want INTEGER NOT NULL, status TEXT NOT NULL,
+        requested_at TIMESTAMP NOT NULL, done_at TIMESTAMP, error TEXT)""")
     # когда человек последний раз открывал чат поддержки в кабинете или приложении (для «прочитано» в админке)
     await conn.execute("CREATE TABLE IF NOT EXISTS pamir_support_seen (user_id INTEGER PRIMARY KEY, seen_at TIMESTAMP NOT NULL)")
     await conn.execute("INSERT OR IGNORE INTO pamir_admin_meta (key, value) VALUES ('clients_since', ?)", (_now(),))
@@ -1976,6 +1980,72 @@ async def _key_links(conn, key_id, user_id=None):
     except Exception as error:
         raise HTTPException(502, f"Не удалось собрать ссылки: {type(error).__name__}")
     return dict(row), [{"location": l["location"], "link": l["link"]} for l in links]
+
+
+# ---------- «🏠 Домой»: российский IP по желанию ----------
+HOME_MARK = "Домой"
+
+
+def _home_state(emails):
+    """По базе панели (только чтение): есть ли вход «Домой» и к каким клиентам он уже привязан. → (есть_вход, {email: bool})."""
+    c = sqlite3.connect(f"file:{XUI_DB}?mode=ro", uri=True, timeout=5)
+    try:
+        home = [r[0] for r in c.execute("SELECT id FROM inbounds WHERE remark LIKE ? AND enable = 1", (f"%{HOME_MARK}%",))]
+        if not home or not emails:
+            return bool(home), {}
+        out = {}
+        for e in emails:
+            row = c.execute("""SELECT 1 FROM clients cl JOIN client_inbounds ci ON ci.client_id = cl.id
+                               WHERE cl.email = ? AND ci.inbound_id IN (%s) LIMIT 1""" % ",".join("?" * len(home)), (e, *home)).fetchone()
+            out[e] = bool(row)
+        return True, out
+    finally:
+        c.close()
+
+
+@user_router.get("/home")
+async def home_status(user=Depends(auth.current_user)):
+    """Карточка «Домой» в кабинете: доступна ли функция и включена ли у каждого действующего ключа."""
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        keys = await _rows(conn, """SELECT k.id, k.panel_email, h.want, h.status FROM vpn_keys k
+                                    LEFT JOIN pamir_home_optin h ON h.key_id = k.id
+                                    WHERE k.user_id = ? AND k.expires_at > datetime('now') AND k.panel_email IS NOT NULL ORDER BY k.id""", (user["id"],))
+    finally:
+        await conn.close()
+    try:
+        available, attached = await asyncio.to_thread(_home_state, [k["panel_email"] for k in keys])
+    except Exception:
+        return {"available": False, "keys": []}
+    return {"available": available, "keys": [{
+        "id": k["id"], "on": bool(attached.get(k["panel_email"])),
+        "pending": k["status"] == "pending", "want": None if k["want"] is None else bool(k["want"])} for k in keys]}
+
+
+class HomeIn(BaseModel):
+    key_id: int
+    on: bool
+
+
+@user_router.post("/home")
+async def home_toggle(payload: HomeIn, user=Depends(auth.current_user)):
+    """Включить/выключить «Домой» у своего ключа: запрос подхватит home_optin.py (обычно за минуту)."""
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        k = await (await conn.execute("""SELECT id FROM vpn_keys WHERE id = ? AND user_id = ? AND expires_at > datetime('now')
+                                         AND panel_email IS NOT NULL""", (payload.key_id, user["id"]))).fetchone()
+        if not k:
+            raise HTTPException(404, "Ключ не найден или подписка закончилась")
+        await conn.execute("""INSERT INTO pamir_home_optin (key_id, user_id, want, status, requested_at) VALUES (?, ?, ?, 'pending', ?)
+                              ON CONFLICT(key_id) DO UPDATE SET want = excluded.want, status = 'pending',
+                              requested_at = excluded.requested_at, done_at = NULL, error = NULL""",
+                           (payload.key_id, user["id"], 1 if payload.on else 0, _now()))
+        await conn.commit()
+    finally:
+        await conn.close()
+    return {"ok": True, "pending": True}
 
 
 @user_router.get("/keys")

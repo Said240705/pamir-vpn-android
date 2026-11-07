@@ -8,7 +8,7 @@
 #
 #   bash setup_home_exit.sh          установить или проверить
 #   bash setup_home_exit.sh --undo   остановить и убрать выход (Xray останется установленным, но выключенным)
-set -euo pipefail
+set -eu   # без pipefail: «… | head -1» обрывает вывод, и это не ошибка
 
 MAIN_IP="78.17.158.230"
 PORT=8443
@@ -38,7 +38,7 @@ echo "== 1. Xray"
 if ! command -v xray >/dev/null; then
   bash -c "$(curl -fsSL --max-time 60 https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 fi
-xray version | head -1
+xray version 2>/dev/null | sed -n 1p || true
 
 echo "== 2. Ключи соединения"
 if [[ -f "$OUT" ]]; then
@@ -52,8 +52,7 @@ else
   HOME_PUB=$(echo "$KEYS" | awk -F': *' '/[Pp]ublic|Password/{print $2; exit}')
   HOME_SID=$(openssl rand -hex 8)
   [[ -n "$HOME_UUID" && -n "$HOME_PRIV" && -n "$HOME_PUB" ]] || { echo "Не получилось создать ключи — ничего не меняю."; exit 1; }
-  umask 077
-  cat > "$OUT" <<EOF
+  ( umask 077; cat > "$OUT" ) <<EOF
 HOME_ADDR=185.198.152.202
 HOME_PORT=$PORT
 HOME_SNI=$SNI
@@ -67,7 +66,7 @@ fi
 echo "== 3. Конфиг"
 [[ -f "$CONF" ]] && cp "$CONF" "$CONF.bak-mognu-home-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$(dirname "$CONF")"
-cat > "$CONF" <<EOF
+( umask 027; cat > "$CONF" ) <<EOF
 {
   "log": { "loglevel": "warning" },
   "inbounds": [{
@@ -84,14 +83,17 @@ cat > "$CONF" <<EOF
   ] }
 }
 EOF
+# служба Xray работает от пользователя xray — конфиг (в нём закрытый ключ) читает только он и root
+chown root:xray "$CONF" 2>/dev/null || chown root:nogroup "$CONF"
+chmod 640 "$CONF"
 xray run -test -config "$CONF" >/dev/null && echo "конфиг проверен Xray: ok"
 
 echo "== 4. Только основной сервер может подключиться"
 mkdir -p "$(dirname "$DROPIN")"
 cat > "$DROPIN" <<EOF
 [Service]
-ExecStartPre=/bin/sh -c 'iptables -C INPUT -p tcp --dport $PORT ! -s $MAIN_IP -j DROP 2>/dev/null || iptables -I INPUT -p tcp --dport $PORT ! -s $MAIN_IP -j DROP'
-ExecStartPre=/bin/sh -c 'ip6tables -C INPUT -p tcp --dport $PORT -j DROP 2>/dev/null || ip6tables -I INPUT -p tcp --dport $PORT -j DROP || true'
+ExecStartPre=+/bin/sh -c 'iptables -C INPUT -p tcp --dport $PORT ! -s $MAIN_IP -j DROP 2>/dev/null || iptables -I INPUT -p tcp --dport $PORT ! -s $MAIN_IP -j DROP'
+ExecStartPre=+/bin/sh -c 'ip6tables -C INPUT -p tcp --dport $PORT -j DROP 2>/dev/null || ip6tables -I INPUT -p tcp --dport $PORT -j DROP || true'
 EOF
 systemctl daemon-reload
 systemctl enable xray >/dev/null 2>&1

@@ -14,6 +14,7 @@ import json
 import os
 import time
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -36,7 +37,8 @@ MSK = "+3 hours"  # display_timezone = Europe/Moscow, без перехода н
 PAID = "p.status = 'paid' AND p.payable_amount_minor > 0 AND COALESCE(p.payment_type, '') NOT IN ('balance', 'trial')"
 DRAFT = "(k.server_id IS NULL OR COALESCE(k.panel_email, '') = '')"
 TRIAL_KEY = "EXISTS (SELECT 1 FROM trial_activations ta WHERE ta.vpn_key_id = k.id)"
-ACTION_RU = {"key.extend": "продлил ключ", "key.delete": "удалил ключ", "key.fix": "доделал ключ", "key.reset_devices": "сбросил устройства",
+ACTION_RU = {"key.hwid_gc": "автоуборка: пробное устройство OneXray", "key.hwid_gc_dry": "автоуборка (проверка): убрала бы пробное устройство",
+             "key.extend": "продлил ключ", "key.delete": "удалил ключ", "key.fix": "доделал ключ", "key.reset_devices": "сбросил устройства",
              "key.sub_url": "смотрел ссылку подписки", "user.balance": "изменил баланс", "user.ban": "блокировка", "user.gift": "подарил дни",
              "user.message": "написал через бота", "user.note": "заметка и метки", "payment.complete": "доделал оплату",
              "report.send": "прислал утренний отчёт", "report.settings": "настроил утренний отчёт",
@@ -1298,6 +1300,88 @@ async def _start_background():
         _online_task = asyncio.get_running_loop().create_task(_online_loop())
     if _report_task is None or _report_task.done():
         _report_task = asyncio.get_running_loop().create_task(_report_loop())
+    global _hwid_gc_task
+    if _hwid_gc_task is None or _hwid_gc_task.done():
+        _hwid_gc_task = asyncio.get_running_loop().create_task(_hwid_gc_loop())
+
+
+# ---------- автоуборка «пробных» устройств OneXray ----------
+# OneXray при добавлении подписки регистрирует два HWID: один для проверки в окне «Добавить подписку»,
+# второй — при самом добавлении. Первый больше ни разу не выходит на связь, но занимает место в лимите,
+# и при лимите 1 следующее добавление получает отказ. Уборка находит такие пары и освобождает место
+# тем же вызовом бота, что «Отключить» в админке (подключение не рвётся — запись только освобождает слот).
+# Режим: pamir_admin_meta.hwid_gc = 'apply' — удалять; иначе только запись в журнал «убрала бы».
+XUI_DB = os.getenv("XUI_DB_PATH", "/etc/x-ui/x-ui.db")
+HWID_GC_EVERY = 600            # раз в 10 минут
+HWID_GC_MIN_AGE_MS = 30 * 60_000   # запись старше 30 минут
+HWID_GC_PAIR_MS = 10 * 60_000      # «напарник» зарегистрирован в пределах 10 минут
+HWID_GC_SEEN_MS = 60_000           # «ни разу после регистрации»: last_seen не позже минуты после first_seen
+_hwid_gc_task = None
+_hwid_gc_reported: set = set()
+
+
+def _hwid_gc_candidates(now_ms: int):
+    """Записи client_hwids, похожие на пробный HWID OneXray: (id, sub_id)."""
+    c = sqlite3.connect(f"file:{XUI_DB}?mode=ro", uri=True, timeout=5)
+    try:
+        rows = c.execute("SELECT id, sub_id, first_seen, last_seen FROM client_hwids WHERE sub_id IS NOT NULL AND sub_id != ''").fetchall()
+    finally:
+        c.close()
+    by_sub = {}
+    for r in rows:
+        by_sub.setdefault(r[1], []).append(r)
+    out = []
+    for sub, items in by_sub.items():
+        for rid, _, first, last in items:
+            if last > first + HWID_GC_SEEN_MS or now_ms - first < HWID_GC_MIN_AGE_MS:
+                continue
+            # есть другое устройство той же подписки, зарегистрированное рядом по времени и живое позже
+            if any(o[0] != rid and abs(o[2] - first) <= HWID_GC_PAIR_MS and o[3] > last for o in items):
+                out.append((rid, sub))
+    return out
+
+
+async def _hwid_gc_once():
+    cands = await asyncio.to_thread(_hwid_gc_candidates, int(time.time() * 1000))
+    if not cands:
+        return
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        mode = await _scalar(conn, "SELECT value FROM pamir_admin_meta WHERE key = 'hwid_gc'")
+        keys = {}
+        for _, sub in cands:
+            if sub not in keys:
+                keys[sub] = await (await conn.execute("""SELECT k.id, k.user_id, u.telegram_id FROM vpn_keys k JOIN users u ON u.id = k.user_id
+                                                         WHERE k.sub_id = ? ORDER BY k.id DESC LIMIT 1""", (sub,))).fetchone()
+    finally:
+        await conn.close()
+    system = {"tg_id": 0}
+    for rid, sub in cands:
+        k = keys.get(sub)
+        if not k:
+            continue
+        if mode != "apply":
+            if rid not in _hwid_gc_reported:
+                _hwid_gc_reported.add(rid)
+                await _audit(system, "key.hwid_gc_dry", k["user_id"], f"ключ #{k['id']}: устройство #{rid}")
+            continue
+        try:
+            r = await _bot("POST", "/devices/remove", {"telegram_id": k["telegram_id"], "key_id": k["id"], "device_id": rid}, 20)
+        except Exception:
+            continue
+        if r.get("removed") == rid or r.get("ok", True):
+            await _audit(system, "key.hwid_gc", k["user_id"], f"ключ #{k['id']}: устройство #{rid}")
+
+
+async def _hwid_gc_loop():
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await _hwid_gc_once()
+        except Exception as e:
+            print(f"[mognu] hwid gc: {type(e).__name__}: {e}", flush=True)
+        await asyncio.sleep(HWID_GC_EVERY)
 
 
 async def _online_loop():

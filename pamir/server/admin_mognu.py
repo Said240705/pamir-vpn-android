@@ -2020,7 +2020,8 @@ async def home_status(user=Depends(auth.current_user)):
         return {"available": False, "keys": []}
     return {"available": available, "keys": [{
         "id": k["id"], "on": bool(attached.get(k["panel_email"])),
-        "pending": k["status"] == "pending", "want": None if k["want"] is None else bool(k["want"])} for k in keys]}
+        "pending": k["status"] == "pending", "error": k["status"] == "error",
+        "want": None if k["want"] is None else bool(k["want"])} for k in keys]}
 
 
 HOME_WORKER = [os.getenv("PAMIR_HOME_PYTHON", "/root/YadrenoVPN/venv/bin/python"), os.getenv("PAMIR_HOME_SCRIPT", "/root/home_optin.py")]

@@ -2023,6 +2023,21 @@ async def home_status(user=Depends(auth.current_user)):
         "pending": k["status"] == "pending", "want": None if k["want"] is None else bool(k["want"])} for k in keys]}
 
 
+HOME_WORKER = [os.getenv("PAMIR_HOME_PYTHON", "/root/YadrenoVPN/venv/bin/python"), os.getenv("PAMIR_HOME_SCRIPT", "/root/home_optin.py")]
+
+
+async def _home_kick():
+    """Запустить home_optin.py сразу (не ждать cron): человек видит результат за секунды. Тот же замок, что у cron."""
+    try:
+        log = open("/var/log/mognu-home.log", "ab")
+        # -w 20: если как раз идёт запуск по cron — дождаться его и сделать свой (иначе запрос подождал бы минуту)
+        await asyncio.create_subprocess_exec("flock", "-w", "20", "/run/mognu-home.lock", *HOME_WORKER,
+                                             stdout=log, stderr=log, start_new_session=True)
+        log.close()
+    except Exception as e:
+        print(f"[mognu] home kick: {type(e).__name__}: {e}", flush=True)
+
+
 class HomeIn(BaseModel):
     key_id: int
     on: bool
@@ -2045,6 +2060,7 @@ async def home_toggle(payload: HomeIn, user=Depends(auth.current_user)):
         await conn.commit()
     finally:
         await conn.close()
+    await _home_kick()
     return {"ok": True, "pending": True}
 
 

@@ -122,6 +122,7 @@ import com.v2ray.ang.R
 import com.v2ray.ang.core.LauncherManager
 import com.v2ray.ang.dto.RealPingResult
 import com.v2ray.ang.dto.TestServiceMessage
+import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.enums.RoutingType
 import com.v2ray.ang.extension.serializable
 import com.v2ray.ang.extension.toast
@@ -131,11 +132,13 @@ import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.helper.MessageHelper
 import com.v2ray.ang.ui.main.MainActivity
 import com.v2ray.ang.ui.perappproxy.PerAppProxyActivity
+import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -203,6 +206,8 @@ data class PServer(
     val isLte: Boolean,
     val isStub: Boolean,
     val rawRemarks: String,
+    /** «🏠 Домой» (российский IP за границей): только ручной выбор — автовыбор и запасные переходы его не трогают. */
+    val isHome: Boolean = false,
 )
 
 private enum class Tab { HOME, SETTINGS, APPS, CABINET }
@@ -240,6 +245,7 @@ open class PamirActivity : AppCompatActivity() {
     private var lastUpdate by mutableLongStateOf(0L)
     private var whitelist by mutableStateOf(false)
     private var autoSwitched = false
+    private var lteReturnJob: kotlinx.coroutines.Job? = null
     private var lastPrecheck = 0L
     private var newVersion by mutableStateOf<String?>(null)
     /** Download URLs of [newVersion], tried in order: GitHub first, the site as a fallback. */
@@ -1437,6 +1443,7 @@ open class PamirActivity : AppCompatActivity() {
                 isLte = name.contains("LTE", true) || p.network == "xhttp",
                 isStub = host.startsWith("127.") || host == "localhost",
                 rawRemarks = p.remarks,
+                isHome = p.remarks.contains("Домой"),
             )
         }
         servers = list
@@ -1448,10 +1455,10 @@ open class PamirActivity : AppCompatActivity() {
         }
         var sel = MmkvManager.getSelectServer()
         if (!MmkvManager.decodeSettingsBool(PREF_USER_CHOSE, false)) {
-            list.firstOrNull { !it.isStub && !it.isLte }?.let { sel = it.guid; MmkvManager.setSelectServer(it.guid) }
+            list.firstOrNull { !it.isStub && !it.isLte && !it.isHome }?.let { sel = it.guid; MmkvManager.setSelectServer(it.guid) }
         }
         if (sel == null || list.none { it.guid == sel }) {
-            sel = list.firstOrNull { !it.isStub && !it.isLte }?.guid ?: list.firstOrNull()?.guid
+            sel = list.firstOrNull { !it.isStub && !it.isLte && !it.isHome }?.guid ?: list.firstOrNull()?.guid
             sel?.let { MmkvManager.setSelectServer(it) }
         }
         selected = sel
@@ -1513,7 +1520,7 @@ open class PamirActivity : AppCompatActivity() {
     private fun pickBest() {
         lifecycleScope.launch {
             runPing()
-            val best = servers.filter { !it.isStub && !it.isLte && (pings[it.guid] ?: -1) > 0 && !PamirLocations.isDown(it.rawRemarks) }
+            val best = servers.filter { !it.isStub && !it.isLte && !it.isHome && (pings[it.guid] ?: -1) > 0 && !PamirLocations.isDown(it.rawRemarks) }
                 .minByOrNull { pings[it.guid] ?: Int.MAX_VALUE }
             if (best != null) {
                 selectServer(best.guid)
@@ -1582,9 +1589,18 @@ open class PamirActivity : AppCompatActivity() {
                 return@launch
             }
             Log.w("Pamir", "ip check failed")
+            // Сервис определения IP мог просто не ответить (на мобильном это частое): проверяем само соединение
+            if (withContext(Dispatchers.IO) { proxyWorks() }) {
+                if (running) ipInfo = "подключено"
+                Log.w("Pamir", "ip service silent, but the connection works")
+                return@launch
+            }
             val cur = servers.firstOrNull { it.guid == selected }
             val lte = lteServer()
-            if (cur != null && !cur.isLte && lte != null && smartLte() && !autoSwitched) {
+            // LTE Обход — только при «белых списках»: когда обычные серверы не отвечают и напрямую
+            val whitelistNow = lte != null && !withContext(Dispatchers.IO) { normalReachable() }
+            Log.w("Pamir", "connection failed, normal servers reachable=${!whitelistNow}")
+            if (cur != null && !cur.isLte && lte != null && smartLte() && !autoSwitched && whitelistNow) {
                 autoSwitched = true
                 useLte(lte)
                 toast("Сервер не отвечает — переключили на LTE Обход", true)
@@ -1595,6 +1611,58 @@ open class PamirActivity : AppCompatActivity() {
             } else {
                 ipInfo = "нет ответа"
                 toast("Нет соединения через VPN. Попробуйте другой сервер", true, action = "Сменить") { sheetOpen = true }
+            }
+        }
+    }
+
+    /** Работает ли соединение через VPN: два адреса generate_204 через локальный HTTP-вход ядра. */
+    private fun proxyWorks(): Boolean {
+        val port = SettingsManager.getHttpPort()
+        if (port == 0) return false
+        return listOf(AppConfig.DELAY_TEST_URL, AppConfig.DELAY_TEST_URL2).any { url ->
+            HttpUtil.getUrlContent(UrlContentRequest(url = url, timeout = 7000, httpPort = port,
+                proxyUsername = SettingsManager.getSocksUsername(), proxyPassword = SettingsManager.getSocksPassword())) != null
+        }
+    }
+
+    /**
+     * Доступен ли хоть один обычный сервер напрямую (TCP). Приложение исключено из VPN
+     * (CoreVpnService.configurePerAppProxy), поэтому проверка идёт мимо туннеля и работает и при включённом VPN.
+     * Недоступны все — признак «белых списков».
+     */
+    private suspend fun normalReachable(): Boolean = coroutineScope {
+        val normal = servers.filter { !it.isStub && !it.isLte && !it.isHome }
+        if (normal.isEmpty()) return@coroutineScope true
+        normal.map { s ->
+            async(Dispatchers.IO) {
+                runCatching { Socket().use { it.connect(InetSocketAddress(s.host, s.port), 4000) }; true }.getOrDefault(false)
+            }
+        }.awaitAll().any { it }
+    }
+
+    /** Пока VPN работает на LTE, включённом автоматически: раз в 3 минуты проверяем, не вернулись ли обычные серверы. */
+    private fun watchLteReturn() {
+        lteReturnJob?.cancel()
+        lteReturnJob = lifecycleScope.launch {
+            while (true) {
+                delay(180_000)
+                if (!running || !MmkvManager.decodeSettingsBool(PREF_AUTO_LTE_ACTIVE, false)) return@launch
+                if (servers.firstOrNull { it.guid == selected }?.isLte != true) return@launch
+                if (!normalReachable()) continue
+                val normal = servers.filter { !it.isStub && !it.isLte && !it.isHome }
+                val pref = MmkvManager.decodeSettingsString(PREF_PREFERRED, "") ?: ""
+                val back = normal.firstOrNull { it.guid == pref } ?: normal.firstOrNull() ?: return@launch
+                Log.w("Pamir", "normal servers are back, leaving auto LTE")
+                selected = back.guid
+                MmkvManager.setSelectServer(back.guid)
+                MmkvManager.encodeSettings(PREF_AUTO_LTE_ACTIVE, false)
+                whitelist = false
+                toast("Обычные серверы снова доступны — вернули ${back.name}", true)
+                connecting = true
+                LauncherManager.restartService(this@PamirActivity)
+                delay(3000); connecting = false
+                fetchIp()
+                return@launch
             }
         }
     }
@@ -1612,6 +1680,7 @@ open class PamirActivity : AppCompatActivity() {
         MmkvManager.encodeSettings(PREF_AUTO_LTE_ACTIVE, true)
         selected = lte.guid
         MmkvManager.setSelectServer(lte.guid)
+        watchLteReturn()
     }
 
     /** Checks whether regular servers are reachable (white lists) and restores the preferred server. */
@@ -1620,7 +1689,7 @@ open class PamirActivity : AppCompatActivity() {
         if (System.currentTimeMillis() - lastPrecheck < 60_000) return
         lastPrecheck = System.currentTimeMillis()
         runPing(real = false)
-        val normal = servers.filter { !it.isStub && !it.isLte }
+        val normal = servers.filter { !it.isStub && !it.isLte && !it.isHome }
         val reachable = normal.any { (pings[it.guid] ?: -1) > 0 }
         whitelist = normal.isNotEmpty() && !reachable && lteServer() != null
         Log.w("Pamir", "precheck reachable=$reachable whitelist=$whitelist")
@@ -2550,6 +2619,7 @@ open class PamirActivity : AppCompatActivity() {
                         locTick.let { PamirLocations.isDown(s.rawRemarks) } -> "Перебои — смените сервер"
                         auto -> "Выбран автоматически"
                         s.isLte -> "Для мобильного интернета"
+                        s.isHome -> "Для поездок за границу"
                         p != null && p > 0 -> "Отклик $p мс"
                         else -> "Нажмите, чтобы сменить"
                     }
@@ -2675,6 +2745,7 @@ open class PamirActivity : AppCompatActivity() {
             detail = when {
                 down -> "Перебои на сервере"
                 s.isLte -> "Для «белых списков»"
+                s.isHome -> "Для поездок за границу · не в России"
                 else -> pingText(s).ifEmpty { "Нажмите, чтобы подключить" }
             },
             detailColor = when {

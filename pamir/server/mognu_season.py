@@ -545,6 +545,7 @@ def wrapped(telegram_id: int) -> dict[str, Any]:
         'traffic_bytes': total,
         'top_month': top_month,
         'top_month_bytes': months.get(top_month, 0) if top_month else 0,
+        'months': [months.get(m, 0) for m in range(1, 13)],   # график по месяцам на слайде «Самый могучий месяц»
         'best_day': best_day,
         'best_day_bytes': days.get(best_day, 0) if best_day else 0,
         'beat_percent': beat,

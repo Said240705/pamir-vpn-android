@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Проверка из России: доходят ли люди до основного сервера. Две половины в одном файле.
 
-На российском VPS (AdminVPS, mognu.app) — проверка: раз в минуту открывает соединение с портом 443 основного
-сервера (как приложение) и пингует его. Порт не отвечает 2 проверки подряд — сбой; после восстановления — сколько
+На российском VPS (AdminVPS, mognu.app) — проверка: раз в минуту проверяет все пути, которыми подключаются люди:
+входы основного сервера (443, 65535, 4443) и «Германии» — соединением, как приложение (при сбое ещё и пингом);
+LTE Обход — запросом через CDN по настоящему пути; выход «Домой» — работает ли его служба. С основного сервера
+пересылка заодно проверяет связь Испания → Россия (порт выхода «Домой»). Порт не отвечает 2 проверки подряд — сбой; после восстановления — сколько
 длился и был ли пинг (пинг есть, порт нет — похоже на фильтрацию; нет даже пинга — пропал маршрут). Каждая проверка
 пишется в /var/log/mognu-probe.log, так что видны и короткие провалы.
 
@@ -24,7 +26,7 @@ Telegram из России не открывается, а 443 на VPS цели
                          python3 mognu_ru_probe.py install-relay таймер systemd (каждую минуту)
                          python3 mognu_ru_probe.py ingest        принять результат (его вызывает ssh-ключ VPS)
 
-Настройки VPS — /etc/mognu-probe.env (необязательно): TARGETS="Испания=78.17.158.230:443" (через запятую),
+Настройки VPS — /etc/mognu-probe.env (необязательно): TARGETS="Имя=хост:порт,Имя=https://…#код,Имя=service:служба",
 PUSH=root@78.17.158.230. Токен бота и ID админов пересылка берёт из /root/YadrenoVPN/config.py; в вывод не попадают.
 """
 import datetime as dt
@@ -35,6 +37,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
@@ -46,7 +49,13 @@ RELAY_STATE = '/var/lib/mognu-probe/relay.json'
 LOG = '/var/log/mognu-probe.log'
 KEY = '/root/.ssh/mognu_probe'
 CONFIG_PY = '/root/YadrenoVPN/config.py'
-DEFAULT_TARGETS = 'Испания=78.17.158.230:443'
+# все пути, которыми люди подключаются: входы основного сервера, «Германия», CDN-обход по настоящему пути
+# (ответ 400 — это xray за CDN, т.е. CDN довёз запрос до сервера) и выход «Домой» на этом же сервере
+DEFAULT_TARGETS = ('Испания=78.17.158.230:443,Испания-1=78.17.158.230:65535,Испания-2=78.17.158.230:4443,'
+                   'Германия=89.125.114.53:443,LTE Обход (CDN)=https://yacdn.pamirlink.ru/api/sync/#400,'
+                   'Домой · выход=service:xray')
+HOME_EXIT = ('185.198.152.202', 8443)   # выход «Домой»: проверяется с основного сервера (порт открыт только ему)
+XUI_DB = '/etc/x-ui/x-ui.db'
 DEFAULT_PUSH = 'root@78.17.158.230'
 FAILS_TO_ALERT = 2
 TRIES, TIMEOUT, PAUSE = 3, 5, 5  # three connection attempts ~10 s apart: one lost packet is not an outage
@@ -68,12 +77,19 @@ def conf():
 
 
 def targets(c):
+    """→ [(имя, вид, адрес)]: вид tcp — «хост:порт», http — «https://…#код», service — «service:имя»."""
     out = []
     for item in c['TARGETS'].split(','):
         name, _, addr = item.strip().rpartition('=')
-        host, _, port = addr.rpartition(':')
-        if host and port.isdigit():
-            out.append((name or host, host, int(port)))
+        addr = addr.strip()
+        if addr.startswith('https://') or addr.startswith('http://'):
+            out.append((name or addr, 'http', addr))
+        elif addr.startswith('service:'):
+            out.append((name or addr, 'service', addr[8:]))
+        else:
+            host, _, port = addr.rpartition(':')
+            if host and port.isdigit():
+                out.append((name or host, 'tcp', (host, int(port))))
     return out
 
 
@@ -112,6 +128,48 @@ def tcp_ok(host, port):
     return False, None
 
 
+def http_ok(target):
+    """Запрос по настоящему пути: любой ответ с ожидаемым кодом (после #) — путь до сервера живой."""
+    url, _, want = target.partition('#')
+    want = int(want) if want.isdigit() else 200
+    for i in range(TRIES):
+        t0 = time.monotonic()
+        try:
+            code = urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'}), timeout=TIMEOUT * 2).status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        except Exception:  # noqa: BLE001 — таймаут, сброс, DNS
+            code = None
+        if code == want or (want == 200 and code and 200 <= code < 300):
+            return True, int((time.monotonic() - t0) * 1000)
+        if i < TRIES - 1:
+            time.sleep(PAUSE)
+    return False, None
+
+
+def service_ok(name):
+    try:
+        r = subprocess.run(['systemctl', 'is-active', name], capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() == 'active', None
+    except (OSError, subprocess.SubprocessError):
+        return False, None
+
+
+def check(kind, addr):
+    """→ (ok, мс, ping, причина при сбое)."""
+    if kind == 'http':
+        ok, ms = http_ok(addr)
+        return ok, ms, None, 'CDN не довозит запросы до сервера — обход через CDN не работает'
+    if kind == 'service':
+        ok, ms = service_ok(addr)
+        return ok, ms, None, f'служба {addr} на российском сервере остановлена — «Домой» не работает (<code>systemctl status {addr}</code>)'
+    host, port = addr
+    ok, ms = tcp_ok(host, port)
+    ping = None if ok else ping_ok(host)
+    return ok, ms, ping, (f'порт {port} не отвечает; пинг '
+                          f'{"проходит — похоже на фильтрацию соединений" if ping else "тоже не проходит — пропал маршрут"}')
+
+
 def ping_ok(host):
     try:
         return subprocess.run(['ping', '-c', '2', '-W', '3', host], capture_output=True, timeout=15).returncode == 0
@@ -127,23 +185,24 @@ def log(line):
         pass
 
 
-def step(s, name, ok, ping, now):
+def step(s, name, ok, ping, now, why=None, where='из России'):
     """Advance one target's state by one check; return the message to report, if any."""
     s['fails'] = 0 if ok else s.get('fails', 0) + 1
     if not ok:
         s.setdefault('first_fail', now.isoformat(timespec='seconds'))
-        s['ping_seen'] = s.get('ping_seen', False) or bool(ping)
+        if ping is not None:  # у http/service-проверок пинга нет — и в сообщении о нём не пишем
+            s['ping_seen'] = s.get('ping_seen', False) or bool(ping)
     if not ok and not s.get('down') and s['fails'] >= FAILS_TO_ALERT:
         s['down'] = True
-        return (f'🔴 <b>{name}</b> недоступен из России с {msk(s["first_fail"])} МСК (порт 443 не отвечает; '
-                f'пинг {"проходит — похоже на фильтрацию соединений" if ping else "тоже не проходит — пропал маршрут"}).\n'
-                'Сам сервер может работать: проверь, видят ли его из других стран, на check-host.net.')
+        why = why or (f'порт не отвечает; пинг {"проходит — похоже на фильтрацию соединений" if ping else "тоже не проходит — пропал маршрут"}')
+        return (f'🔴 <b>{name}</b> недоступен {where} с {msk(s["first_fail"])} МСК ({why}).'
+                + ('\nСам сервер может работать: проверь, видят ли его из других стран, на check-host.net.' if ping is not None else ''))
     if ok:
         msg = None
         if s.get('down'):
             mins = max(1, round((now - dt.datetime.fromisoformat(s['first_fail'])).total_seconds() / 60))
-            msg = (f'🟢 <b>{name}</b> снова доступен из России. Сбой {msk(s["first_fail"])}–{now.astimezone(MSK):%H:%M} МСК, '
-                   f'около {mins} мин; пинг {"проходил" if s.get("ping_seen") else "не проходил"}.')
+            msg = (f'🟢 <b>{name}</b> снова доступен {where}. Сбой {msk(s["first_fail"])}–{now.astimezone(MSK):%H:%M} МСК, '
+                   f'около {mins} мин' + (f'; пинг {"проходил" if s.get("ping_seen") else "не проходил"}.' if 'ping_seen' in s else '.'))
         for k in ('down', 'first_fail', 'ping_seen'):
             s.pop(k, None)
         return msg
@@ -165,16 +224,16 @@ def run(dry=False):
     c, st = conf(), load(STATE)
     now = dt.datetime.now(dt.timezone.utc)
     events = st.get('events', [])
-    for name, host, port in targets(c):
-        ok, ms = tcp_ok(host, port)
-        ping = None if ok else ping_ok(host)
-        log(f'{now:%Y-%m-%dT%H:%M:%SZ} {name} tcp={"ok " + str(ms) + "ms" if ok else "fail"}'
-            + ('' if ok else f' ping={"ok" if ping else "fail"}'))
+    for name, kind, addr in targets(c):
+        if kind == 'service' and subprocess.run(['systemctl', 'cat', addr], capture_output=True).returncode != 0:
+            continue  # службы нет на этом сервере (например, «Домой» ещё не поставлен)
+        ok, ms, ping, why = check(kind, addr)
+        log(f'{now:%Y-%m-%dT%H:%M:%SZ} {name} {kind}={"ok" + (f" {ms}ms" if ms is not None else "") if ok else "fail"}'
+            + ('' if ok or ping is None else f' ping={"ok" if ping else "fail"}'))
         if dry:
-            print(f'  {"✓" if ok else "✗"} {name}: порт {port} ' + (f'отвечает за {ms} мс' if ok else
-                  f'не отвечает, пинг {"есть" if ping else "нет"}'))
+            print(f'  {"✓" if ok else "✗"} {name}: ' + ((f'отвечает за {ms} мс' if ms is not None else 'работает') if ok else why))
             continue
-        msg = step(st.setdefault('targets', {}).setdefault(name, {}), name, ok, ping, now)
+        msg = step(st.setdefault('targets', {}).setdefault(name, {}), name, ok, ping, now, why)
         if msg:
             st['seq'] = st.get('seq', 0) + 1
             events.append({'id': st['seq'], 'at': now.isoformat(timespec='seconds'), 'text': msg})
@@ -196,7 +255,7 @@ def blips():
     try:
         for line in open(LOG, encoding='utf-8'):
             ts, _, rest = line.partition(' ')
-            if 'tcp=fail' in rest and ts >= since:
+            if '=fail' in rest.split(' ping=')[0] and ts >= since:
                 bad.append(ts)
     except OSError:
         pass
@@ -289,9 +348,37 @@ def relay_step(rs, feed, now):
     return out
 
 
+def home_exists():
+    """Есть ли в панели вход «Домой» (иначе выход проверять незачем)."""
+    try:
+        import sqlite3
+        c = sqlite3.connect(f'file:{XUI_DB}?mode=ro', uri=True, timeout=5)
+        try:
+            return bool(c.execute("SELECT 1 FROM inbounds WHERE remark LIKE '%Домой%' AND enable = 1").fetchone())
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def home_step(rs, now, dry=False):
+    """С основного сервера: доходит ли он до выхода «Домой» на российском (по этому пути идёт весь «Домой»)."""
+    if not home_exists():
+        return []
+    ok, ms = tcp_ok(*HOME_EXIT)
+    if dry:
+        print(f'  {"✓" if ok else "✗"} Домой (Испания → Россия): ' + (f'отвечает за {ms} мс' if ok else f'порт {HOME_EXIT[1]} не отвечает'))
+        return []
+    msg = step(rs.setdefault('home', {}), 'Домой (Испания → Россия)', ok, None, now,
+               f'порт {HOME_EXIT[1]} российского сервера не отвечает основному — «Домой» у людей не работает', 'с основного сервера')
+    return [msg] if msg else []
+
+
 def relay(dry=False):
     rs, feed = load(RELAY_STATE), load(FEED)
     now = dt.datetime.now(dt.timezone.utc)
+    if dry:
+        home_step(rs, now, dry=True)
     if dry:
         if not feed:
             print('  ✗ из России ещё ничего не приходило — поставь проверку на российском сервере (install)')
@@ -299,7 +386,7 @@ def relay(dry=False):
             print(f'  ✓ последний результат из России: {msk(feed["received"])} МСК; '
                   f'сейчас недоступно: {", ".join(feed.get("down", [])) or "ничего"}; сообщений в ленте: {len(feed.get("events", []))}')
         return
-    msgs = rs.get('pending', []) + relay_step(rs, feed, now)
+    msgs = rs.get('pending', []) + relay_step(rs, feed, now) + home_step(rs, now)
     rs['pending'] = [m for m in msgs[-20:] if not send(m)]
     save(RELAY_STATE, rs)
 

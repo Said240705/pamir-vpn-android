@@ -299,6 +299,9 @@ open class PamirActivity : AppCompatActivity() {
     private var cabDevices by mutableStateOf<Map<Int, Pair<List<JSONObject>, Int>>>(emptyMap())
     private var cabReferral by mutableStateOf<JSONObject?>(null)
     private var cabPayments by mutableStateOf<List<JSONObject>>(emptyList())
+    /** «🏠 Домой» — российский IP по желанию: ответ /topup/router/home (available + keys[id, on, pending, want, error]). */
+    private var cabHome by mutableStateOf<JSONObject?>(null)
+    private var homeJob: kotlinx.coroutines.Job? = null
     /** Support ticket: the open one with its messages, or the number and status of the last one. */
     private var support by mutableStateOf(PamirSupport.State(0, null, emptyList()))
     private var supportUnread by mutableStateOf(false)
@@ -1248,6 +1251,7 @@ open class PamirActivity : AppCompatActivity() {
             }
             cabDevices = dev
             cabReferral = api(quiet = true) { p -> PamirApi.call("/topup/referral", proxyPort = p) }
+            cabHome = api(quiet = true) { p -> PamirApi.call("/topup/router/home", proxyPort = p) }
             loadPaymentMethod()
             loadLastChance()
             loadTrialOffer()
@@ -1267,6 +1271,30 @@ open class PamirActivity : AppCompatActivity() {
         support = s
         PamirSupport.track(this, s, viewed)
         supportUnread = PamirSupport.unread(s)
+    }
+
+    private fun homeToggle(keyId: Int, on: Boolean) {
+        if (homeJob?.isActive == true) return
+        homeJob = lifecycleScope.launch {
+            val r = api { p -> PamirApi.call("/topup/router/home", "POST", JSONObject().put("key_id", keyId).put("on", on), proxyPort = p) } ?: return@launch
+            if (!r.optBoolean("ok")) return@launch
+            // сервер добавляет вход за секунды; спрашиваем часто, потом реже, максимум ~5 минут
+            repeat(90) { i ->
+                val h = api(quiet = true) { p -> PamirApi.call("/topup/router/home", proxyPort = p) }
+                if (h != null) cabHome = h
+                val k = h?.optJSONArray("keys")?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } }?.firstOrNull { it.optInt("id") == keyId }
+                if (k != null && !k.optBoolean("pending")) {
+                    if (k.optBoolean("error")) {
+                        toast("Не получилось ${if (on) "включить" else "выключить"} «Домой» — напишите в поддержку", true)
+                    } else {
+                        updateSubscription(silent = true)
+                        toast(if (on) "🏠 «Домой» добавлен — выберите его в списке серверов, когда будете за границей" else "«Домой» убран из списка серверов", true)
+                    }
+                    return@launch
+                }
+                delay(if (i < 30) 2000 else 5000)
+            }
+        }
     }
 
     private fun removeDevice(keyId: Int, deviceId: Int) {
@@ -2938,38 +2966,61 @@ open class PamirActivity : AppCompatActivity() {
             SecondaryButton("Открыть кабинет") { openSite("/?from=android") }
             return
         }
-        list.forEach { t ->
+        // Как на сайте: тариф выбирается карточкой (цена за месяц и выгода к месячному), ниже одна кнопка.
+        // Хватает баланса — главная кнопка «С баланса», нет — только СБП/карта (пустую «С баланса» не нажать).
+        val effOf: (JSONObject) -> Long = { t ->
+            val p = t.optLong("price_minor")
+            if (promo != null) Math.round(p * (100 - promo) / 10_000.0) * 100 else p
+        }
+        val base = list.firstOrNull { it.optInt("duration_days") in 1..31 }?.let(effOf)
+        var selT by remember(list.map { it.optInt("id") }) { mutableStateOf((if (list.size >= 3) list[1] else list[0]).optInt("id")) }
+        list.forEachIndexed { i, t ->
             val id = t.optInt("id")
             val price = t.optLong("price_minor")
+            val eff = effOf(t)
             val days = t.optInt("duration_days")
-            PamirCard(Modifier.padding(vertical = Gap.xs), contentPadding = 14.dp) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(t.optString("name"), style = PamirType.body.copy(fontWeight = FontWeight.Bold), color = c.text)
-                        if (days > 0) Text("$days ${plural(days, "день", "дня", "дней")}", style = PamirType.support, color = c.textDim)
-                    }
-                    if (promo != null) {
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(rub(price), style = PamirType.support.copy(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough), color = c.textDim)
-                            Text(rub(Math.round(price * (100 - promo) / 10_000.0) * 100), style = PamirType.number.copy(fontSize = 20.sp), color = c.accentText)
-                        }
-                    } else {
-                        Text(rub(price), style = PamirType.number.copy(fontSize = 20.sp), color = c.accentText)
-                    }
-                }
-                Spacer(Modifier.height(Gap.m))
-                Row(horizontalArrangement = Arrangement.spacedBy(Gap.s)) {
-                    PrimaryButton("СБП / Карта", Modifier.weight(1f), loading = payBusy == "$id:yookassa_qr") { pay(id, "yookassa_qr") }
-                    val bal = balanceMinor
-                    if (bal != null && bal >= price) {
-                        SecondaryButton("С баланса", Modifier.weight(1f), loading = payBusy == "$id:balance") { pay(id, "balance") }
+            val months = maxOf(1, Math.round(days / 30.0).toInt())
+            val pct = if (base != null && base > 0 && months > 1) Math.round((1 - eff.toDouble() / (base * months)) * 100).toInt() else 0
+            val detail = listOfNotNull(
+                if (months > 1) "≈ ${rub(Math.round(eff / months / 100.0) * 100)}/мес" else if (days > 0) "$days ${plural(days, "день", "дня", "дней")}" else null,
+                if (pct >= 3) "выгода $pct%" else null,
+                if (list.size >= 3 && i == 1) "популярный" else null,
+            ).joinToString(" · ")
+            SheetRow(
+                selected = id == selT,
+                leading = { IconBadge(PamirIcons.Star, size = 40.dp) },
+                title = t.optString("name"),
+                detail = detail,
+                onClick = { selT = id },
+                trailing = {
+                    Column(horizontalAlignment = Alignment.End) {
+                        if (eff < price) Text(rub(price), style = PamirType.support.copy(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough), color = c.textDim)
+                        Text(rub(eff), style = PamirType.number.copy(fontSize = 20.sp), color = c.accentText)
                     }
                 }
-            }
+            )
         }
-        balanceMinor?.let {
+        val chosen = list.firstOrNull { it.optInt("id") == selT } ?: list[0]
+        val chosenId = chosen.optInt("id")
+        val chosenPrice = effOf(chosen)
+        val bal = balanceMinor
+        Spacer(Modifier.height(Gap.m))
+        if (bal != null && chosenPrice > 0 && bal >= chosenPrice) {
+            PrimaryButton(
+                "Оплатить с баланса", subtitle = "на балансе ${rub(bal)} → останется ${rub(bal - chosenPrice)}",
+                loading = payBusy == "$chosenId:balance"
+            ) { pay(chosenId, "balance") }
             Spacer(Modifier.height(Gap.s))
-            Text("На балансе: ${rub(it)}", style = PamirType.support, color = c.textDim, modifier = Modifier.align(Alignment.CenterHorizontally))
+            SecondaryButton("СБП или карта · ${rub(chosenPrice)}", loading = payBusy == "$chosenId:yookassa_qr") { pay(chosenId, "yookassa_qr") }
+        } else {
+            PrimaryButton("Оплатить ${rub(chosenPrice)}", subtitle = "СБП или карта", loading = payBusy == "$chosenId:yookassa_qr") { pay(chosenId, "yookassa_qr") }
+            if (bal != null && bal > 0) {
+                Spacer(Modifier.height(Gap.s))
+                Text(
+                    "На балансе ${rub(bal)} — не хватает ${rub(chosenPrice - bal)}. Баланс останется на следующий раз.",
+                    style = PamirType.support, color = c.textDim, modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+            }
         }
         var promoOpen by remember { mutableStateOf(false) }
         Spacer(Modifier.height(Gap.s))
@@ -3044,7 +3095,6 @@ open class PamirActivity : AppCompatActivity() {
                 ) { LoginButtons() }
                 return@Column
             }
-            BalanceCard()
             if (cabLoading && !cabLoaded) {
                 Spacer(Modifier.height(Gap.m))
                 SkeletonCard("Загружаем кабинет")
@@ -3066,6 +3116,10 @@ open class PamirActivity : AppCompatActivity() {
                 if (i > 0) Spacer(Modifier.height(Gap.m))
                 KeyCard(k)
             }
+            if (renewKeys.isNotEmpty() && !tv && cabHome?.optBoolean("available") == true) {
+                Spacer(Modifier.height(Gap.m))
+                HomeCard()
+            }
             if (cardInfo != null && renewKeys.isNotEmpty()) {
                 SectionHeader("Автопродление")
                 AutopayCard()
@@ -3082,8 +3136,54 @@ open class PamirActivity : AppCompatActivity() {
                 SectionHeader("Пригласить друзей")
                 ReferralCard(r)
             }
-            SectionHeader("История платежей")
+            SectionHeader("Баланс и платежи")
+            BalanceCard()
+            Spacer(Modifier.height(Gap.m))
             PaymentsCard()
+        }
+    }
+
+    @Composable
+    private fun HomeCard() {
+        val c = Pamir.colors
+        val h = cabHome ?: return
+        if (!h.optBoolean("available")) return
+        val keys = h.optJSONArray("keys")?.let { a -> (0 until a.length()).map { a.getJSONObject(it) } }.orEmpty()
+        if (keys.isEmpty()) return
+        val busy = homeJob?.isActive == true
+        PamirCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(PamirIcons.Globe, size = 44.dp, iconSize = 24.dp)
+                Spacer(Modifier.width(Gap.m))
+                Column(Modifier.weight(1f)) {
+                    Text("🏠 Домой — российский IP", style = PamirType.subtitle, color = c.text)
+                    Text("Для поездок и жизни за границей", style = PamirType.support, color = c.textDim)
+                }
+            }
+            Spacer(Modifier.height(Gap.s))
+            Text("Банки, госуслуги, билеты на поезд и другие сервисы, которые не открываются из-за рубежа.", style = PamirType.support, color = c.textDim)
+            keys.forEach { k ->
+                val id = k.optInt("id")
+                val pending = k.optBoolean("pending")
+                val want = if (k.isNull("want")) k.optBoolean("on") else k.optBoolean("want")
+                val name = renewKeys.firstOrNull { it.optInt("id") == id }?.let { keyName(it) } ?: "Ваш ключ"
+                val sub = when {
+                    pending -> if (want) "Добавляем сервер «Домой»…" else "Убираем «Домой»…"
+                    k.optBoolean("error") -> "Не получилось — попробуйте ещё раз или напишите в поддержку"
+                    k.optBoolean("on") -> "Включён · выберите «🏠 Домой» в списке серверов"
+                    else -> "Выключен"
+                }
+                Spacer(Modifier.height(Gap.s))
+                ToggleRow(
+                    leading = null, title = name, subtitle = sub,
+                    checked = if (pending) want else k.optBoolean("on"),
+                    onCheckedChange = { if (!pending && !busy) homeToggle(id, it) },
+                    subtitleColor = when { pending -> c.text; k.optBoolean("error") -> c.danger; k.optBoolean("on") -> c.accentText; else -> c.textDim }
+                )
+                if (pending) ProgressLine(0.5f, c.accentDeep)
+            }
+            Spacer(Modifier.height(Gap.s))
+            Text("В России «Домой» не нужен — обычные серверы работают лучше.", style = PamirType.caption, color = c.textDim)
         }
     }
 

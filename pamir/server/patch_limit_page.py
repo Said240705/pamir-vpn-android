@@ -3,7 +3,7 @@
 
 Тексты там лежат в base64 (название, объявление и заглушка-«сервер» с подписью). Скрипт раскодирует их,
 меняет «Pamir VPN» на «Mognu VPN», кодирует обратно и показывает, что было и что стало. Копия файла рядом
-(.bak-mognu), nginx -t — при ошибке файл возвращается. Повторный запуск ничего не меняет.
+(в /root, .bak-mognu), nginx -t — при ошибке файл возвращается. Повторный запуск ничего не меняет.
 
     python3 patch_limit_page.py          показать тексты и применить
 """
@@ -54,7 +54,7 @@ new_block = re.sub(r'base64:([A-Za-z0-9+/=]+)', lambda m: "base64:" + recode(m.g
 new_block = re.sub(r'return 200 "([A-Za-z0-9+/=]+)"', lambda m: 'return 200 "' + recode(m.group(1)) + '"', new_block)
 if new_block == block:
     sys.exit("Менять нечего — уже Mognu.")
-bak = P + ".bak-mognu"
+bak = "/root/" + os.path.basename(P) + ".bak-mognu"   # не рядом: nginx читает все файлы из sites-enabled
 shutil.copy2(P, bak)
 open(P, "w", encoding="utf-8").write(s[:a] + new_block + s[b:])
 t = subprocess.run(["nginx", "-t"], capture_output=True, text=True)

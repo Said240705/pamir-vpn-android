@@ -7,7 +7,9 @@
 # сервер по ssh-ключу, которым можно ТОЛЬКО положить архив или посмотреть список — ни войти, ни выполнить команды.
 # На том сервере хранятся последние 14 копий, здесь — последние 3.
 #
-#   bash mognu_backup.sh install 31.77.6.71   один раз: ключи, приёмник на том сервере (спросит его пароль), cron 04:17 UTC
+#   bash mognu_backup.sh install 31.77.6.71 [2222]   один раз: ключи, приёмник на том сервере (спросит его пароль),
+#                                                    cron 04:17 UTC. Порт ssh — если 22 закрыт (AdminVPS не выпускает
+#                                                    исходящий 22): на том сервере  bash mognu_backup.sh ssh-port 2222
 #   bash mognu_backup.sh run                  сделать копию сейчас (так её запускает cron)
 #   bash mognu_backup.sh list                 какие копии лежат на том сервере
 #
@@ -24,19 +26,21 @@ LOG=/var/log/mognu-backup.log
 remote() { # $1 = команда приёмника (put … / list); stdin — данные
   # shellcheck disable=SC1090
   source "$CONF"
-  ssh -i "$SSHKEY" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new "root@$BACKUP_HOST" "$1"
+  ssh -i "$SSHKEY" -p "${BACKUP_PORT:-22}" -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new "root@$BACKUP_HOST" "$1"
 }
 
 case "${1:-}" in
 install)
-  HOST="${2:?Укажите сервер для копий: bash mognu_backup.sh install 31.77.6.71}"
+  HOST="${2:?Укажите сервер для копий: bash mognu_backup.sh install 31.77.6.71 [порт]}"
+  PORT="${3:-22}"
+  timeout 10 bash -c "</dev/tcp/$HOST/$PORT" 2>/dev/null || { echo "До $HOST:$PORT не достучаться. Если закрыт 22 — на том сервере: bash mognu_backup.sh ssh-port 2222, потом install $HOST 2222"; exit 1; }
   umask 077
   [ -s "$KEY" ] || { openssl rand -base64 48 > "$KEY"; echo "Создан ключ шифрования $KEY — сохраните его отдельно (cat $KEY), не в чат."; }
   [ -s "$SSHKEY" ] || ssh-keygen -q -t ed25519 -N "" -C mognu-backup -f "$SSHKEY"
-  echo "BACKUP_HOST=$HOST" > "$CONF"
+  printf 'BACKUP_HOST=%s\nBACKUP_PORT=%s\n' "$HOST" "$PORT" > "$CONF"
   PUB=$(cat "$SSHKEY.pub")
   echo "Ставлю приёмник на $HOST — ssh спросит пароль root этого сервера (один раз)."
-  ssh -o StrictHostKeyChecking=accept-new "root@$HOST" "PUB='$PUB' bash -s" <<'REMOTE'
+  ssh -p "$PORT" -o StrictHostKeyChecking=accept-new "root@$HOST" "PUB='$PUB' bash -s" <<'REMOTE'
 set -eu
 cat > /usr/local/sbin/mognu-backup-recv <<'EOF'
 #!/bin/bash
@@ -91,6 +95,15 @@ run)
   ;;
 list)
   remote list
+  ;;
+ssh-port)
+  # на сервере-приёмнике: принимать ssh ещё и на другом порту (пересылка ядром на 22, переживает перезагрузку)
+  P="${2:?Укажите порт: bash mognu_backup.sh ssh-port 2222}"
+  R="iptables -t nat -C PREROUTING -p tcp --dport $P -j REDIRECT --to-ports 22 2>/dev/null || iptables -t nat -A PREROUTING -p tcp --dport $P -j REDIRECT --to-ports 22"
+  sh -c "$R"
+  printf '[Unit]\nDescription=Mognu: ssh also on port %s\nAfter=network-online.target\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/sh -c "%s"\n[Install]\nWantedBy=multi-user.target\n' "$P" "$R" > /etc/systemd/system/mognu-ssh-port.service
+  systemctl daemon-reload && systemctl enable mognu-ssh-port >/dev/null 2>&1
+  echo "ssh принимается и на порту $P (и после перезагрузки)."
   ;;
 *)
   sed -n 2,19p "$0"

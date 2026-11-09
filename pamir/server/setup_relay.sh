@@ -3,16 +3,19 @@
 # просто пересылает соединения на основной (ядром, iptables DNAT — без лишних программ). Люди подключаются
 # к ретранслятору, трафик по-прежнему выходит с основного сервера. Свой VPN ретранслятора (порт 443) не трогает.
 #
+# Порты (MAP="свой:основного ..."), по умолчанию — для сервера, где уже есть свой VPN на 443 («Германия»):
 #   65535 → основной:65535   «Испания-1»
 #   4443  → основной:4443    «Испания-2»
 #   8443  → основной:443     сайт mognu.app и источник для CDN «LTE Обход» (nginx основного сервера, по SNI)
-#   2097  → основной:2096    подписка (на будущее; 2096 здесь занят своей панелью)
+#   2097  → основной:2096    подписка (2096 здесь занят своей панелью)
+# Отдельный входной сервер без своего VPN пересылает и стандартные порты:
+#   MAP="443:443 80:80 65535:65535 4443:4443 8443:443 2096:2096" bash setup_relay.sh
 #
 #   bash setup_relay.sh            включить или проверить (повторный запуск ничего не дублирует)
 #   bash setup_relay.sh --undo     убрать пересылку
 set -eu
 MAIN="${MAIN:-78.17.158.230}"
-MAP="65535:65535 4443:4443 8443:443 2097:2096"
+MAP="${MAP:-65535:65535 4443:4443 8443:443 2097:2096}"
 UNIT=/etc/systemd/system/mognu-relay.service
 SELF=/usr/local/sbin/mognu-relay.sh
 
@@ -68,12 +71,13 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 Environment=MAIN=$MAIN
+Environment="MAP=$MAP"
 ExecStart=/bin/bash $SELF --apply-only
 [Install]
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable mognu-relay >/dev/null 2>&1
-  echo "Готово: пересылка включена и переживёт перезагрузку."
+  echo "Готово: пересылка включена и переживёт перезагрузку. Порты: $MAP"
   echo "Проверка с другого сервера:  for p in 65535 4443 8443; do timeout 5 bash -c \"</dev/tcp/$(hostname -I | awk '{print $1}')/\$p\" && echo \$p ok || echo \$p нет; done"
 fi

@@ -34,14 +34,8 @@ def recode(raw):
         dec = base64.b64decode(raw + "=" * (-len(raw) % 4)).decode("utf-8")
     except Exception:
         return raw
-    if dec.startswith("vless://") and "#" in dec:
-        # заглушка-«сервер»: подпись после # в URL-кодировке
-        head, tag = dec.split("#", 1)
-        new = head + "#" + urllib.parse.quote(fix(urllib.parse.unquote(tag)), safe="")
-    else:
-        new = "\n".join(fix(line) if not line.startswith("vless://") else line for line in dec.split("\n"))
-        if dec.startswith("vless://"):
-            new = "\n".join(recode_line(line) for line in dec.split("\n"))
+    # построчно: строки-«серверы» (vless://…#подпись) — меняем подпись, остальные — как текст
+    new = "\n".join(recode_line(line) if line.startswith("vless://") else fix(line) for line in dec.split("\n"))
     if new == dec:
         return raw
     print("было: ", urllib.parse.unquote(dec)[:110].replace("\n", " / "))
@@ -63,8 +57,10 @@ if new_block == block:
 bak = P + ".bak-mognu"
 shutil.copy2(P, bak)
 open(P, "w", encoding="utf-8").write(s[:a] + new_block + s[b:])
-if subprocess.run(["nginx", "-t"], capture_output=True).returncode != 0:
+t = subprocess.run(["nginx", "-t"], capture_output=True, text=True)
+if t.returncode != 0:
     shutil.copy2(bak, P)
-    sys.exit("nginx -t не прошёл — вернул файл, ничего не изменено.")
+    print("\n".join(l for l in t.stderr.splitlines() if "emerg" in l or "error" in l)[:600])
+    sys.exit("nginx -t не прошёл — вернул файл, ничего не изменено. Пришлите строки выше.")
 subprocess.run(["systemctl", "reload", "nginx"], check=True)
 print("Готово. Копия:", bak)

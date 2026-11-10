@@ -9,6 +9,8 @@
     python3 mognu_cdn_test.py 2057       вход 2057 (LTE Обход 2, Билайн)
     python3 mognu_cdn_test.py 2056 --tune   сравнить через CDN текущие настройки клиента с ускоренными (xmux, интервал)
     python3 mognu_cdn_test.py 2058 --dump /root/lte3_client.json   только сохранить конфиг клиента (для проверки из России)
+    python3 mognu_cdn_test.py 2056 --chunks  через CDN: размер отправки за раз (scMaxEachPostBytes у клиента) —
+                                             как сейчас (1 МБ) и меньше; отдача 1 МБ и 8 сайтов разом, как браузер
 Трафик проверки (~5 МБ на прогон) засчитается первому активному клиенту этого входа.
 """
 import json
@@ -23,6 +25,7 @@ DB = '/etc/x-ui/x-ui.db'
 XRAY = '/usr/local/x-ui/bin/xray-linux-amd64'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('--')]
 TUNE = '--tune' in sys.argv
+CHUNKS = '--chunks' in sys.argv
 DUMP = sys.argv[sys.argv.index('--dump') + 1] if '--dump' in sys.argv else None
 ARGS = [a for a in ARGS if a != DUMP]
 PORT = int(ARGS[0]) if ARGS else 2056
@@ -120,6 +123,35 @@ def run(label, xhttp, addr=addr):
     for l in errs[-3:]:
         print('    xray:', l[-180:])
 
+
+SITES = ['https://www.wikipedia.org/', 'https://github.com/', 'https://www.bbc.com/', 'https://stackoverflow.com/',
+         'https://www.reddit.com/', 'https://www.cloudflare.com/', 'https://www.mozilla.org/', 'https://www.apple.com/']
+
+
+def browse(port=10899):
+    """8 сайтов одновременно (как браузер со вкладками): сколько открылось за 20 с."""
+    procs = [subprocess.Popen(['curl', '-s', '-o', '/dev/null', '-L', '--max-time', '20', '--socks5-hostname', f'127.0.0.1:{port}',
+                               '-w', '%{http_code}', u], stdout=subprocess.PIPE, text=True) for u in SITES]
+    codes = [p.communicate()[0] for p in procs]
+    return sum(1 for c in codes if c.startswith(('2', '3')))
+
+
+if CHUNKS:
+    for label, extra in (('как сейчас (до 1 МБ за раз)', {}), ('32 КБ за раз', {'scMaxEachPostBytes': 32000}),
+                         ('16 КБ за раз', {'scMaxEachPostBytes': 16000}), ('8 КБ за раз', {'scMaxEachPostBytes': 8000})):
+        cfg = config({**xs, 'path': path, 'host': addr, **extra})
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
+            json.dump(cfg, f)
+        p = subprocess.Popen([XRAY, 'run', '-c', f.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.5)
+        r = subprocess.run(['curl', '-s', '-o', '/dev/null', '--max-time', '25', '--socks5-hostname', '127.0.0.1:10899',
+                            '--data-binary', '@-', '-w', '%{http_code} %{speed_upload}', 'https://speed.cloudflare.com/__up'],
+                           input=b'0' * 1_000_000, capture_output=True)
+        uc, us = (r.stdout.decode().split() + ['000', '0'])[:2]
+        ok = browse()
+        p.terminate(); p.wait(timeout=5); os.unlink(f.name)
+        print(f'{label:28} отдача 1 МБ: {uc} ({float(us) * 8 / 1e6:.1f} Мбит/с) · сайтов открылось: {ok} из {len(SITES)}', flush=True)
+    sys.exit(0)
 
 run(f'через CDN {addr}', {**xs, 'path': path, 'host': addr})
 if TUNE:

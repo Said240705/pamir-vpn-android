@@ -6,8 +6,8 @@
 основной» (~0.6 с и зависимость от Финляндии), а раньше, когда адрес был российским, не открывался вовсе.
 Xray отправляет такие запросы прямо на свой nginx:
   • к mognu.app / www.mognu.app (по имени, sniffing) и к адресам входа (31.77.6.71, прежний 185.198.152.202)
-    на 443 → 127.0.0.1:443
-  • то же на 80 → 127.0.0.1:80
+    на 443 → свой внешний адрес:443
+  • то же на 80 → свой внешний адрес:80
 Правила действуют только для входов «Испании» (порты 65535 и 4443), остальные (в том числе «Домой» → ru-home)
 не трогаются; новые правила ставятся первыми.
 
@@ -19,6 +19,7 @@ Xray отправляет такие запросы прямо на свой ngi
     python3 patch_xray_mognu_local.py --undo     убрать эти правила
 """
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -27,9 +28,13 @@ import sys
 DB = "/etc/x-ui/x-ui.db"
 # входной сервер (Финляндия) и прежний российский — оба пересылают 443/80 на этот сервер без изменений
 ENTRY = ["31.77.6.71", "185.198.152.202"]
+# Свой внешний адрес, а не 127.0.0.1: Xray 26 не пускает подключения людей на внутренние адреса
+# («proxy/freedom: blocked target: tcp:127.0.0.1:443, blackholing connection»). Подключение к своему
+# внешнему адресу всё равно не выходит с сервера.
+SELF_IP = os.environ.get("SELF_IP", "78.17.158.230")
 OUT = [
-    {"tag": "mognu-local-443", "protocol": "freedom", "settings": {"redirect": "127.0.0.1:443"}},
-    {"tag": "mognu-local-80", "protocol": "freedom", "settings": {"redirect": "127.0.0.1:80"}},
+    {"tag": "mognu-local-443", "protocol": "freedom", "settings": {"redirect": SELF_IP + ":443"}},
+    {"tag": "mognu-local-80", "protocol": "freedom", "settings": {"redirect": SELF_IP + ":80"}},
 ]
 RULES = [
     {"type": "field", "domain": ["full:mognu.app", "full:www.mognu.app"], "port": "443", "outboundTag": "mognu-local-443"},
@@ -66,8 +71,8 @@ if "--undo" in sys.argv:
     outs[:] = [o for o in outs if o.get("tag") not in TAGS]
     rules[:] = [r for r in rules if r.get("outboundTag") not in TAGS]
 elif "--apply" in sys.argv:
-    if not has:
-        outs.extend(OUT)
+    # исходящие прежней версии (на 127.0.0.1) заменяются
+    outs[:] = [o for o in outs if o.get("tag") not in TAGS] + OUT
     # старая версия правил (без адреса Финляндии) заменяется новой
     rules[:] = [r for r in rules if r.get("outboundTag") not in TAGS]
     rules[:0] = RULES

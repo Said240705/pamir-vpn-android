@@ -5,6 +5,8 @@
 клиент живёт ~30 секунд во временной папке и удаляется.
 
     python3 test_spain_path.py            оба входа «Испании» (65535 и 4443)
+    python3 test_spain_path.py --local    как Xray этого сервера открывает свой сайт: через 127.0.0.1
+                                          и через собственный внешний адрес (временный Xray, без входов)
 """
 import json
 import os
@@ -60,6 +62,39 @@ def outbound(port, protocol, settings, stream):
     return {"protocol": "vless", "settings": {"vnext": [{"address": "127.0.0.1", "port": port, "users": [user]}]},
             "streamSettings": ss}, None
 
+
+def run_xray(cfg, socks, urls, name):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "c.json")
+        with open(path, "w") as f:
+            json.dump(cfg, f)
+        os.chmod(path, 0o600)
+        p = subprocess.Popen([xray, "run", "-c", path], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        time.sleep(1.5)
+        print(name + ":", flush=True)
+        for u in urls:
+            r = subprocess.run(["curl", "-so", "/dev/null", "-m", "8", "--socks5-hostname", f"127.0.0.1:{socks}",
+                                "-w", "%{http_code} %{time_total}s", u], capture_output=True, text=True)
+            print(f"   {r.stdout or '000'}  {u}", flush=True)
+        p.terminate()
+        try:
+            e = p.communicate(timeout=5)[1]
+        except subprocess.TimeoutExpired:
+            p.kill()
+            e = ""
+        e = "\n".join(l for l in (e or "").splitlines() if "uuid" not in l.lower())[:400]
+        if e.strip():
+            print("   сообщения Xray:", e)
+
+
+if "--local" in sys.argv:
+    me = subprocess.run(["curl", "-s4", "-m", "5", "https://api.ipify.org"], capture_output=True, text=True).stdout.strip() or "78.17.158.230"
+    for target in ("127.0.0.1", me):
+        cfg = {"log": {"loglevel": "debug"},
+               "inbounds": [{"listen": "127.0.0.1", "port": 10899, "protocol": "socks", "settings": {"udp": False}}],
+               "outbounds": [{"protocol": "freedom", "settings": {"redirect": target + ":443"}}]}
+        run_xray(cfg, 10899, ["https://mognu.app/admin/login.html"], "напрямую на " + ("127.0.0.1" if target == "127.0.0.1" else "свой внешний адрес"))
+    sys.exit(0)
 
 for port, protocol, settings, stream in rows:
     out, err = outbound(port, protocol, settings, stream)

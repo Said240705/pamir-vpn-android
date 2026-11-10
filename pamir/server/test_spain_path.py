@@ -10,6 +10,8 @@
     python3 test_spain_path.py --mirror   копия рабочего Xray (вход «Испания-1», те же правила и исходящие)
                                           на 127.0.0.1:10865 с подробным журналом; рабочий Xray не трогается
     python3 test_spain_path.py --mirror --self-ip   то же, но «свой сайт» — через внешний адрес сервера
+    python3 test_spain_path.py --sub      подписка тестового клиента через «Испанию»: нынешний адрес и прежние
+                                          (номер подписки в выводе скрыт)
 """
 import json
 import os
@@ -134,6 +136,20 @@ if "--mirror" in sys.argv:
     run_xray(cfg, 10898, ["https://www.google.com/generate_204", "https://mognu.app/admin/login.html"], "копия «Испании-1»")
     sys.exit(0)
 
+HIDE = []
+if "--sub" in sys.argv:
+    # адреса подписки тестового клиента: нынешний и прежние (по IP основного, через Финляндию и Германию)
+    ro = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    sp = (ro.execute("SELECT value FROM settings WHERE key = 'subPath'").fetchone() or ["/sub/"])[0] or "/sub/"
+    ro.close()
+    sid = next((c.get("subId") for _, _, st, _ in rows for c in json.loads(st or "{}").get("clients", [])
+                if "test" in (c.get("email") or "").lower() and c.get("subId")), None)
+    if not sid:
+        sys.exit("У тестового клиента нет subId")
+    HIDE.append(sid)
+    URLS = ["https://www.google.com/generate_204", "https://mognu.app/sub/" + sid,
+            f"https://78.17.158.230:2096{sp}{sid}", f"https://31.77.6.71:2096{sp}{sid}", f"https://89.125.114.53:2097{sp}{sid}"]
+
 for port, protocol, settings, stream in rows:
     out, err = outbound(port, protocol, settings, stream)
     name = "Испания-1" if port == 65535 else "Испания-2"
@@ -154,9 +170,11 @@ for port, protocol, settings, stream in rows:
         print(f"{name} ({port}), {out['streamSettings']['network']}/{out['streamSettings']['security']}:")
         for u in URLS:
             # --socks5-hostname: имя сайта узнаёт сервер (как в телефоне через VPN)
-            r = subprocess.run(["curl", "-so", "/dev/null", "-m", "10", "--socks5-hostname", f"127.0.0.1:{socks}",
+            r = subprocess.run(["curl", "-kso", "/dev/null", "-m", "10", "--socks5-hostname", f"127.0.0.1:{socks}",
                                 "-w", "%{http_code} %{time_total}s", u], capture_output=True, text=True)
-            print(f"   {r.stdout or '000'}  {u}")
+            for h in HIDE:
+                u = u.replace(h, "НОМЕР")
+            print(f"   {r.stdout or '000'}  {u}", flush=True)
         p.terminate()
         try:
             e = p.communicate(timeout=5)[1]

@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Кабинет mognu.app для тех, кто подключён к VPN на основном сервере («Испания»).
 
-mognu.app стоит на российском сервере (185.198.152.202), а связи «Испания ↔ российский сервер» нет —
-поэтому у подключённых к «Испании» кабинет не открывался и уводил на запасной адрес. Сайт и так живёт
-на основном сервере, поэтому Xray отправляет такие запросы прямо на свой nginx:
-  • к mognu.app / www.mognu.app (по имени, sniffing) и к 185.198.152.202 на 443 → 127.0.0.1:443
+Сайт живёт на основном сервере, а mognu.app указывает на входной сервер (Финляндия, 31.77.6.71), который
+пересылает обратно на основной. У подключённых к «Испании» запрос делает лишний круг «основной → Финляндия →
+основной» (~0.6 с и зависимость от Финляндии), а раньше, когда адрес был российским, не открывался вовсе.
+Xray отправляет такие запросы прямо на свой nginx:
+  • к mognu.app / www.mognu.app (по имени, sniffing) и к адресам входа (31.77.6.71, прежний 185.198.152.202)
+    на 443 → 127.0.0.1:443
   • то же на 80 → 127.0.0.1:80
 Правила действуют только для входов «Испании» (порты 65535 и 4443), остальные (в том числе «Домой» → ru-home)
 не трогаются; новые правила ставятся первыми.
 
 Меняется шаблон Xray в панели (settings.xrayTemplateConfig). Копия базы — рядом (.bak-mognu-local).
-Повторный запуск ничего не дублирует.
+Повторный запуск ничего не дублирует (и обновляет правила прежней версии).
 
     python3 patch_xray_mognu_local.py            показать, что изменится
     python3 patch_xray_mognu_local.py --apply    применить (панель перезапускается — запускать через nohup)
@@ -23,16 +25,17 @@ import subprocess
 import sys
 
 DB = "/etc/x-ui/x-ui.db"
-RU = "185.198.152.202"
+# входной сервер (Финляндия) и прежний российский — оба пересылают 443/80 на этот сервер без изменений
+ENTRY = ["31.77.6.71", "185.198.152.202"]
 OUT = [
     {"tag": "mognu-local-443", "protocol": "freedom", "settings": {"redirect": "127.0.0.1:443"}},
     {"tag": "mognu-local-80", "protocol": "freedom", "settings": {"redirect": "127.0.0.1:80"}},
 ]
 RULES = [
     {"type": "field", "domain": ["full:mognu.app", "full:www.mognu.app"], "port": "443", "outboundTag": "mognu-local-443"},
-    {"type": "field", "ip": [RU], "port": "443", "outboundTag": "mognu-local-443"},
+    {"type": "field", "ip": ENTRY, "port": "443", "outboundTag": "mognu-local-443"},
     {"type": "field", "domain": ["full:mognu.app", "full:www.mognu.app"], "port": "80", "outboundTag": "mognu-local-80"},
-    {"type": "field", "ip": [RU], "port": "80", "outboundTag": "mognu-local-80"},
+    {"type": "field", "ip": ENTRY, "port": "80", "outboundTag": "mognu-local-80"},
 ]
 TAGS = {o["tag"] for o in OUT}
 
@@ -65,8 +68,9 @@ if "--undo" in sys.argv:
 elif "--apply" in sys.argv:
     if not has:
         outs.extend(OUT)
-    if not mine:
-        rules[:0] = RULES
+    # старая версия правил (без адреса Финляндии) заменяется новой
+    rules[:] = [r for r in rules if r.get("outboundTag") not in TAGS]
+    rules[:0] = RULES
 else:
     print("Это проверка. Применить: --apply (через nohup, панель перезапустится)")
     sys.exit(0)

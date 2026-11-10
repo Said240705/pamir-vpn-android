@@ -9,6 +9,7 @@
                                           и через собственный внешний адрес (временный Xray, без входов)
     python3 test_spain_path.py --mirror   копия рабочего Xray (вход «Испания-1», те же правила и исходящие)
                                           на 127.0.0.1:10865 с подробным журналом; рабочий Xray не трогается
+    python3 test_spain_path.py --mirror --self-ip   то же, но «свой сайт» — через внешний адрес сервера
 """
 import json
 import os
@@ -101,6 +102,15 @@ if "--local" in sys.argv:
         run_xray(cfg, 10899, ["https://mognu.app/admin/login.html"], "напрямую на " + ("127.0.0.1" if target == "127.0.0.1" else "свой внешний адрес"))
     sys.exit(0)
 
+def fix_redirect(o):
+    """--self-ip: в копии отправлять «свой сайт» на внешний адрес сервера вместо 127.0.0.1."""
+    r = o.get("settings", {}).get("redirect", "")
+    if "--self-ip" in sys.argv and r.startswith("127.0.0.1:"):
+        o = json.loads(json.dumps(o))
+        o["settings"]["redirect"] = os.environ.get("SELF_IP", "78.17.158.230") + r[len("127.0.0.1"):]
+    return o
+
+
 if "--mirror" in sys.argv:
     live = json.load(open(os.path.join(BIN_DIR, "config.json")))
     inb = next((i for i in live["inbounds"] if i.get("port") == 65535), None)
@@ -117,7 +127,7 @@ if "--mirror" in sys.argv:
     out["settings"]["vnext"][0]["port"] = 10865
     cfg = {"log": {"loglevel": "debug"},
            "inbounds": [srv, {"listen": "127.0.0.1", "port": 10898, "protocol": "socks", "settings": {"udp": False}, "tag": "test-socks"}],
-           "outbounds": list(live["outbounds"]) + [dict(out, tag="test-client")],
+           "outbounds": [fix_redirect(o) for o in live["outbounds"]] + [dict(out, tag="test-client")],
            "routing": {"domainStrategy": live["routing"].get("domainStrategy", "AsIs"),
                        "rules": [{"type": "field", "inboundTag": ["test-socks"], "outboundTag": "test-client"}] + rules}}
     os.environ.setdefault("LINES_KEEP", "30")

@@ -10,6 +10,7 @@
 """
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -69,7 +70,8 @@ def run_xray(cfg, socks, urls, name):
         with open(path, "w") as f:
             json.dump(cfg, f)
         os.chmod(path, 0o600)
-        p = subprocess.Popen([xray, "run", "-c", path], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        # журнал Xray идёт в stdout
+        p = subprocess.Popen([xray, "run", "-c", path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         time.sleep(1.5)
         print(name + ":", flush=True)
         for u in urls:
@@ -78,13 +80,14 @@ def run_xray(cfg, socks, urls, name):
             print(f"   {r.stdout or '000'}  {u}", flush=True)
         p.terminate()
         try:
-            e = p.communicate(timeout=5)[1]
+            e = p.communicate(timeout=5)[0]
         except subprocess.TimeoutExpired:
             p.kill()
             e = ""
-        e = "\n".join(l for l in (e or "").splitlines() if "uuid" not in l.lower())[:400]
-        if e.strip():
-            print("   сообщения Xray:", e)
+        keep = re.compile(r"freedom|redirect|block|reject|denied|fail|error|127\.0\.0\.1|:443", re.I)
+        lines = [re.sub(r"\s+", " ", l)[:200] for l in (e or "").splitlines() if keep.search(l) and "uuid" not in l.lower()]
+        if lines:
+            print("   сообщения Xray:\n     " + "\n     ".join(lines[-8:]))
 
 
 if "--local" in sys.argv:

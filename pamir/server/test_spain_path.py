@@ -16,7 +16,7 @@ import time
 
 DB = "/etc/x-ui/x-ui.db"
 BIN_DIR = "/usr/local/x-ui/bin"
-URLS = ["https://www.google.com/generate_204", "https://mognu.app/", "https://mognu.app/admin/login.html"]
+URLS = ["https://www.google.com/generate_204", "https://mognu.app/", "https://mognu.app/admin/login.html", "http://mognu.app/"]
 
 xray = next((os.path.join(BIN_DIR, f) for f in sorted(os.listdir(BIN_DIR)) if f.startswith("xray-linux")), None)
 if not xray:

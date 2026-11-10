@@ -14,7 +14,8 @@
 
     python3 patch_lte_chunks.py            показать
     python3 patch_lte_chunks.py --apply    применить (панель перезапускается — запускать через nohup)
-    python3 patch_lte_chunks.py --check    есть ли настройка в подписке тестового клиента
+    python3 patch_lte_chunks.py --check    есть ли настройка в подписке тестового клиента (и что в extra)
+    python3 patch_lte_chunks.py --apply --value 1000000   вернуть серверу прежний лимит
 """
 import base64
 import json
@@ -26,7 +27,7 @@ import urllib.parse
 
 DB = "/etc/x-ui/x-ui.db"
 PORTS = (2056, 2058)
-VALUE = 32000
+VALUE = int(sys.argv[sys.argv.index("--value") + 1]) if "--value" in sys.argv else 32000
 
 
 def check():
@@ -53,6 +54,8 @@ def check():
         has = "scMaxEachPostBytes" in extra
         found = found or has
         print(f"подписка: {name.strip()}: extra {'есть' if extra else 'нет'}, scMaxEachPostBytes {'есть' if has else 'нет'}")
+        if extra and "--check" in sys.argv:
+            print("   extra:", extra[:400])
     if not found:
         print("В подписке настройки нет — телефоны её не получат; пришлите этот вывод.")
 
@@ -91,7 +94,7 @@ try:
     c.close()
 finally:
     subprocess.run(["systemctl", "start", "x-ui"], check=True)
-print("Готово: 32 КБ за раз во входах LTE")
+print(f"Готово: {VALUE} байт за раз во входах LTE")
 import time
 time.sleep(5)
 check()

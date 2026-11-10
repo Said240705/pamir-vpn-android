@@ -7,6 +7,8 @@
     python3 test_spain_path.py            оба входа «Испании» (65535 и 4443)
     python3 test_spain_path.py --local    как Xray этого сервера открывает свой сайт: через 127.0.0.1
                                           и через собственный внешний адрес (временный Xray, без входов)
+    python3 test_spain_path.py --mirror   копия рабочего Xray (вход «Испания-1», те же правила и исходящие)
+                                          на 127.0.0.1:10865 с подробным журналом; рабочий Xray не трогается
 """
 import json
 import os
@@ -85,9 +87,9 @@ def run_xray(cfg, socks, urls, name):
             p.kill()
             e = ""
         keep = re.compile(r"freedom|redirect|block|reject|denied|fail|error|127\.0\.0\.1|:443", re.I)
-        lines = [re.sub(r"\s+", " ", l)[:200] for l in (e or "").splitlines() if keep.search(l) and "uuid" not in l.lower()]
+        lines = [re.sub(r"\s+", " ", re.sub(r"email:.*", "", l))[:200] for l in (e or "").splitlines() if keep.search(l) and "uuid" not in l.lower()]
         if lines:
-            print("   сообщения Xray:\n     " + "\n     ".join(lines[-8:]))
+            print("   сообщения Xray:\n     " + "\n     ".join(lines[-int(os.environ.get("LINES_KEEP", "8")):]))
 
 
 if "--local" in sys.argv:
@@ -97,6 +99,29 @@ if "--local" in sys.argv:
                "inbounds": [{"listen": "127.0.0.1", "port": 10899, "protocol": "socks", "settings": {"udp": False}}],
                "outbounds": [{"protocol": "freedom", "settings": {"redirect": target + ":443"}}]}
         run_xray(cfg, 10899, ["https://mognu.app/admin/login.html"], "напрямую на " + ("127.0.0.1" if target == "127.0.0.1" else "свой внешний адрес"))
+    sys.exit(0)
+
+if "--mirror" in sys.argv:
+    live = json.load(open(os.path.join(BIN_DIR, "config.json")))
+    inb = next((i for i in live["inbounds"] if i.get("port") == 65535), None)
+    row = next((r for r in rows if r[0] == 65535), None)
+    if not inb or not row:
+        sys.exit("Не нашёл вход 65535")
+    out, err = outbound(*row)
+    if err:
+        sys.exit(err)
+    srv = dict(inb, listen="127.0.0.1", port=10865)
+    srv["settings"] = dict(srv["settings"])
+    srv["settings"]["clients"] = [c for c in srv["settings"].get("clients", []) if "test" in (c.get("email") or "").lower()]
+    rules = [r for r in live["routing"]["rules"] if r.get("outboundTag") != "api"]
+    out["settings"]["vnext"][0]["port"] = 10865
+    cfg = {"log": {"loglevel": "debug"},
+           "inbounds": [srv, {"listen": "127.0.0.1", "port": 10898, "protocol": "socks", "settings": {"udp": False}, "tag": "test-socks"}],
+           "outbounds": list(live["outbounds"]) + [dict(out, tag="test-client")],
+           "routing": {"domainStrategy": live["routing"].get("domainStrategy", "AsIs"),
+                       "rules": [{"type": "field", "inboundTag": ["test-socks"], "outboundTag": "test-client"}] + rules}}
+    os.environ.setdefault("LINES_KEEP", "30")
+    run_xray(cfg, 10898, ["https://www.google.com/generate_204", "https://mognu.app/admin/login.html"], "копия «Испании-1»")
     sys.exit(0)
 
 for port, protocol, settings, stream in rows:

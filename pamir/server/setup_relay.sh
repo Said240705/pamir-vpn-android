@@ -13,11 +13,14 @@
 #
 #   bash setup_relay.sh            включить или проверить (повторный запуск ничего не дублирует)
 #   bash setup_relay.sh --undo     убрать пересылку
+# «Домой» через этот сервер на российский (связь «основной ↔ российский» напрямую рвётся):
+#   NAME=mognu-relay-home MAIN=185.198.152.202 MAP="8446:8443" bash setup_relay.sh
 set -eu
 MAIN="${MAIN:-78.17.158.230}"
 MAP="${MAP:-65535:65535 4443:4443 8443:443 2097:2096}"
-UNIT=/etc/systemd/system/mognu-relay.service
-SELF=/usr/local/sbin/mognu-relay.sh
+NAME="${NAME:-mognu-relay}"   # другое имя — отдельная пересылка на другой сервер (например, «Домой» на российский)
+UNIT=/etc/systemd/system/$NAME.service
+SELF=/usr/local/sbin/$NAME.sh
 
 rules() {  # $1 = -A (добавить, если нет) или -D (убрать)
   local op="$1" from to
@@ -42,7 +45,7 @@ rules() {  # $1 = -A (добавить, если нет) или -D (убрать
 
 if [ "${1:-}" = "--undo" ]; then
   rules -D
-  systemctl disable --now mognu-relay 2>/dev/null || true
+  systemctl disable --now "$NAME" 2>/dev/null || true
   rm -f "$UNIT" "$SELF"; systemctl daemon-reload
   echo "Пересылка убрана."
   exit 0
@@ -64,7 +67,7 @@ if [ "${1:-}" != "--apply-only" ]; then
   install -m 755 "$0" "$SELF"
   cat > "$UNIT" <<EOF
 [Unit]
-Description=Mognu relay to main server
+Description=Mognu relay ($NAME) to $MAIN
 After=network-online.target ufw.service
 Wants=network-online.target
 [Service]
@@ -72,12 +75,13 @@ Type=oneshot
 RemainAfterExit=yes
 Environment=MAIN=$MAIN
 Environment="MAP=$MAP"
+Environment=NAME=$NAME
 ExecStart=/bin/bash $SELF --apply-only
 [Install]
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable mognu-relay >/dev/null 2>&1
+  systemctl enable "$NAME" >/dev/null 2>&1
   echo "Готово: пересылка включена и переживёт перезагрузку. Порты: $MAP"
   echo "Проверка с другого сервера:  for p in 65535 4443 8443; do timeout 5 bash -c \"</dev/tcp/$(hostname -I | awk '{print $1}')/\$p\" && echo \$p ok || echo \$p нет; done"
 fi

@@ -8,6 +8,10 @@
     python3 setup_lte2_inbound.py                 показать
     python3 setup_lte2_inbound.py --apply         создать (панель перезапускается — через nohup)
     python3 setup_lte2_inbound.py --apply --undo  убрать вход 2057 и его строку в Hosts
+
+CDNvideo, в отличие от Яндекса, пропускает POST (проверено: вход в кабинет через CDN → 401 от нашего API), поэтому
+LTE 2 отправляет данные обычным способом (в теле POST, по умолчанию Xray), без нарезки в заголовки — быстрее.
+Если вход 2057 уже создан копией с данными в заголовках, повторный запуск с --apply переводит его на POST.
 """
 import json
 import random
@@ -25,6 +29,7 @@ REMARK = "🇷🇺 LTE Обход 2"
 PATH = "/api/cv/"
 CDN = "9yy3u3u15o.a.trbcdn.net"
 APPLY, UNDO = "--apply" in sys.argv, "--undo" in sys.argv
+HEADER_KEYS = ("uplinkDataPlacement", "uplinkHTTPMethod", "uplinkDataKey", "uplinkChunkSize")
 
 
 def cols(c, t):
@@ -40,7 +45,12 @@ if UNDO:
         sys.exit("Входа 2057 нет — убирать нечего.")
     print(f"уберу вход {PORT} (id {exist['id']}), его клиентов-привязки и строку в Hosts")
 elif exist:
-    sys.exit(f"Вход {PORT} уже есть (id {exist['id']}) — ничего не меняю.")
+    est = json.loads(ro.execute("SELECT stream_settings FROM inbounds WHERE id = ?", (exist["id"],)).fetchone()[0])
+    xs = est.get("xhttpSettings") or {}
+    if not any(k in xs for k in HEADER_KEYS):
+        sys.exit(f"Вход {PORT} уже есть (id {exist['id']}), отправка обычная (POST) — менять нечего.")
+    print(f"вход {PORT} уже есть: перевожу отправку с заголовков на обычную (POST) — убираю {[k for k in HEADER_KEYS if k in xs]}")
+    FIX = (exist["id"], est)
 else:
     if not src:
         sys.exit(f"Нет входа {SRC_PORT} — не с чего копировать.")
@@ -51,7 +61,7 @@ else:
     st = json.loads(src["stream_settings"])
     if st.get("network") != "xhttp":
         sys.exit("Вход 2056 не xhttp — ничего не меняю.")
-    print(f"копия «{src['remark'].strip()}» (:{SRC_PORT}) → «{REMARK}» (:{PORT}), путь {PATH}; клиентов: {len(links)}")
+    print(f"копия «{src['remark'].strip()}» (:{SRC_PORT}) → «{REMARK}» (:{PORT}), путь {PATH}, отправка POST; клиентов: {len(links)}")
     print(f"Hosts: {CDN}{PATH} (как у «{host['remark'].strip()}»)")
 ro.close()
 if not APPLY:
@@ -62,7 +72,12 @@ subprocess.run(["systemctl", "stop", "x-ui"], check=True)
 try:
     c = sqlite3.connect(DB)
     with c:
-        if UNDO:
+        if not UNDO and exist:
+            fid, est = FIX
+            for k in HEADER_KEYS:
+                est["xhttpSettings"].pop(k, None)
+            c.execute("UPDATE inbounds SET stream_settings = ? WHERE id = ?", (json.dumps(est, ensure_ascii=False, indent=2), fid))
+        elif UNDO:
             iid = exist["id"]
             c.execute("DELETE FROM hosts WHERE inbound_id = ?", (iid,))
             c.execute("DELETE FROM client_inbounds WHERE inbound_id = ?", (iid,))
@@ -71,6 +86,8 @@ try:
             row = dict(src)
             row.pop("id")
             st["xhttpSettings"]["path"] = PATH
+            for k in HEADER_KEYS:  # CDNvideo пропускает POST — обычная отправка
+                st["xhttpSettings"].pop(k, None)
             row.update(port=PORT, tag=TAG, remark=REMARK, up=0, down=0, stream_settings=json.dumps(st, ensure_ascii=False, indent=2))
             if "last_traffic_reset_time" in row:
                 row["last_traffic_reset_time"] = 0
@@ -95,4 +112,4 @@ try:
     c.close()
 finally:
     subprocess.run(["systemctl", "start", "x-ui"], check=True)
-print("Готово:", f"вход {PORT} убран" if UNDO else f"«{REMARK}» на :{PORT} ({CDN}{PATH}), клиентов {len(links)}")
+print("Готово:", f"вход {PORT} убран" if UNDO else (f"вход {PORT}: отправка POST" if exist else f"«{REMARK}» на :{PORT} ({CDN}{PATH}), отправка POST, клиентов {len(links)}"))

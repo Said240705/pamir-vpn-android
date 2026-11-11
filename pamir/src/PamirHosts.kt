@@ -18,8 +18,16 @@ import java.net.URL
  * [PamirApi.call] walks the list on connection failures; links (cabinet, payment return, updates) use [web].
  */
 object PamirHosts {
-    /** Built-in mirrors; the first one is the brand domain. */
-    val DEFAULT = listOf("https://mognu.app", "https://mognu.net", "https://app.pamirlink.ru")
+    /**
+     * Built-in mirrors; the first one is the brand domain. The CDN mirrors are built in too: under «white lists»
+     * a fresh install cannot reach the first three, so it could never download hosts.json to learn them and
+     * sign-up failed. Beget passes sign-in and payment; Yandex only GET (pages, hosts.json) — a POST there gets the
+     * CDN's HTML error page, which [PamirApi] skips to the next host.
+     */
+    val DEFAULT = listOf(
+        "https://mognu.app", "https://mognu.net", "https://app.pamirlink.ru",
+        "https://ceboukahusibod.begetcdn.cloud", "https://yacdn.pamirlink.ru",
+    )
     private const val K_GOOD = "pamir_host_good"
     private const val K_EXTRA = "pamir_hosts_extra"
     private const val MAX_EXTRA = 8

@@ -272,6 +272,12 @@ edit(os.path.join(PKG, 'handler', 'NotificationManager.kt'), [
     ('Intent(service, MainActivity::class.java)', 'Intent(service, com.v2ray.ang.pamir.PamirHome::class.java)'),
 ])
 
+# 9b. LTE (xhttp, upload in headers through a GET-only CDN): 32 KB per request — see PamirXhttp
+edit(os.path.join(PKG, 'core', 'CoreOutboundBuilder.kt'), [
+    ('xhttpSetting.extra = JsonUtil.parseString(xhttpExtra)',
+     'xhttpSetting.extra = com.v2ray.ang.pamir.PamirXhttp.tune(JsonUtil.parseString(xhttpExtra))'),
+])
+
 # 10. background features: drop alerts + watchdog, branded tile/widget/status icon, cleaner notification
 SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
 RES = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res')

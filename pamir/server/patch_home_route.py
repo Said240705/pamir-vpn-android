@@ -34,16 +34,18 @@ cfg = json.loads(row[0])
 out = next((o for o in cfg.get("outbounds", []) if o.get("tag") == TAG), None)
 if not out:
     sys.exit(f"Нет исходящего {TAG} — ничего не меняю.")
-vnext = (out.get("settings") or {}).get("vnext") or []
-if not vnext:
-    sys.exit(f"У {TAG} нет vnext (не vless/vmess?) — ничего не меняю.")
-cur = (vnext[0].get("address"), vnext[0].get("port"))
+st = out.get("settings") or {}
+# старый формат: settings.vnext[0].address/port; новый (Xray 25+): settings.address/port
+srv = (st.get("vnext") or [None])[0] or (st if "address" in st else None)
+if not srv:
+    sys.exit(f"У {TAG} не нашёл адрес сервера (ни vnext, ни address) — ничего не меняю. Ключи: {sorted(st)}")
+cur = (srv.get("address"), srv.get("port"))
 print(f"{TAG}: сейчас {cur[0]}:{cur[1]} → {target[0]}:{target[1]}")
 if cur == target:
     sys.exit("Менять нечего — уже так.")
 if "--apply" not in sys.argv:
     sys.exit("Это проверка. Применить: nohup python3 patch_home_route.py --apply > /root/home-route.log 2>&1 &")
-vnext[0]["address"], vnext[0]["port"] = target
+srv["address"], srv["port"] = target
 shutil.copy2(DB, DB + ".bak-home-route")
 subprocess.run(["systemctl", "stop", "x-ui"], check=True)
 try:

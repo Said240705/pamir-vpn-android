@@ -49,16 +49,19 @@ RELAY_STATE = '/var/lib/mognu-probe/relay.json'
 LOG = '/var/log/mognu-probe.log'
 KEY = '/root/.ssh/mognu_probe'
 CONFIG_PY = '/root/YadrenoVPN/config.py'
-# все пути, которыми люди подключаются: входы основного сервера, «Германия», CDN-обход по настоящему пути
+# все пути, которыми люди подключаются: «Испания» через Финляндию, «Германия», «Польша», CDN-обход по настоящему пути
 # (ответ 400 — это xray за CDN, т.е. CDN довёз запрос до сервера) и выход «Домой» на этом же сервере
-DEFAULT_TARGETS = ('Испания=78.17.158.230:443,Испания-1=78.17.158.230:65535,Испания-2=78.17.158.230:4443,'
-                   'Германия=89.125.114.53:443,LTE Обход (CDN)=https://yacdn.pamirlink.ru/api/sync/#400,'
+DEFAULT_TARGETS = ('Сайт=https://mognu.app/hosts.json#200,Испания-1=31.77.6.71:65535,Испания-2=31.77.6.71:4443,'
+                   'Германия=89.125.114.53:443,Польша=130.78.31.223:47443,'
+                   'LTE Обход (CDN)=https://yacdn.pamirlink.ru/api/sync/#400,'
+                   'LTE Обход 2 (CDNvideo)=https://9yy3u3u15o.a.trbcdn.net/api/cv/#400,'
                    'Домой · выход=service:xray')
 # выход «Домой»: как ходит основной сервер — через Финляндию (31.77.6.71:8446 → российский:8443, открыт только
 # основному и Финляндии); напрямую Испания ↔ Россия ответы терялись
 HOME_EXIT = ('31.77.6.71', 8446)
 XUI_DB = '/etc/x-ui/x-ui.db'
-DEFAULT_PUSH = 'root@78.17.158.230'
+# IP основного сервера заблокирован в России: результат идёт по ssh через Финляндию (её порт 2223 → основной:22)
+DEFAULT_PUSH = 'ssh://root@31.77.6.71:2223'
 FAILS_TO_ALERT = 2
 TRIES, TIMEOUT, PAUSE = 3, 5, 5  # three connection attempts ~10 s apart: one lost packet is not an outage
 SILENT_MIN = 3                   # the VPS reports every minute; silence this long means the link (or the probe) is down

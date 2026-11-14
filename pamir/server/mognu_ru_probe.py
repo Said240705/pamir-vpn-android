@@ -376,11 +376,39 @@ def home_step(rs, now, dry=False):
     return [msg] if msg else []
 
 
+PAY_URL = 'https://api.yookassa.ru/v3/payments'   # без ключа отвечает 401 — значит, ЮKassa доступна
+
+
+def pay_ok():
+    """Доходит ли основной сервер до ЮKassa (идёт через Финляндию: setup_pay_via_relay.sh). Любой HTTP-ответ — да."""
+    t = time.time()
+    try:
+        urllib.request.urlopen(urllib.request.Request(PAY_URL, headers={'User-Agent': 'mognu-probe'}), timeout=10).close()
+    except urllib.error.HTTPError:
+        pass
+    except Exception:  # noqa: BLE001
+        return False, None
+    return True, int((time.time() - t) * 1000)
+
+
+def pay_step(rs, now, dry=False):
+    """С основного сервера: создаётся ли оплата СБП/картой (ЮKassa из Испании недоступна — ходим через Финляндию)."""
+    ok, ms = pay_ok()
+    if dry:
+        print(f'  {"✓" if ok else "✗"} ЮKassa (оплата): ' + (f'отвечает за {ms} мс' if ok else 'не отвечает'))
+        return []
+    msg = step(rs.setdefault('pay', {}), 'ЮKassa (оплата СБП/картой)', ok, None, now,
+               'api.yookassa.ru не отвечает основному серверу — оплата СБП/картой не создаётся. Проверь адреса '
+               '(getent ahostsv4 api.yookassa.ru) и пересылку на Финляндии (setup_pay_via_relay.sh)', 'с основного сервера')
+    return [msg] if msg else []
+
+
 def relay(dry=False):
     rs, feed = load(RELAY_STATE), load(FEED)
     now = dt.datetime.now(dt.timezone.utc)
     if dry:
         home_step(rs, now, dry=True)
+        pay_step(rs, now, dry=True)
     if dry:
         if not feed:
             print('  ✗ из России ещё ничего не приходило — поставь проверку на российском сервере (install)')
@@ -388,7 +416,7 @@ def relay(dry=False):
             print(f'  ✓ последний результат из России: {msk(feed["received"])} МСК; '
                   f'сейчас недоступно: {", ".join(feed.get("down", [])) or "ничего"}; сообщений в ленте: {len(feed.get("events", []))}')
         return
-    msgs = rs.get('pending', []) + relay_step(rs, feed, now) + home_step(rs, now)
+    msgs = rs.get('pending', []) + relay_step(rs, feed, now) + home_step(rs, now) + pay_step(rs, now)
     rs['pending'] = [m for m in msgs[-20:] if not send(m)]
     save(RELAY_STATE, rs)
 

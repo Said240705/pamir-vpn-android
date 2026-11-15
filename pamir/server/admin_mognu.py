@@ -37,7 +37,8 @@ MSK = "+3 hours"  # display_timezone = Europe/Moscow, без перехода н
 PAID = "p.status = 'paid' AND p.payable_amount_minor > 0 AND COALESCE(p.payment_type, '') NOT IN ('balance', 'trial')"
 DRAFT = "(k.server_id IS NULL OR COALESCE(k.panel_email, '') = '')"
 TRIAL_KEY = "EXISTS (SELECT 1 FROM trial_activations ta WHERE ta.vpn_key_id = k.id)"
-ACTION_RU = {"key.hwid_gc": "автоуборка: пробное устройство OneXray", "key.hwid_gc_dry": "автоуборка (проверка): убрала бы пробное устройство",
+ACTION_RU = {"key.limit_note": "сообщение: новое устройство упёрлось в лимит", "key.limit_note_dry": "лимит устройств (проверка): написала бы владельцу",
+             "key.limit_note_fail": "сообщение о лимите устройств не доставлено", "key.hwid_gc": "автоуборка: пробное устройство OneXray", "key.hwid_gc_dry": "автоуборка (проверка): убрала бы пробное устройство",
              "key.extend": "продлил ключ", "key.delete": "удалил ключ", "key.fix": "доделал ключ", "key.reset_devices": "сбросил устройства",
              "key.sub_url": "смотрел ссылку подписки", "user.balance": "изменил баланс", "user.ban": "блокировка", "user.gift": "подарил дни",
              "user.message": "написал через бота", "user.note": "заметка и метки", "payment.complete": "доделал оплату",
@@ -1307,6 +1308,9 @@ async def _start_background():
     global _hwid_gc_task
     if _hwid_gc_task is None or _hwid_gc_task.done():
         _hwid_gc_task = asyncio.get_running_loop().create_task(_hwid_gc_loop())
+    global _limit_note_task
+    if _limit_note_task is None or _limit_note_task.done():
+        _limit_note_task = asyncio.get_running_loop().create_task(_limit_note_loop())
 
 
 # ---------- автоуборка «пробных» устройств OneXray ----------
@@ -1387,6 +1391,117 @@ async def _hwid_gc_loop():
             print(f"[mognu] hwid gc: {type(e).__name__}: {e}", flush=True)
         await asyncio.sleep(HWID_GC_EVERY)
 
+
+
+# ---------- «новое устройство упёрлось в лимит» — сообщение владельцу ключа ----------
+# Чаще всего место занято старым приложением (Incy убрали из App Store, человек ставит OneXray, а единственное
+# место всё ещё за Incy). Заглушка в подписке не объясняет, что старое можно отключить бесплатно, поэтому бот
+# сам пишет: какие устройства занимают места и где их отключить. Отказы берутся из журнала nginx, который пишет
+# только блок @pamir_limit (patch_limit_stub.py). Не чаще раза в 6 часов на ключ; при запуске старые строки
+# журнала пропускаются. Режим: pamir_admin_meta.limit_notify = 'on' — отправлять; иначе только запись в журнал
+# админки «написала бы».
+LIMIT_LOG = os.getenv("PAMIR_LIMIT_LOG", "/var/log/nginx/pamir_limit.log")
+LIMIT_NOTE_EVERY = 60
+LIMIT_NOTE_GAP = 6 * 3600
+_limit_note_task = None
+_limit_log_pos = None   # (inode, смещение); None — ещё не открывали
+_limit_noted: dict = {}  # key_id → time.time() последнего сообщения (или записи «написала бы»)
+
+
+def _limit_new_subs():
+    """Новые строки журнала заглушки → множество sub_id (последний кусок пути /sub/<id>)."""
+    global _limit_log_pos
+    try:
+        st = os.stat(LIMIT_LOG)
+    except OSError:   # журнала ещё нет (patch_limit_stub.py не запускали) или нет прав
+        return set()
+    if _limit_log_pos is None:
+        _limit_log_pos = (st.st_ino, st.st_size)   # старое не трогаем
+        return set()
+    ino, pos = _limit_log_pos
+    if ino != st.st_ino or st.st_size < pos:     # журнал повернули — читаем новый с начала
+        pos = 0
+    out = set()
+    with open(LIMIT_LOG, "rb") as f:
+        f.seek(pos)
+        data = f.read(1_000_000)
+        pos += len(data)
+    _limit_log_pos = (st.st_ino, pos)
+    for line in data.decode("utf-8", "replace").splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) >= 2:
+            sub = parts[1].split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+            if re.fullmatch(r"[A-Za-z0-9_-]{6,64}", sub):
+                out.add(sub)
+    return out
+
+
+def _limit_devices(sub):
+    """Лимит и устройства подписки из базы панели: (лимит, [(приложение, last_seen мс)]), свежие первыми."""
+    c = sqlite3.connect(f"file:{XUI_DB}?mode=ro", uri=True, timeout=5)
+    try:
+        lim = c.execute("SELECT MAX(limit_hwid) FROM clients WHERE sub_id = ?", (sub,)).fetchone()
+        rows = c.execute("SELECT user_agent, last_seen FROM client_hwids WHERE sub_id = ? ORDER BY last_seen DESC", (sub,)).fetchall()
+    finally:
+        c.close()
+    return int((lim and lim[0]) or 0), [((ua or "").split("/", 1)[0].strip() or "приложение", int(seen or 0)) for ua, seen in rows]
+
+
+def _ago(ms):
+    days = int((time.time() * 1000 - ms) // 86_400_000)
+    return "сегодня" if days <= 0 else "вчера" if days == 1 else f"{days} дн. назад"
+
+
+async def _limit_note_once():
+    subs = await asyncio.to_thread(_limit_new_subs)
+    if not subs:
+        return
+    conn = await db.get_db()
+    try:
+        await _ensure(conn)
+        mode = await _scalar(conn, "SELECT value FROM pamir_admin_meta WHERE key = 'limit_notify'")
+        keys = []
+        for sub in subs:
+            k = await (await conn.execute("""SELECT k.id, k.user_id, u.telegram_id FROM vpn_keys k JOIN users u ON u.id = k.user_id
+                                             WHERE k.sub_id = ? AND u.telegram_id > 0 AND k.expires_at > datetime('now')
+                                             ORDER BY k.id DESC LIMIT 1""", (sub,))).fetchone()
+            if k:
+                keys.append((sub, k))
+    finally:
+        await conn.close()
+    system = {"tg_id": 0}
+    now = time.time()
+    for sub, k in keys:
+        if now - _limit_noted.get(k["id"], 0) < LIMIT_NOTE_GAP:
+            continue
+        _limit_noted[k["id"]] = now
+        limit, devs = await asyncio.to_thread(_limit_devices, sub)
+        if limit <= 0 or len(devs) < limit:
+            continue   # места есть — отказ по другой причине (ключ выключен), это не наш случай
+        lines = "\n".join(f"• {html.escape(app)} — на связи {_ago(seen)}" for app, seen in devs[:5])
+        if mode != "on":
+            await _audit(system, "key.limit_note_dry", k["user_id"], f"ключ #{k['id']}: занято {len(devs)}")
+            continue
+        text = (f"📱 Новое устройство не подключилось к ключу #{k['id']}: все места заняты.\n\n"
+                f"Сейчас места занимают:\n{lines}\n\n"
+                "🗑 Если что-то из этого больше не используете — отключите бесплатно: кабинет → у ключа «⋯» → "
+                "«Устройства» → «Отключить». Потом обновите подписку в новом приложении.\n"
+                "➕ Или добавьте ещё одно место в боте.")
+        try:
+            ok, _ = await _telegram(k["telegram_id"], text, ("Открыть кабинет", BUTTONS["renew"]))
+        except Exception:
+            ok = False
+        await _audit(system, "key.limit_note" if ok else "key.limit_note_fail", k["user_id"], f"ключ #{k['id']}: занято {len(devs)}")
+
+
+async def _limit_note_loop():
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await _limit_note_once()
+        except Exception as e:
+            print(f"[mognu] limit note: {type(e).__name__}: {e}", flush=True)
+        await asyncio.sleep(LIMIT_NOTE_EVERY)
 
 async def _online_loop():
     """Каждые 5 минут — сколько людей онлайн на каждой локации (по данным бота); храним 30 дней."""

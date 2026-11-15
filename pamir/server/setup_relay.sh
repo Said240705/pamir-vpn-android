@@ -15,9 +15,13 @@
 #   bash setup_relay.sh --undo     убрать пересылку
 # «Домой» через этот сервер на российский (связь «основной ↔ российский» напрямую рвётся):
 #   NAME=mognu-relay-home MAIN=185.198.152.202 MAP="8446:8443" bash setup_relay.sh
+# ssh основного сервера только для проверки из России (иначе сканеры идут через этот сервер, и fail2ban основного
+# банит его адрес):
+#   NAME=mognu-relay-ssh ALLOW=185.198.152.202 MAP="2223:22" bash setup_relay.sh
 set -eu
 MAIN="${MAIN:-78.17.158.230}"
 MAP="${MAP:-65535:65535 4443:4443 8443:443 2097:2096}"
+ALLOW="${ALLOW:-}"            # если задан — пересылать только с этого адреса (например, ssh для проверки из России)
 NAME="${NAME:-mognu-relay}"   # другое имя — отдельная пересылка на другой сервер (например, «Домой» на российский)
 UNIT=/etc/systemd/system/$NAME.service
 SELF=/usr/local/sbin/$NAME.sh
@@ -36,6 +40,11 @@ rules() {  # $1 = -A (добавить, если нет) или -D (убрать
         while iptables -t "$table" -C "$@" 2>/dev/null; do iptables -t "$table" -D "$@"; done
       fi
     done
+    if [ -n "$ALLOW" ]; then  # чужих — отбрасывать; ставится последним с -I, т.е. выше разрешающих правил
+      local drop="FORWARD -p tcp -d $MAIN --dport $to ! -s $ALLOW -j DROP"
+      if [ "$op" = "-A" ]; then iptables -C $drop 2>/dev/null || iptables -I $drop
+      else while iptables -C $drop 2>/dev/null; do iptables -D $drop; done; fi
+    fi
   done
   local m="nat POSTROUTING -p tcp -d $MAIN -j MASQUERADE"
   set -- $m; shift
@@ -76,6 +85,7 @@ RemainAfterExit=yes
 Environment=MAIN=$MAIN
 Environment="MAP=$MAP"
 Environment=NAME=$NAME
+Environment=ALLOW=$ALLOW
 ExecStart=/bin/bash $SELF --apply-only
 [Install]
 WantedBy=multi-user.target

@@ -402,7 +402,7 @@ def pay_step(rs, now, dry=False):
         return []
     msg = step(rs.setdefault('pay', {}), 'ЮKassa (оплата СБП/картой)', ok, None, now,
                'api.yookassa.ru не отвечает основному серверу — оплата СБП/картой не создаётся. Проверь адреса '
-               '(getent ahostsv4 api.yookassa.ru) и пересылку на Финляндии (setup_pay_via_relay.sh)', 'с основного сервера')
+               '(getent ahostsv4 api.yookassa.ru) и цепочку Финляндия → российский сервер (setup_pay_via_relay.sh)', 'с основного сервера')
     return [msg] if msg else []
 
 

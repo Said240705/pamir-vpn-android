@@ -2,18 +2,23 @@
 # Платёжные API (ЮKassa) с основного сервера — через Финляндию.
 #
 # IP основного сервера заблокирован в России, и трафик Испания → российские сервисы не проходит: бот получал
-# «Connection timeout to host https://api.yookassa.ru» — оплата СБП/картой не создавалась. Из Финляндии ЮKassa
-# отвечает. Основной сервер подменяет адрес назначения (iptables OUTPUT DNAT) на порт Финляндии, а Финляндия
-# пересылает на настоящий адрес ЮKassa (setup_relay.sh, NAME=mognu-relay-pay*). TLS, сертификат и имя сайта
-# не меняются — бот ничего не замечает. Переживает перезагрузку (systemd mognu-pay-via-relay).
+# «Connection timeout to host https://api.yookassa.ru» — оплата СБП/картой не создавалась. С 15.11 ЮKassa не
+# отвечает и Финляндии, поэтому цепочка: основной → Финляндия → российский сервер → ЮKassa. Основной сервер
+# подменяет адрес назначения (iptables OUTPUT DNAT) на порт Финляндии, Финляндия пересылает на тот же порт
+# российского сервера, а он — на настоящий адрес ЮKassa (всё — setup_relay.sh с NAME=mognu-relay-pay*).
+# TLS, сертификат и имя сайта не меняются — бот ничего не замечает. Переживает перезагрузку.
 #
-#   на Финляндии (один раз; адреса — из getent ahostsv4 api.yookassa.ru):
+#   на российском сервере (адреса — из getent ahostsv4 api.yookassa.ru):
 #     NAME=mognu-relay-pay1 MAIN=185.71.78.133  MAP="8447:443" bash setup_relay.sh
 #     NAME=mognu-relay-pay2 MAIN=109.235.165.99 MAP="8448:443" bash setup_relay.sh
+#   на Финляндии:
+#     NAME=mognu-relay-pay1 MAIN=185.198.152.202 MAP="8447:8447" bash setup_relay.sh
+#     NAME=mognu-relay-pay2 MAIN=185.198.152.202 MAP="8448:8448" bash setup_relay.sh
 #   на основном сервере:
 #     bash setup_pay_via_relay.sh            включить (повторный запуск ничего не дублирует)
 #     bash setup_pay_via_relay.sh --undo     убрать
-# Если ЮKassa сменит адреса (getent ahostsv4 api.yookassa.ru покажет новые) — добавить их в PAIRS и на Финляндии.
+# Если ЮKassa сменит адреса (getent ahostsv4 api.yookassa.ru покажет новые) — добавить их в PAIRS, на Финляндии
+# и на российском сервере.
 set -eu
 RELAY="${RELAY:-31.77.6.71}"
 PAIRS="${PAIRS:-185.71.78.133:8447 109.235.165.99:8448}"   # адрес ЮKassa : порт на Финляндии

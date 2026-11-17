@@ -16,6 +16,7 @@
 """
 import os
 import py_compile
+import re
 import shutil
 import subprocess
 import sys
@@ -29,14 +30,15 @@ INIT = f"{ROOT}/bot/handlers/user/__init__.py"
 CFG = f"{ROOT}/config.py"
 APPLY = "--apply" in sys.argv
 
-GW_OLD = "        return event.data == 'start'\n"
-GW_NEW = ("        if event.data == 'start':\n"
-          "            return True\n"
-          "        try:  # Mognu: кнопка «Я подписался» (проверка подписки) — мимо шлюза, к самой проверке\n"
-          "            from bot.utils.extension_callbacks import is_extension_access_check_callback\n"
-          "            return bool(is_extension_access_check_callback(event.data))\n"
-          "        except Exception:\n"
-          "            return False\n")
+# строка шлюза «что пропускать из нажатий»: «return event.data == 'start'» и, может быть, ещё условия после неё
+GW_RE = re.compile(r"^        return (event\.data == 'start'[^\n]*)\n", re.M)
+GW_MARK2 = "# Mognu: кнопка «Я подписался»"
+GW_TAIL = ("            return True\n"
+           "        try:  " + GW_MARK2 + " (проверка подписки) — мимо шлюза, к самой проверке\n"
+           "            from bot.utils.extension_callbacks import is_extension_access_check_callback\n"
+           "            return bool(is_extension_access_check_callback(event.data))\n"
+           "        except Exception:\n"
+           "            return False\n")
 GUARD = ("router.message.outer_middleware(UserAccessGuardMiddleware())\n"
          "router.callback_query.outer_middleware(UserAccessGuardMiddleware())\n")
 GW_MARK = "# Pamir: режим шлюза — первым, до остальных фильтров\n"
@@ -51,10 +53,11 @@ if "BOT_TOKEN" not in open(CFG, encoding="utf-8").read():
     sys.exit("В config.py бота нет BOT_TOKEN — ничего не меняю.")
 
 gw = open(GW, encoding="utf-8").read()
-if GW_NEW in gw:
+found = GW_RE.findall(gw)
+if GW_MARK2 in gw:
     gw_new = gw
-elif gw.count(GW_OLD) == 1:
-    gw_new = gw.replace(GW_OLD, GW_NEW)
+elif len(found) == 1:
+    gw_new = GW_RE.sub(lambda m: "        if " + m.group(1) + ":\n" + GW_TAIL, gw)
 else:
     sys.exit("gateway.py устроен иначе — ничего не меняю. Пришлите: grep -n \"event.data\" " + GW)
 

@@ -36,36 +36,41 @@ BAK = "/root/{}.bak-channelsub2"
 APPLY = "--apply" in sys.argv
 MARK = "# Mognu: подписка на канал"
 
-# ── 2. экран отказа: анимация перед текстом ──
+# ── 2. экран отказа: одно сообщение — анимация, текст подписью и кнопки ──
 G_OLD = ("    if isinstance(event, Message):\n"
          "        await safe_edit_or_send(event, text, reply_markup=reply_markup, force_new=True)\n")
 G_NEW = ("    if isinstance(event, Message):\n"
-         "        await _mognu_denied_animation(event, result)  " + MARK + " — анимация «Подпишись»\n"
+         "        if await _mognu_denied_animation(event, result, text, reply_markup):  " + MARK + " — анимация с текстом и кнопками\n"
+         "            return\n"
          "        await safe_edit_or_send(event, text, reply_markup=reply_markup, force_new=True)\n")
+# первая версия (анимация отдельным сообщением над текстом) — заменяется на новую
+G_NEW_V1 = ("    if isinstance(event, Message):\n"
+            "        await _mognu_denied_animation(event, result)  " + MARK + " — анимация «Подпишись»\n"
+            "        await safe_edit_or_send(event, text, reply_markup=reply_markup, force_new=True)\n")
+G_HELPER_V1_START = "\n\n" + MARK + ": анимация над экраном отказа"
 G_HELPER = '''
 
-''' + MARK + ''': анимация над экраном отказа (кнопка на канал), одному человеку не чаще раза в 10 минут
-_MOGNU_ANIM_SHOWN: dict = {}
+''' + MARK + ''': экран отказа одним сообщением — анимация «Подпишись», текст подписью и кнопки под ней
 _MOGNU_FILE_IDS: dict = {}
 
 
-async def _mognu_denied_animation(event, result) -> None:
-    import time
+async def _mognu_denied_animation(event, result, text, reply_markup) -> bool:
+    """True — отправили анимацию с текстом и кнопками; False — пусть бот пришлёт обычный текст."""
     from pathlib import Path
     from aiogram.types import FSInputFile
     try:
         if not any(str(b.get('url') or '').startswith('https://t.me/') for row in (result.buttons or []) for b in row):
-            return
+            return False
         path = Path(__file__).resolve().parents[2] / 'custom_extensions' / 'media' / 'mognu-sub.mp4'
-        uid = event.from_user.id if event.from_user else 0
-        if (not path.exists() and str(path) not in _MOGNU_FILE_IDS) or time.time() - _MOGNU_ANIM_SHOWN.get(uid, 0) < 600:
-            return
-        _MOGNU_ANIM_SHOWN[uid] = time.time()
-        msg = await event.answer_animation(_MOGNU_FILE_IDS.get(str(path)) or FSInputFile(path), width=960, height=540)
+        if not path.exists() and str(path) not in _MOGNU_FILE_IDS:
+            return False
+        msg = await event.answer_animation(_MOGNU_FILE_IDS.get(str(path)) or FSInputFile(path), width=960, height=540,
+                                           caption=text, reply_markup=reply_markup)
         if msg.animation:
             _MOGNU_FILE_IDS[str(path)] = msg.animation.file_id
+        return True
     except Exception:
-        pass
+        return False
 '''
 G_ALL = "\n\n__all__ = ['UserAccessGuardMiddleware']"
 
@@ -140,7 +145,10 @@ if any(not os.path.exists(a) for a in anims):
 
 out = {}
 s = open(GUARD_MW, encoding="utf-8").read()
-if MARK in s:
+if G_NEW_V1 in s and G_HELPER_V1_START in s:   # стоит первая версия — меняем на одно сообщение
+    s = s.replace(G_NEW_V1, G_OLD)
+    s = s[:s.index(G_HELPER_V1_START)] + s[s.index(G_ALL):]
+if G_NEW in s:
     out[GUARD_MW] = s
 elif s.count(G_OLD) == 1 and s.count(G_ALL) == 1:
     out[GUARD_MW] = s.replace(G_OLD, G_NEW).replace(G_ALL, G_HELPER + G_ALL)
@@ -177,8 +185,9 @@ print("анимации → custom_extensions/media/")
 if not APPLY:
     sys.exit("Это проверка. Применить: python3 install_channel_sub.py --apply")
 
-for path in out:
-    shutil.copy2(path, BAK.format(os.path.basename(path)))
+for path in out:   # копия — только самая первая (до любых наших правок), повторный запуск её не затирает
+    if not os.path.exists(BAK.format(os.path.basename(path))):
+        shutil.copy2(path, BAK.format(os.path.basename(path)))
 os.makedirs(MEDIA, exist_ok=True)
 for a in anims:
     shutil.copy2(a, os.path.join(MEDIA, os.path.basename(a)))

@@ -2,14 +2,18 @@
 """Экран подписки на канал: анимации, «спасибо» после подписки и правильный порядок со шлюзом.
 
 Что было: режим шлюза стоял в боте первым и перехватывал всё, кроме /start, — нажатие «Я подписался» не доходило
-до проверки, человеку без подписки приходила карточка кабинета, а «спасибо» не было.
+до проверки, человеку без подписки приходила карточка кабинета, а «спасибо» не было. Расширениям бота нельзя
+ничего импортировать, кроме своего API, — поэтому анимации отправляет сам бот, а дополнение
+custom_extensions/force_channel_sub.py не меняется (тексты — patch_channel_sub_texts.py).
 
-Что делает скрипт (копии всех файлов — *.bak-channelsub в /root; проверка синтаксиса; при ошибке всё возвращается):
-1. custom_extensions/force_channel_sub.py — новая версия (force_channel_sub.py рядом со скриптом): без подписки —
-   анимация «Подпишись» и текст с кнопками; после «Я подписался» — анимация «Спасибо!» и карточка кабинета.
-2. custom_extensions/media/ — анимации mognu-sub.mp4 и mognu-thanks.mp4 (лежат рядом со скриптом).
-3. bot/middlewares/gateway.py — шлюз пропускает кнопку «Я подписался» к проверке.
-4. bot/handlers/user/__init__.py — проверка подписки раньше шлюза: без подписки — экран подписки, а не кабинет.
+Что делает скрипт (копии — /root/*.bak-channelsub2; проверка синтаксиса; при ошибке всё возвращается):
+1. custom_extensions/media/ — анимации mognu-sub.mp4 и mognu-thanks.mp4 (лежат рядом со скриптом).
+2. bot/middlewares/user_access_guard.py — при отказе в доступе на сообщение: сначала анимация «Подпишись»
+   (одному человеку не чаще раза в 10 минут), под ней текст с кнопками.
+3. bot/handlers/user/extension_callbacks.py — «Я подписался» и подписка найдена: анимация «Спасибо!»,
+   экран подписки убирается, в режиме шлюза — карточка кабинета.
+4. bot/middlewares/gateway.py — шлюз пропускает кнопку «Я подписался» к проверке.
+5. bot/handlers/user/__init__.py — проверка подписки раньше шлюза.
 
     python3 install_channel_sub.py            показать
     python3 install_channel_sub.py --apply    применить и перезапустить бота
@@ -23,76 +27,168 @@ import sys
 
 ROOT = "/root/YadrenoVPN"
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXT = f"{ROOT}/custom_extensions/force_channel_sub.py"
 MEDIA = f"{ROOT}/custom_extensions/media"
+GUARD_MW = f"{ROOT}/bot/middlewares/user_access_guard.py"
+EXT_CB = f"{ROOT}/bot/handlers/user/extension_callbacks.py"
 GW = f"{ROOT}/bot/middlewares/gateway.py"
 INIT = f"{ROOT}/bot/handlers/user/__init__.py"
-CFG = f"{ROOT}/config.py"
+BAK = "/root/{}.bak-channelsub2"
 APPLY = "--apply" in sys.argv
+MARK = "# Mognu: подписка на канал"
 
-# строка шлюза «что пропускать из нажатий»: «return event.data == 'start'» и, может быть, ещё условия после неё
+# ── 2. экран отказа: анимация перед текстом ──
+G_OLD = ("    if isinstance(event, Message):\n"
+         "        await safe_edit_or_send(event, text, reply_markup=reply_markup, force_new=True)\n")
+G_NEW = ("    if isinstance(event, Message):\n"
+         "        await _mognu_denied_animation(event, result)  " + MARK + " — анимация «Подпишись»\n"
+         "        await safe_edit_or_send(event, text, reply_markup=reply_markup, force_new=True)\n")
+G_HELPER = '''
+
+''' + MARK + ''': анимация над экраном отказа (кнопка на канал), одному человеку не чаще раза в 10 минут
+_MOGNU_ANIM_SHOWN: dict = {}
+_MOGNU_FILE_IDS: dict = {}
+
+
+async def _mognu_denied_animation(event, result) -> None:
+    import time
+    from pathlib import Path
+    from aiogram.types import FSInputFile
+    try:
+        if not any(str(b.get('url') or '').startswith('https://t.me/') for row in (result.buttons or []) for b in row):
+            return
+        path = Path(__file__).resolve().parents[2] / 'custom_extensions' / 'media' / 'mognu-sub.mp4'
+        uid = event.from_user.id if event.from_user else 0
+        if (not path.exists() and str(path) not in _MOGNU_FILE_IDS) or time.time() - _MOGNU_ANIM_SHOWN.get(uid, 0) < 600:
+            return
+        _MOGNU_ANIM_SHOWN[uid] = time.time()
+        msg = await event.answer_animation(_MOGNU_FILE_IDS.get(str(path)) or FSInputFile(path), width=960, height=540)
+        if msg.animation:
+            _MOGNU_FILE_IDS[str(path)] = msg.animation.file_id
+    except Exception:
+        pass
+'''
+G_ALL = "\n\n__all__ = ['UserAccessGuardMiddleware']"
+
+# ── 3. «Я подписался»: анимация «Спасибо!» и карточка кабинета ──
+C_OLD = "    result = await dispatch_extension_callback(context, bot=callback.bot)\n"
+C_NEW = (C_OLD +
+         "    " + MARK + ": подписка подтверждена — «Спасибо!» и карточка кабинета вместо голого меню\n"
+         "    if parsed.get('action_name') == 'check' and 'channel_sub' in str(parsed.get('extension_id') or '') \\\n"
+         "            and result.get('page_key') == 'main' and await _mognu_sub_thanks(callback):\n"
+         "        return\n")
+C_HELPER = '''
+
+
+async def _mognu_sub_thanks(callback: CallbackQuery) -> bool:
+    """''' + MARK[2:] + ''': анимация «Спасибо!»; экран подписки убираем; в режиме шлюза — карточка кабинета.
+    True — ответили сами; False — пусть бот покажет главную страницу как обычно."""
+    from pathlib import Path
+    from aiogram.types import FSInputFile
+    uid = callback.from_user.id
+    chat_id = callback.message.chat.id if callback.message else uid
+    try:
+        from bot.middlewares.gateway import gateway_enabled, send_gateway_card
+        gateway = gateway_enabled()
+    except Exception:
+        gateway = False
+    path = Path(__file__).resolve().parents[3] / 'custom_extensions' / 'media' / 'mognu-thanks.mp4'
+    if gateway:
+        try:
+            await callback.answer('🎉 Спасибо, вы с нами!')
+        except Exception:
+            pass
+        if callback.message:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+    try:
+        if path.exists():
+            await callback.bot.send_animation(chat_id, FSInputFile(path), width=960, height=540)
+    except Exception:
+        pass
+    if not gateway:
+        return False
+    await send_gateway_card(callback.bot, chat_id, uid)
+    return True
+'''
+
+# ── 4. шлюз пропускает «Я подписался» ──
 GW_RE = re.compile(r"^        return (event\.data == 'start'[^\n]*)\n", re.M)
-GW_MARK2 = "# Mognu: кнопка «Я подписался»"
+GW_MARK = "# Mognu: кнопка «Я подписался»"
 GW_TAIL = ("            return True\n"
-           "        try:  " + GW_MARK2 + " (проверка подписки) — мимо шлюза, к самой проверке\n"
+           "        try:  " + GW_MARK + " (проверка подписки) — мимо шлюза, к самой проверке\n"
            "            from bot.utils.extension_callbacks import is_extension_access_check_callback\n"
            "            return bool(is_extension_access_check_callback(event.data))\n"
            "        except Exception:\n"
            "            return False\n")
+
+# ── 5. проверка подписки раньше шлюза ──
 GUARD = ("router.message.outer_middleware(UserAccessGuardMiddleware())\n"
          "router.callback_query.outer_middleware(UserAccessGuardMiddleware())\n")
-GW_MARK = "# Pamir: режим шлюза — первым, до остальных фильтров\n"
+GW_LINE = "# Pamir: режим шлюза — первым, до остальных фильтров\n"
 GUARD_NEW = "# Mognu: проверка подписки — раньше шлюза (без подписки — экран подписки, а не кабинет)\n" + GUARD
 
-src_ext = open(os.path.join(HERE, "force_channel_sub.py"), encoding="utf-8").read()
+
+def fail(what, cmd):
+    sys.exit(f"{what} устроен иначе — ничего не меняю. Пришлите: {cmd}")
+
+
 anims = [os.path.join(HERE, n) for n in ("mognu-sub.mp4", "mognu-thanks.mp4")]
-missing = [a for a in anims if not os.path.exists(a)]
-if missing:
-    sys.exit("Нет анимаций рядом со скриптом: " + ", ".join(os.path.basename(m) for m in missing))
-if "BOT_TOKEN" not in open(CFG, encoding="utf-8").read():
-    sys.exit("В config.py бота нет BOT_TOKEN — ничего не меняю.")
+if any(not os.path.exists(a) for a in anims):
+    sys.exit("Нет анимаций mognu-sub.mp4 / mognu-thanks.mp4 рядом со скриптом.")
 
-gw = open(GW, encoding="utf-8").read()
-found = GW_RE.findall(gw)
-if GW_MARK2 in gw:
-    gw_new = gw
-elif len(found) == 1:
-    gw_new = GW_RE.sub(lambda m: "        if " + m.group(1) + ":\n" + GW_TAIL, gw)
+out = {}
+s = open(GUARD_MW, encoding="utf-8").read()
+if MARK in s:
+    out[GUARD_MW] = s
+elif s.count(G_OLD) == 1 and s.count(G_ALL) == 1:
+    out[GUARD_MW] = s.replace(G_OLD, G_NEW).replace(G_ALL, G_HELPER + G_ALL)
 else:
-    sys.exit("gateway.py устроен иначе — ничего не меняю. Пришлите: grep -n \"event.data\" " + GW)
+    fail("user_access_guard.py", f"tail -30 {GUARD_MW}")
 
-init = open(INIT, encoding="utf-8").read()
-if GUARD_NEW in init:
-    init_new = init
-elif init.count(GUARD) == 1 and init.count(GW_MARK) == 1:
-    init_new = init.replace(GUARD, "").replace(GW_MARK, GUARD_NEW + GW_MARK)
+s = open(EXT_CB, encoding="utf-8").read()
+if MARK in s:
+    out[EXT_CB] = s
+elif s.count(C_OLD) == 1:
+    out[EXT_CB] = s.replace(C_OLD, C_NEW).rstrip("\n") + C_HELPER
 else:
-    sys.exit("__init__.py устроен иначе — ничего не меняю. Пришлите: sed -n 18,32p " + INIT)
+    fail("extension_callbacks.py", f"sed -n 20,50p {EXT_CB}")
 
-ext_same = os.path.exists(EXT) and open(EXT, encoding="utf-8").read() == src_ext
-print("1. force_channel_sub.py:", "уже новый" if ext_same else "заменю на новый")
-print("2. анимации → custom_extensions/media/")
-print("3. gateway.py:", "уже пропускает «Я подписался»" if gw_new == gw else "пропущу «Я подписался» к проверке")
-print("4. __init__.py:", "проверка уже раньше шлюза" if init_new == init else "проверка подписки — раньше шлюза")
+s = open(GW, encoding="utf-8").read()
+if GW_MARK in s:
+    out[GW] = s
+elif len(GW_RE.findall(s)) == 1:
+    out[GW] = GW_RE.sub(lambda m: "        if " + m.group(1) + ":\n" + GW_TAIL, s)
+else:
+    fail("gateway.py", f"grep -n 'event.data' {GW}")
+
+s = open(INIT, encoding="utf-8").read()
+if GUARD_NEW in s:
+    out[INIT] = s
+elif s.count(GUARD) == 1 and s.count(GW_LINE) == 1:
+    out[INIT] = s.replace(GUARD, "").replace(GW_LINE, GUARD_NEW + GW_LINE)
+else:
+    fail("__init__.py", f"sed -n 18,32p {INIT}")
+
+for path, text in out.items():
+    print(os.path.relpath(path, ROOT) + ":", "уже исправлен" if text == open(path, encoding="utf-8").read() else "исправлю")
+print("анимации → custom_extensions/media/")
 if not APPLY:
     sys.exit("Это проверка. Применить: python3 install_channel_sub.py --apply")
 
-files = [(EXT, src_ext), (GW, gw_new), (INIT, init_new)]
-for path, _ in files:
-    if os.path.exists(path):
-        shutil.copy2(path, "/root/" + os.path.basename(path) + ".bak-channelsub")
+for path in out:
+    shutil.copy2(path, BAK.format(os.path.basename(path)))
 os.makedirs(MEDIA, exist_ok=True)
 for a in anims:
     shutil.copy2(a, os.path.join(MEDIA, os.path.basename(a)))
 try:
-    for path, text in files:
+    for path, text in out.items():
         open(path, "w", encoding="utf-8").write(text)
         py_compile.compile(path, doraise=True)
 except Exception as e:
-    for path, _ in files:
-        bak = "/root/" + os.path.basename(path) + ".bak-channelsub"
-        if os.path.exists(bak):
-            shutil.copy2(bak, path)
+    for path in out:
+        shutil.copy2(BAK.format(os.path.basename(path)), path)
     sys.exit(f"Не прошло проверку — вернул файлы: {e}")
 subprocess.run(["systemctl", "restart", "yadreno-vpn"], check=True)
-print("Готово, бот перезапущен. Копии: /root/*.bak-channelsub")
+print("Готово, бот перезапущен. Копии: /root/*.bak-channelsub2")

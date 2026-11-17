@@ -7,11 +7,12 @@
 custom_extensions/force_channel_sub.py не меняется (тексты — patch_channel_sub_texts.py).
 
 Что делает скрипт (копии — /root/*.bak-channelsub2; проверка синтаксиса; при ошибке всё возвращается):
-1. custom_extensions/media/ — анимации mognu-sub.mp4 и mognu-thanks.mp4 (лежат рядом со скриптом).
+1. custom_extensions/media/ — анимации mognu-sub.mp4 и mognu-cabinet.mp4 (лежат рядом со скриптом).
 2. bot/middlewares/user_access_guard.py — при отказе в доступе на сообщение: сначала анимация «Подпишись»
    (одному человеку не чаще раза в 10 минут), под ней текст с кнопками.
-3. bot/handlers/user/extension_callbacks.py — «Я подписался» и подписка найдена: анимация «Спасибо!»,
+3. bot/handlers/user/extension_callbacks.py — «Я подписался» и подписка найдена: «🎉 Спасибо за подписку!»,
    экран подписки убирается, в режиме шлюза — карточка кабинета.
+4б. bot/middlewares/gateway.py — карточка кабинета одним сообщением: анимация «Всё здесь», текст и кнопки.
 4. bot/middlewares/gateway.py — шлюз пропускает кнопку «Я подписался» к проверке.
 5. bot/handlers/user/__init__.py — проверка подписки раньше шлюза.
 
@@ -81,41 +82,60 @@ C_NEW = (C_OLD +
          "    if parsed.get('action_name') == 'check' and 'channel_sub' in str(parsed.get('extension_id') or '') \\\n"
          "            and result.get('page_key') == 'main' and await _mognu_sub_thanks(callback):\n"
          "        return\n")
+C_HELPER_START = "\n\n\nasync def _mognu_sub_thanks("
 C_HELPER = '''
 
 
 async def _mognu_sub_thanks(callback: CallbackQuery) -> bool:
-    """''' + MARK[2:] + ''': анимация «Спасибо!»; экран подписки убираем; в режиме шлюза — карточка кабинета.
-    True — ответили сами; False — пусть бот покажет главную страницу как обычно."""
-    from pathlib import Path
-    from aiogram.types import FSInputFile
+    """''' + MARK[2:] + ''': «🎉 Спасибо за подписку!»; экран подписки убираем; в режиме шлюза — карточка кабинета
+    (с анимацией «Всё здесь»). True — ответили сами; False — пусть бот покажет главную страницу как обычно."""
     uid = callback.from_user.id
     chat_id = callback.message.chat.id if callback.message else uid
     try:
         from bot.middlewares.gateway import gateway_enabled, send_gateway_card
-        gateway = gateway_enabled()
+        if not gateway_enabled():
+            return False
     except Exception:
-        gateway = False
-    path = Path(__file__).resolve().parents[3] / 'custom_extensions' / 'media' / 'mognu-thanks.mp4'
-    if gateway:
-        try:
-            await callback.answer('🎉 Спасибо, вы с нами!')
-        except Exception:
-            pass
-        if callback.message:
-            try:
-                await callback.message.delete()
-            except Exception:
-                pass
+        return False
     try:
-        if path.exists():
-            await callback.bot.send_animation(chat_id, FSInputFile(path), width=960, height=540)
+        await callback.answer('🎉 Спасибо за подписку!')
     except Exception:
         pass
-    if not gateway:
-        return False
+    if callback.message:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
     await send_gateway_card(callback.bot, chat_id, uid)
     return True
+'''
+
+# ── 4б. карточка кабинета (режим шлюза) — одним сообщением с анимацией «Всё здесь» ──
+GW_SEND_OLD = "        msg = await bot.send_message(chat_id, text, reply_markup=kb, parse_mode='HTML')\n"
+GW_SEND_NEW = "        msg = await _mognu_send_card(bot, chat_id, text, kb)  " + MARK + " — карточка с анимацией\n"
+GW_ALL_RE = re.compile(r"\n\n__all__ = \[")
+GW_HELPER = '''
+
+''' + MARK + ''': карточка кабинета — анимация «Всё здесь», текст подписью и кнопки; нет анимации — как раньше
+_MOGNU_CARD_FILE: dict = {}
+
+
+async def _mognu_send_card(bot, chat_id, text, kb):
+    from pathlib import Path
+    from aiogram.types import FSInputFile
+    path = Path(__file__).resolve().parents[2] / 'custom_extensions' / 'media' / 'mognu-cabinet.mp4'
+    if path.exists() or 'f' in _MOGNU_CARD_FILE:
+        try:
+            msg = await bot.send_animation(chat_id, _MOGNU_CARD_FILE.get('f') or FSInputFile(path), caption=text,
+                                           reply_markup=kb, parse_mode='HTML', width=960, height=540)
+            if msg.animation:
+                _MOGNU_CARD_FILE['f'] = msg.animation.file_id
+            return msg
+        except TelegramForbiddenError:
+            raise
+        except Exception:
+            logger.warning('gateway: animated card failed for %s, sending text', chat_id, exc_info=True)
+    return await bot.send_message(chat_id, text, reply_markup=kb, parse_mode='HTML')
 '''
 
 # ── 4. шлюз пропускает «Я подписался» ──
@@ -139,9 +159,9 @@ def fail(what, cmd):
     sys.exit(f"{what} устроен иначе — ничего не меняю. Пришлите: {cmd}")
 
 
-anims = [os.path.join(HERE, n) for n in ("mognu-sub.mp4", "mognu-thanks.mp4")]
+anims = [os.path.join(HERE, n) for n in ("mognu-sub.mp4", "mognu-cabinet.mp4")]
 if any(not os.path.exists(a) for a in anims):
-    sys.exit("Нет анимаций mognu-sub.mp4 / mognu-thanks.mp4 рядом со скриптом.")
+    sys.exit("Нет анимаций mognu-sub.mp4 / mognu-cabinet.mp4 рядом со скриптом.")
 
 out = {}
 s = open(GUARD_MW, encoding="utf-8").read()
@@ -156,7 +176,9 @@ else:
     fail("user_access_guard.py", f"tail -30 {GUARD_MW}")
 
 s = open(EXT_CB, encoding="utf-8").read()
-if MARK in s:
+if C_NEW in s and C_HELPER_START in s and C_HELPER not in s:   # стоит прошлая версия «спасибо» — меняем
+    s = s[:s.index(C_HELPER_START)].rstrip("\n") + C_HELPER
+if C_NEW in s and C_HELPER in s:
     out[EXT_CB] = s
 elif s.count(C_OLD) == 1:
     out[EXT_CB] = s.replace(C_OLD, C_NEW).rstrip("\n") + C_HELPER
@@ -164,12 +186,17 @@ else:
     fail("extension_callbacks.py", f"sed -n 20,50p {EXT_CB}")
 
 s = open(GW, encoding="utf-8").read()
-if GW_MARK in s:
-    out[GW] = s
-elif len(GW_RE.findall(s)) == 1:
-    out[GW] = GW_RE.sub(lambda m: "        if " + m.group(1) + ":\n" + GW_TAIL, s)
-else:
-    fail("gateway.py", f"grep -n 'event.data' {GW}")
+if GW_MARK not in s:
+    if len(GW_RE.findall(s)) != 1:
+        fail("gateway.py", f"grep -n 'event.data' {GW}")
+    s = GW_RE.sub(lambda m: "        if " + m.group(1) + ":\n" + GW_TAIL, s)
+if GW_SEND_NEW not in s:
+    if s.count(GW_SEND_OLD) != 1 or len(GW_ALL_RE.findall(s)) != 1:
+        fail("gateway.py (отправка карточки)", f"grep -n 'send_message\\|__all__' {GW}")
+    s = s.replace(GW_SEND_OLD, GW_SEND_NEW)
+    m = GW_ALL_RE.search(s)
+    s = s[:m.start()] + GW_HELPER + s[m.start():]
+out[GW] = s
 
 s = open(INIT, encoding="utf-8").read()
 if GUARD_NEW in s:

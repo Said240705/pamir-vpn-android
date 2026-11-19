@@ -9,6 +9,8 @@
    адреса не печатает.
 
 Запускать Python'ом бота:  cd /root/YadrenoVPN && <python бота> /root/router_linktest.py
+С --yookassa вместо страницы проверки связи открывает ЮKassa и Сбербанк — какой сервер-выход пускают в ЮKassa
+(для оплаты СБП/картой, setup_pay_via_relay.sh). Ответ ЮKassa с любым кодом (обычно 401/404) — пускает.
 """
 import asyncio
 import glob
@@ -25,6 +27,7 @@ ROOT = os.getenv("PAMIR_BOT_ROOT", "/root/YadrenoVPN")
 DB = os.path.join(ROOT, "database", "vpn_bot.db")
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_EMAIL = "test@pamirlink.ru"
+PAY = "--yookassa" in sys.argv
 sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
@@ -74,6 +77,14 @@ def check(link, port):
         time.sleep(1.5)
         if proc.poll() is not None:
             return "xray не запустился: " + proc.stderr.read().decode("utf-8", "replace").strip().splitlines()[-1][:120]
+        if PAY:
+            res = []
+            for name, url in (("ЮKassa", "https://api.yookassa.ru/v3/"), ("Сбербанк", "https://www.sberbank.ru/")):
+                r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "15",
+                                    "--socks5-hostname", f"127.0.0.1:{port}", url], capture_output=True, text=True)
+                code = r.stdout.strip() or "000"
+                res.append(f"{name} {'✅ ' + code if code != '000' else '❌ нет'}")
+            return ", ".join(res)
         tries = []
         for url in ("https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204", "https://www.gstatic.com/generate_204"):
             r = subprocess.run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code} %{time_total}", "--max-time", "15",

@@ -67,6 +67,9 @@ object PamirWatch {
     /** Oldest app version that may still connect ("" = any); set from the release info by the update check. */
     private const val K_MIN_VERSION = "pamir_min_version"
     private const val K_USER_STOP = "pamir_user_stop"
+    /** Last automatic switch by the watchdog: "epoch ms|from|to" — the app explains it once when opened. */
+    private const val K_LAST_SWITCH = "pamir_last_switch"
+    private const val SWITCH_NOTE_MS = 6 * 3600_000L
     // Same keys as PREF_USER_CHOSE / PREF_AUTO_BEST in PamirActivity.
     private const val K_USER_CHOSE = "pamir_user_chose"
     private const val K_AUTO_BEST = "pamir_auto_best"
@@ -244,12 +247,35 @@ object PamirWatch {
         MmkvManager.encodeSettings(K_AUTO_BEST, false)
         markUserStop()
         MessageHelper.sendMsg2Service(ctx, AppConfig.MSG_STATE_RESTART, "")
+        rememberSwitch(title(curP.remarks), title(next.remarks))
         notify(
-            ctx, "Переключили на ${title(next.remarks)}",
-            "${title(curP.remarks)} перестал отвечать — подключились к другому серверу",
+            ctx, "🔄 Переключили на ${title(next.remarks)}",
+            "${title(curP.remarks)} перестал отвечать в вашей сети, и Mognu сам подключил вас к другому серверу. " +
+                "Короткая пауза — это переключение, а не сбой: ничего делать не нужно.",
             EXTRA_SERVERS, "Выбрать сервер"
         )
         return true
+    }
+
+    private fun rememberSwitch(from: String, to: String) =
+        MmkvManager.encodeSettings(K_LAST_SWITCH, "${System.currentTimeMillis()}|${from.replace("|", " ")}|${to.replace("|", " ")}")
+
+    /**
+     * The automatic switch the app has not explained yet ("from" to "to"), at most [SWITCH_NOTE_MS] old; reading it
+     * clears it, so it is told once. Null when there was none.
+     */
+    fun takeSwitchNote(now: Long = System.currentTimeMillis()): Pair<String, String>? {
+        val raw = MmkvManager.decodeSettingsString(K_LAST_SWITCH, "").orEmpty()
+        if (raw.isEmpty()) return null
+        MmkvManager.encodeSettings(K_LAST_SWITCH, "")
+        return parseSwitchNote(raw, now)
+    }
+
+    internal fun parseSwitchNote(raw: String, now: Long): Pair<String, String>? {
+        val p = raw.split("|")
+        val at = p.getOrNull(0)?.toLongOrNull() ?: return null
+        if (p.size != 3 || now - at !in 0..SWITCH_NOTE_MS) return null
+        return p[1] to p[2]
     }
 
     private fun tcpConnectMs(p: ProfileItem): Long = runCatching {
@@ -273,10 +299,12 @@ object PamirWatch {
         MmkvManager.setSelectServer(lte)
         markUserStop()
         MessageHelper.sendMsg2Service(ctx, AppConfig.MSG_STATE_RESTART, "")
+        rememberSwitch(title(curP.remarks), "LTE Обход")
         if (alertsOn()) {
             notify(
-                ctx, "Включили LTE Обход",
-                "Обычные серверы не отвечают в вашей сети — переключились на обход «белых списков»",
+                ctx, "🔄 Включили LTE Обход",
+                "Обычные серверы не отвечают в вашей сети (похоже на «белые списки»), и Mognu сам переключил вас на обход. " +
+                    "Короткая пауза — это переключение, а не сбой: ничего делать не нужно.",
                 EXTRA_SERVERS, null
             )
         }

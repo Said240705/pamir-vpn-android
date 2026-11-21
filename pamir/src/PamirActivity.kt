@@ -473,6 +473,12 @@ open class PamirActivity : AppCompatActivity() {
         reloadServers()
         MessageHelper.sendMsg2Service(this, AppConfig.MSG_REGISTER_CLIENT, "")
         PamirWatch.cancelAlert(this)
+        PamirWatch.takeSwitchNote()?.let { (from, to) ->
+            lifecycleScope.launch {
+                delay(800)
+                toast("🔄 Пока вас не было, $from перестал отвечать — Mognu сам переключил на $to. Это не сбой", true)
+            }
+        }
         if (tab == Tab.APPS) loadApps()
         if (payState == "waiting") lifecycleScope.launch { checkPayment() }
         lifecycleScope.launch { delay(1200); precheck() }

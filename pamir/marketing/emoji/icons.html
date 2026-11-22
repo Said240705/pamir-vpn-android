@@ -16,7 +16,7 @@ function digit(n,fill,t){
   return `<g transform="translate(60 ${64-8*hop}) scale(${1+.06*sq} ${1-.08*sq}) translate(-60 -64)">`+
     `<text x="60" y="98" text-anchor="middle" font-family="Unb" font-weight="900" font-size="96" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round">${n}</text>`+
     `<text x="60" y="98" text-anchor="middle" font-family="Unb" font-weight="900" font-size="96" fill="${fill}" stroke="${INK}" stroke-width="6" stroke-linejoin="round" paint-order="stroke">${n}</text></g>`+
-    crownMini(88,22-10*hop,.8,14+8*hop);
+    crownMini(88,27-8*hop,.8,14+8*hop);
 }
 const E={
   n1:t=>digit(1,LIME,t), n2:t=>digit(2,GOLD,t), n3:t=>digit(3,LILAC,t), n4:t=>digit(4,MINT,t), n5:t=>digit(5,PINK,t),

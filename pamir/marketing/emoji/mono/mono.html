@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:transparent}</style></head><body>
+<svg id="s" width="100" height="100" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+// Одноцветные (адаптивные) эмодзи: белые силуэты, Telegram перекрашивает их в цвет текста или обложки.
+const W="#FFFFFF";
+const E={
+ crown:`<path d="M18 92 L10 32 L40 58 L60 18 L80 58 L110 32 L102 92 Z" fill="${W}"/><rect x="18" y="96" width="84" height="12" rx="5" fill="${W}"/>`,
+ mognu:`<mask id="m"><rect width="120" height="120" fill="#fff"/><path d="M32 66 h24 l4 7 l4 -7 h24 l-3 9 l-5 11 q-3 4 -8 4 h-6 q-5 0 -6 -5 l-2 -6 h-4 l-2 6 q-1 5 -6 5 h-6 q-5 0 -8 -4 l-5 -11 Z" fill="#000"/><path d="M48 98 q12 8 24 -4" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round"/></mask>`+
+   `<g mask="url(#m)"><rect x="18" y="34" width="84" height="80" rx="24" fill="${W}"/><path d="M40 38 L36 12 L50 24 L60 4 L70 24 L84 12 L80 38 Z" fill="${W}"/></g>`,
+ bolt:`<path d="M68 6 L26 66 H56 L46 114 L94 46 H62 Z" fill="${W}"/>`,
+ spark:`<path d="M60 8 C64 40 80 56 112 60 C80 64 64 80 60 112 C56 80 40 64 8 60 C40 56 56 40 60 8 Z" fill="${W}"/>`,
+ shield:`<mask id="sh"><rect width="120" height="120" fill="#fff"/><path d="M40 60 L54 74 L80 46" fill="none" stroke="#000" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/></mask><path mask="url(#sh)" d="M60 8 L102 22 V58 C102 86 84 104 60 112 C36 104 18 86 18 58 V22 Z" fill="${W}"/>`,
+ heart:`<path d="M60 104 C18 76 8 52 20 34 C32 16 54 20 60 38 C66 20 88 16 100 34 C112 52 102 76 60 104 Z" fill="${W}"/>`,
+ globe:`<mask id="g"><rect width="120" height="120" fill="#fff"/><g fill="none" stroke="#000" stroke-width="6"><ellipse cx="60" cy="60" rx="20" ry="48"/><path d="M12 60 H108 M18 38 H102 M18 82 H102"/></g></mask><circle mask="url(#g)" cx="60" cy="60" r="50" fill="${W}"/>`,
+ key:`<mask id="k"><rect width="120" height="120" fill="#fff"/><circle cx="36" cy="60" r="10" fill="#000"/></mask><path mask="url(#k)" d="M36 34 a26 26 0 1 1 0 52 a26 26 0 0 1 -24 -16 v0 a26 26 0 0 1 24 -36 Z M58 52 h52 v16 h-10 v12 h-14 v-12 h-28 Z" fill="${W}"/>`,
+};
+window.NAMES=Object.keys(E);window.render=n=>{document.getElementById('s').innerHTML=E[n]};
+</script></body></html>

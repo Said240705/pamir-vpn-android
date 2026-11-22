@@ -48,6 +48,73 @@ const E={
     return `<g transform="rotate(${a} 60 60)">${one(LIME)}<g transform="rotate(180 60 60)">${one(LILAC)}</g></g>`;},
   heart:t=>{const b=bump(t%1,.0,.35)*.12;
     return `<g transform="translate(60 62) scale(${1+b}) translate(-60 -62)">${st("M60 100 C20 74 12 52 22 36 C32 20 52 22 60 38 C68 22 88 20 98 36 C108 52 100 74 60 100 Z",LIME)}${shine(30,46,10)}</g>`;},
+  gift:t=>{const j=bump(t,.15,.5), lid=-10*bump(t,.2,.6);
+    return `<g transform="translate(0 ${-6*j})">${st("M22 54 h76 v48 a8 8 0 0 1 -8 8 h-60 a8 8 0 0 1 -8 -8 Z",LILAC)}<rect x="52" y="54" width="16" height="56" fill="${LIME}" stroke="${INK}" stroke-width="5"/>`+
+      `<g transform="translate(0 ${lid}) rotate(${lid*.6} 60 44)">${st("M16 36 h88 v18 h-88 Z",LILAC)}<rect x="52" y="36" width="16" height="18" fill="${LIME}" stroke="${INK}" stroke-width="5"/>`+
+      `<path d="M60 36 C44 14 26 22 36 34 Z M60 36 C76 14 94 22 84 34 Z" fill="${LIME}" stroke="${INK}" stroke-width="5" stroke-linejoin="round"/></g></g>`;},
+  clock:t=>{const a=360*t/2, b=360*t*6;
+    return `${st("M60 14 a46 46 0 1 1 -0.1 0 Z",GOLD)}<circle cx="60" cy="60" r="34" fill="#fff" stroke="${INK}" stroke-width="4"/>`+
+      `<path d="M60 60 V36" stroke="${INK}" stroke-width="7" stroke-linecap="round" transform="rotate(${a} 60 60)"/><path d="M60 60 V30" stroke="${LIME}" stroke-width="4" stroke-linecap="round" transform="rotate(${b} 60 60)"/>`+
+      `<path d="M60 60 V31" stroke="${INK}" stroke-width="1.5" transform="rotate(${b} 60 60)"/><circle cx="60" cy="60" r="5" fill="${INK}"/>`;},
+  key:t=>{const r=-20+14*Math.sin(t*Math.PI);
+    return `<g transform="rotate(${r} 60 60)">${st("M40 30 a22 22 0 1 1 -0.1 0 Z M58 60 h50 v12 h-10 v10 h-12 v-10 h-28 Z",GOLD)}<circle cx="40" cy="52" r="8" fill="${INK}"/>${shine(26,46,8)}</g>`;},
+  shield:t=>{const p=bump(t,.2,.6);
+    return `<g transform="translate(60 62) scale(${1+.06*p}) translate(-60 -62)">${st("M60 10 L100 24 V58 C100 84 82 102 60 110 C38 102 20 84 20 58 V24 Z",LIME)}${shine(32,40,10)}`+
+      `<path d="M42 60 L56 74 L80 46" fill="none" stroke="${INK}" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="60" stroke-dashoffset="${t<1.75?60*(1-k(t,.2,.6)):60*k(t,1.75,2)}"/></g>`;},
+  globe:t=>{const o=(t/2)*40;
+    return `${st("M60 14 a46 46 0 1 1 -0.1 0 Z",MINT)}<clipPath id="gl"><circle cx="60" cy="60" r="44"/></clipPath><g clip-path="url(#gl)">`+
+      [0,1,2].map(i=>`<ellipse cx="${20+((o+i*40)%120)}" cy="60" rx="14" ry="46" fill="none" stroke="${INK}" stroke-width="4"/>`).join('')+
+      `<path d="M14 46 H106 M14 74 H106" stroke="${INK}" stroke-width="4"/><path d="M${30+o*.5} 30 q14 -6 22 6 q-4 14 -18 10 Z" fill="${LIME}" stroke="${INK}" stroke-width="3"/></g>`+
+      `<circle cx="60" cy="60" r="44" fill="none" stroke="${INK}" stroke-width="6"/>`;},
+  phone:t=>{const w=bump(t%1,0,.4);
+    return `<g transform="rotate(${w*8*Math.sin(t*40)} 60 60)">${st("M38 10 h44 a10 10 0 0 1 10 10 v80 a10 10 0 0 1 -10 10 h-44 a10 10 0 0 1 -10 -10 v-80 a10 10 0 0 1 10 -10 Z",LILAC)}`+
+      `<rect x="36" y="24" width="48" height="66" rx="6" fill="${LIME}" stroke="${INK}" stroke-width="4"/><path d="M54 100 h12" stroke="${INK}" stroke-width="5" stroke-linecap="round"/></g>`+
+      `<path d="M100 40 q8 10 0 20 M108 34 q14 16 0 32" fill="none" stroke="${LIME}" stroke-width="5" stroke-linecap="round" opacity="${w}"/>`;},
+  home:t=>{const sm=(t/2)%1;
+    return `<path d="M82 ${30-20*sm} q6 -6 0 -12" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity="${1-sm}"/>${st("M74 22 h12 v22 h-12 Z",LILAC)}`+
+      `${st("M60 16 L104 56 H94 V104 H26 V56 H16 Z",GOLD)}${st("M50 74 h20 v30 h-20 Z",LIME)}<rect x="36" y="64" width="12" height="12" rx="2" fill="${MINT}" stroke="${INK}" stroke-width="3"/>`;},
+  chat:t=>{const d=i=>.4+.6*bump(t%1,i*.2,i*.2+.4);
+    return `${st("M22 20 h76 a10 10 0 0 1 10 10 v44 a10 10 0 0 1 -10 10 h-46 l-22 18 v-18 h-8 a10 10 0 0 1 -10 -10 v-44 a10 10 0 0 1 10 -10 Z",LILAC)}`+
+      [0,1,2].map(i=>`<circle cx="${42+i*18}" cy="${52-6*bump(t%1,i*.2,i*.2+.4)}" r="7" fill="${INK}" opacity="${d(i)}"/>`).join('');},
+  cross:t=>{const p=bump(t,.15,.45), sh=Math.sin(t*Math.PI*6)*(t<.9?4:0);
+    return `<g transform="translate(${sh} 0) translate(60 60) scale(${1+.08*p}) translate(-60 -60)">${st("M60 14 a46 46 0 1 1 -0.1 0 Z",PINK)}<path d="M44 44 L76 76 M76 44 L44 76" stroke="${INK}" stroke-width="12" stroke-linecap="round"/></g>`;},
+  warn:t=>{const p=bump(t%1,0,.5);
+    return `<g transform="translate(60 64) scale(${1+.06*p}) translate(-60 -64)">${st("M60 14 L108 100 H12 Z",GOLD)}<path d="M60 46 V72" stroke="${INK}" stroke-width="11" stroke-linecap="round"/><circle cx="60" cy="88" r="6.5" fill="${INK}"/></g>`;},
+  star:t=>{const r=20*Math.sin(t*Math.PI), sp=bump(t,.4,1.0);
+    return `<g transform="rotate(${r} 60 62)">${st("M60 12 L73 44 L108 46 L81 68 L90 102 L60 84 L30 102 L39 68 L12 46 L47 44 Z",GOLD)}${shine(46,52,10)}</g>`+
+      `<path transform="translate(102 22) scale(${.3+.7*sp})" d="M0 -10 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3z" fill="${LIME}"/><path transform="translate(18 96) scale(${.3+.7*(1-sp)})" d="M0 -10 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3z" fill="#fff"/>`;},
+  fes:t=>{const wv=x=>6*Math.sin(t*Math.PI*2+x/14);
+    let d=""; const pts=[]; for(let x=0;x<=72;x+=6)pts.push([30+x,wv(x)]);
+    const top=pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+y)).join(" "), bot=pts.slice().reverse().map(([x,y])=>"L"+x+" "+(84+y)).join(" ");
+    const outline=top+" "+bot+" Z";
+    const band=(a,b,c)=>`<path d="${pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+a+y)).join(" ")} ${pts.slice().reverse().map(([x,y])=>"L"+x+" "+(24+b+y)).join(" ")} Z" fill="${c}"/>`;
+    return `<path d="M24 16 V110" stroke="#fff" stroke-width="16" stroke-linecap="round"/><path d="${outline}" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"/>`+
+      `<clipPath id="fcfes"><path d="${outline}"/></clipPath><g clip-path="url(#fcfes)">${band(0,15,'#E8343A')}${band(15,45,'#FFC93C')}${band(45,60,'#E8343A')}</g><path d="${outline}" fill="none" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/>`+
+      `<path d="M24 16 V110" stroke="${INK}" stroke-width="7" stroke-linecap="round"/><circle cx="24" cy="14" r="6" fill="${GOLD}" stroke="${INK}" stroke-width="3"/>`;},
+  fpl:t=>{const wv=x=>6*Math.sin(t*Math.PI*2+x/14);
+    let d=""; const pts=[]; for(let x=0;x<=72;x+=6)pts.push([30+x,wv(x)]);
+    const top=pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+y)).join(" "), bot=pts.slice().reverse().map(([x,y])=>"L"+x+" "+(84+y)).join(" ");
+    const outline=top+" "+bot+" Z";
+    const band=(a,b,c)=>`<path d="${pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+a+y)).join(" ")} ${pts.slice().reverse().map(([x,y])=>"L"+x+" "+(24+b+y)).join(" ")} Z" fill="${c}"/>`;
+    return `<path d="M24 16 V110" stroke="#fff" stroke-width="16" stroke-linecap="round"/><path d="${outline}" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"/>`+
+      `<clipPath id="fcfpl"><path d="${outline}"/></clipPath><g clip-path="url(#fcfpl)">${band(0,30,'#FFFFFF')}${band(30,60,'#E8343A')}</g><path d="${outline}" fill="none" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/>`+
+      `<path d="M24 16 V110" stroke="${INK}" stroke-width="7" stroke-linecap="round"/><circle cx="24" cy="14" r="6" fill="${GOLD}" stroke="${INK}" stroke-width="3"/>`;},
+  fde:t=>{const wv=x=>6*Math.sin(t*Math.PI*2+x/14);
+    let d=""; const pts=[]; for(let x=0;x<=72;x+=6)pts.push([30+x,wv(x)]);
+    const top=pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+y)).join(" "), bot=pts.slice().reverse().map(([x,y])=>"L"+x+" "+(84+y)).join(" ");
+    const outline=top+" "+bot+" Z";
+    const band=(a,b,c)=>`<path d="${pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+a+y)).join(" ")} ${pts.slice().reverse().map(([x,y])=>"L"+x+" "+(24+b+y)).join(" ")} Z" fill="${c}"/>`;
+    return `<path d="M24 16 V110" stroke="#fff" stroke-width="16" stroke-linecap="round"/><path d="${outline}" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"/>`+
+      `<clipPath id="fcfde"><path d="${outline}"/></clipPath><g clip-path="url(#fcfde)">${band(0,20,'#14102A')}${band(20,40,'#E8343A')}${band(40,60,'#FFC93C')}</g><path d="${outline}" fill="none" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/>`+
+      `<path d="M24 16 V110" stroke="${INK}" stroke-width="7" stroke-linecap="round"/><circle cx="24" cy="14" r="6" fill="${GOLD}" stroke="${INK}" stroke-width="3"/>`;},
+  ffi:t=>{const wv=x=>6*Math.sin(t*Math.PI*2+x/14);
+    let d=""; const pts=[]; for(let x=0;x<=72;x+=6)pts.push([30+x,wv(x)]);
+    const top=pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+y)).join(" "), bot=pts.slice().reverse().map(([x,y])=>"L"+x+" "+(84+y)).join(" ");
+    const outline=top+" "+bot+" Z";
+    const band=(a,b,c)=>`<path d="${pts.map(([x,y],i)=>(i?"L":"M")+x+" "+(24+a+y)).join(" ")} ${pts.slice().reverse().map(([x,y])=>"L"+x+" "+(24+b+y)).join(" ")} Z" fill="${c}"/>`;
+    return `<path d="M24 16 V110" stroke="#fff" stroke-width="16" stroke-linecap="round"/><path d="${outline}" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"/>`+
+      `<clipPath id="fcffi"><path d="${outline}"/></clipPath><g clip-path="url(#fcffi)">${band(0,60,'#FFFFFF')}${band(22,38,'#2F5FD0')}<rect x='44' y='0' width='14' height='120' fill='#2F5FD0'/></g><path d="${outline}" fill="none" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/>`+
+      `<path d="M24 16 V110" stroke="${INK}" stroke-width="7" stroke-linecap="round"/><circle cx="24" cy="14" r="6" fill="${GOLD}" stroke="${INK}" stroke-width="3"/>`;},
 };
 window.render=(n,t)=>{S.innerHTML=E[n](t%2);};
 window.NAMES=Object.keys(E);

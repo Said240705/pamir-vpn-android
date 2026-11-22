@@ -119,6 +119,33 @@ const E={
     return `<g transform="translate(4 12) scale(.86)"><g transform="rotate(-48 60 70)">${st("M54 30 h12 v76 a6 6 0 0 1 -12 0 Z",LILAC)}${st("M60 8 a22 22 0 0 1 22 22 l-12 10 h-20 l-12 -10 a22 22 0 0 1 22 -22 Z M52 14 h16 v14 h-16 Z",MINT)}</g>`+
       `<g transform="rotate(${48+h} 60 70)">${st("M55 40 h10 v66 a5 5 0 0 1 -10 0 Z",GOLD)}${st("M34 18 h52 a6 6 0 0 1 6 6 v12 a6 6 0 0 1 -6 6 h-52 a6 6 0 0 1 -6 -6 v-12 a6 6 0 0 1 6 -6 Z",LIME)}${shine(36,30,8)}</g></g>`+
       `<g opacity="${sp}"><path d="M16 30 l-8 -4 M20 18 l-4 -8 M30 12 l0 -8" stroke="${GOLD}" stroke-width="5" stroke-linecap="round"/></g>`;},
+  like:t=>{const p=bump(t,.1,.45), r=-14*p;
+    const H="M30 56 h14 l14 -30 a9 9 0 0 1 17 5 l-4 21 h22 a9 9 0 0 1 9 11 l-7 30 a9 9 0 0 1 -9 7 h-42 v-44 Z";
+    return `<g transform="translate(8 4) scale(.86)"><g transform="translate(0 ${-6*p}) rotate(${r} 50 90) translate(60 70) scale(${1+.08*p}) translate(-60 -70)">${st(H,GOLD)}${st("M18 56 h16 v50 h-16 Z",LIME)}${shine(52,48,8)}</g></g>`+
+      `<g opacity="${p}"><path d="M100 20 l6 -6 M108 34 h8 M92 12 v-8" stroke="${LIME}" stroke-width="5" stroke-linecap="round"/></g>`;},
+  dislike:t=>{const p=bump(t,.1,.45);
+    const H="M30 56 h14 l14 -30 a9 9 0 0 1 17 5 l-4 21 h22 a9 9 0 0 1 9 11 l-7 30 a9 9 0 0 1 -9 7 h-42 v-44 Z";
+    return `<g transform="translate(8 6) scale(.86)"><g transform="rotate(180 60 62) translate(0 ${-6*p}) rotate(${-10*p} 50 90)">${st(H,LILAC)}${st("M18 56 h16 v50 h-16 Z",PINK)}</g></g>`;},
+  fire:t=>{const f=Math.sin(t*Math.PI*3), g=Math.sin(t*Math.PI*5+1);
+    const O=`M60 ${10+3*f} C${78+4*g} 34 98 50 94 76 C90 100 74 112 60 112 C42 112 24 100 24 78 C24 60 34 50 40 40 C42 54 48 58 52 58 C48 40 52 24 60 ${10+3*f} Z`;
+    const I=`M60 ${58+3*g} C70 70 78 78 76 92 C74 104 66 108 60 108 C52 108 44 102 44 92 C44 82 52 78 54 70 C56 76 58 78 60 ${58+3*g} Z`;
+    return `<g transform="translate(60 112) scale(${1+.03*f} ${1+.05*g}) translate(-60 -112)">${st(O,"#FF7A3C")}<path d="${I}" fill="${GOLD}" stroke="${INK}" stroke-width="4" stroke-linejoin="round"/>${shine(36,74,8)}</g>`;},
+  clap:t=>{const c=Math.abs(Math.sin(t*Math.PI*3)), a=14*c;
+    const P="M34 30 a8 8 0 0 1 16 0 v34 l4 -20 a7 7 0 0 1 14 3 l-4 30 c-2 18 -14 30 -30 30 c-14 0 -22 -10 -22 -24 v-24 a7 7 0 0 1 14 0 Z";
+    return `<g transform="translate(12 0) scale(.8)"><g transform="rotate(${-a} 40 100)">${st(P,GOLD)}</g><g transform="translate(120 0) scale(-1 1) rotate(${-a} 40 100)">${st(P,LIME)}</g></g>`+
+      `<g opacity="${1-c}"><path d="M60 14 v-8 M44 18 l-5 -6 M76 18 l5 -6" stroke="#fff" stroke-width="5" stroke-linecap="round"/></g>`;},
+  party:t=>{const p=k(t,.1,.7), fade=1-k(t,1.2,1.9);
+    const bits=[[LIME,-10,-40],[PINK,14,-50],[MINT,36,-30],[GOLD,6,-22],[LILAC,30,-48],[LIME,40,-6]];
+    return `${st("M18 106 L44 34 L90 80 Z",LILAC)}<path d="M30 74 L58 96 M38 54 L74 86" stroke="${GOLD}" stroke-width="6"/>`+
+      bits.map(([c,dx,dy],i)=>`<rect x="${62+dx*p}" y="${60+dy*p+30*p*p}" width="10" height="6" rx="2" fill="${c}" opacity="${fade*k(t,.05,.15)}" transform="rotate(${200*p+i*40} ${67+dx*p} ${63+dy*p+30*p*p})"/>`).join('');},
+  hundred:t=>{const p=bump(t,.1,.5);
+    return `<g transform="translate(60 70) rotate(${-8+4*Math.sin(t*Math.PI)}) scale(${1+.08*p}) translate(-60 -70)">`+
+      `<text x="60" y="80" text-anchor="middle" font-family="Unb" font-weight="900" font-size="42" fill="#fff" stroke="#fff" stroke-width="14" stroke-linejoin="round">100</text>`+
+      `<text x="60" y="80" text-anchor="middle" font-family="Unb" font-weight="900" font-size="42" fill="${PINK}" stroke="${INK}" stroke-width="5" stroke-linejoin="round" paint-order="stroke">100</text>`+
+      `<path d="M18 92 h84 M26 102 h68" stroke="${PINK}" stroke-width="6" stroke-linecap="round"/><path d="M18 92 h84 M26 102 h68" stroke="${INK}" stroke-width="1.5" stroke-linecap="round" opacity=".5"/></g>`;},
+  eyes:t=>{const lx=8*Math.sin(t*Math.PI*2), bl=bump(t,1.1,1.25);
+    const e=(cx)=>`${st(`M${cx} 22 a22 34 0 1 1 -0.1 0 Z`,"#FFFFFF")}<ellipse cx="${cx+lx}" cy="60" rx="10" ry="${13*(1-bl)+1}" fill="${INK}"/><circle cx="${cx+lx+4}" cy="${54}" r="3.5" fill="#fff" opacity="${1-bl}"/>`;
+    return e(38)+e(82);},
 };
 window.render=(n,t)=>{S.innerHTML=E[n](t%2);};
 window.NAMES=Object.keys(E);

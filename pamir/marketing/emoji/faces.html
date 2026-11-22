@@ -62,6 +62,16 @@ const E={
     return `<g transform="translate(${sh} ${-Math.abs(sh)}) rotate(${sh} 120 140)">${body(LIME,0)}${crown(-Math.abs(sh)*2,sh*2)}`+
       `<path d="M72 126 q16 -18 32 0 M136 126 q16 -18 32 0" fill="none" stroke="${INK}" stroke-width="9" stroke-linecap="round"/>`+
       `<path d="M90 158 h60 q0 ${34*m} -30 ${34*m} q-30 0 -30 ${-34*m} Z" fill="${INK}"/><path d="M104 ${170+18*m} q16 ${-10} 32 0" fill="#FF6B9A" opacity=".9"/></g>`;},
+  // грустит: слеза катится
+  sad(t){const d=k(t,.2,1.4), b=bump(t,0,2)*.03;
+    return `<g transform="translate(120 234) scale(${1+b} ${1-b}) translate(-120 -234)">${body(LIME,0)}${crown(10,-18)}`+
+      `<path d="M70 112 Q90 110 106 98 M170 112 Q150 110 134 98" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`+
+      `${eye(88,134,.8)}${eye(152,134,.8)}<path d="M100 190 q20 -16 40 0" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`+
+      `<path d="M${84} ${150+60*d} q-8 12 0 18 q8 -6 0 -18 Z" fill="#7FE3FF" stroke="${INK}" stroke-width="3" opacity="${1-k(t,1.2,1.5)}"/></g>`;},
+  // думает: рука у подбородка, вопрос
+  think(t){const q=bump(t,.2,1.0), lk=6*Math.sin(t*Math.PI);
+    return `${body(LIME,0)}${crown(0,6)}${eye(88+lk,122,1)}${eye(152+lk,122,.6)}<path d="M102 178 h40" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`+
+      `<text x="${206}" y="${30-10*q}" font-family="Unb" font-weight="900" font-size="70" fill="${LILAC}" stroke="#fff" stroke-width="10" paint-order="stroke" opacity="${.3+.7*q}">?</text>`;},
 };
 window.render=function(name,t,arg){S.innerHTML=E[name](t%D,arg);};
 </script></body></html>

@@ -115,6 +115,10 @@ const E={
     return `<path d="M24 16 V110" stroke="#fff" stroke-width="16" stroke-linecap="round"/><path d="${outline}" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"/>`+
       `<clipPath id="fcffi"><path d="${outline}"/></clipPath><g clip-path="url(#fcffi)">${band(0,60,'#FFFFFF')}${band(22,38,'#2F5FD0')}<rect x='44' y='0' width='14' height='120' fill='#2F5FD0'/></g><path d="${outline}" fill="none" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/>`+
       `<path d="M24 16 V110" stroke="${INK}" stroke-width="7" stroke-linecap="round"/><circle cx="24" cy="14" r="6" fill="${GOLD}" stroke="${INK}" stroke-width="3"/>`;},
+  tools:t=>{const h=-28*bump(t%1,0,.35)+6*bump(t%1,.35,.45), sp=bump(t%1,.33,.6);
+    return `<g transform="translate(4 12) scale(.86)"><g transform="rotate(-48 60 70)">${st("M54 30 h12 v76 a6 6 0 0 1 -12 0 Z",LILAC)}${st("M60 8 a22 22 0 0 1 22 22 l-12 10 h-20 l-12 -10 a22 22 0 0 1 22 -22 Z M52 14 h16 v14 h-16 Z",MINT)}</g>`+
+      `<g transform="rotate(${48+h} 60 70)">${st("M55 40 h10 v66 a5 5 0 0 1 -10 0 Z",GOLD)}${st("M34 18 h52 a6 6 0 0 1 6 6 v12 a6 6 0 0 1 -6 6 h-52 a6 6 0 0 1 -6 -6 v-12 a6 6 0 0 1 6 -6 Z",LIME)}${shine(36,30,8)}</g></g>`+
+      `<g opacity="${sp}"><path d="M16 30 l-8 -4 M20 18 l-4 -8 M30 12 l0 -8" stroke="${GOLD}" stroke-width="5" stroke-linecap="round"/></g>`;},
 };
 window.render=(n,t)=>{S.innerHTML=E[n](t%2);};
 window.NAMES=Object.keys(E);

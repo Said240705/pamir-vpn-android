@@ -1,0 +1,46 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:Unb;font-weight:700 900;src:url(fonts/unbounded-latin.woff2)}
+html,body{margin:0;width:100px;height:100px;overflow:hidden;background:transparent}
+</style></head><body><svg id="s" width="100" height="100" viewBox="-32 -64 304 304" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+// Набор эмодзи «Mognu»: каждый значок — это сам Могну (лаймовая плитка с белой обводкой и короной) или его вещь.
+// Координаты как у on.svg (плитка 18..222), кадр 2 с, петля без рывка.
+const D=2, INK="#14102A", LIME="#C8FF2E", GOLD="#FFC93C", LILAC="#B79CFF";
+const cl=(x,a,b)=>Math.max(a,Math.min(b,x)), k=(t,a,b)=>cl((t-a)/(b-a),0,1);
+const bump=(t,a,b)=>Math.sin(Math.PI*k(t,a,b));            // 0→1→0 на [a,b]
+const S=document.getElementById('s');
+
+function body(fill=LIME,sq=0){ // плитка; sq — сплющивание (0..1)
+  const h=204*(1-.08*sq), w=204*(1+.06*sq), x=120-w/2, y=234-h;
+  return `<rect x="${x}" y="${y+10}" width="${w}" height="${h}" rx="58" fill="#080418" fill-opacity=".45"/>`+
+         `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="58" fill="#fff"/>`+
+         `<rect x="${x+10}" y="${y+10}" width="${w-20}" height="${h-20}" rx="50" fill="${fill}"/>`;
+}
+function crown(dy=0,rot=0,top=30){
+  return `<g transform="translate(0 ${dy+top-36}) rotate(${rot} 120 30)"><polygon points="84,44 80,2 104,22 120,-10 136,22 160,2 156,44" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"/>`+
+         `<polygon points="84,44 80,2 104,22 120,-10 136,22 160,2 156,44" fill="${GOLD}"/></g>`;
+}
+const eye=(x,y,open=1)=>open>.15?`<ellipse cx="${x}" cy="${y}" rx="13" ry="${17*open}" fill="${INK}"/><circle cx="${x+4}" cy="${y-6*open}" r="4" fill="#fff"/>`
+  :`<path d="M${x-14} ${y} q14 10 28 0" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`;
+const smile=(w=1)=>`<path d="M${120-28*w} 168 q${28*w} ${24*w} ${56*w} 0" fill="none" stroke="${INK}" stroke-width="9" stroke-linecap="round"/>`;
+
+const E={
+  // подмигивает
+  wink(t){const hop=bump(t,.15,.55), w=bump(t,.9,1.3);
+    return `<g transform="translate(0 ${-10*hop})">${body(LIME,0)}${crown(-14*hop,-6*hop)}${eye(88,120,1)}${eye(152,120,1-w)}${smile(1+.15*w)}</g>`;},
+  // цифра на плитке
+  num(t,n){const hop=bump(t,.1,.5), sq=bump(t,.5,.75);
+    return `<g transform="translate(0 ${-12*hop})">${body(LIME,sq)}${crown(-16*hop+10*sq,0,30+18*sq)}<text x="120" y="${190}" text-anchor="middle" font-family="Unb" font-weight="900" font-size="150" fill="${INK}">${n}</text></g>`;},
+  // галочка
+  check(t){const d=k(t,.15,.6), hop=bump(t,.6,1.0);
+    const L=150, off=t<1.75?L*(1-d):L*k(t,1.75,2.0);
+    return `<g transform="translate(0 ${-8*hop})">${body(LIME,0)}${crown(-14*hop,8*hop)}<path d="M66 132 L104 168 L176 92" fill="none" stroke="${INK}" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${L}" stroke-dashoffset="${off}"/></g>`;},
+  // замок: дужка закрывается, Могну довольно жмурится
+  lock(t){const c=k(t,.2,.55)-k(t,1.5,1.85), happy=k(t,.55,.7)-k(t,1.4,1.5);
+    const sy=-40*(1-c);
+    return `<path d="M68 ${70+sy} V${30+sy} a52 52 0 0 1 104 0 V${70+sy}" fill="none" stroke="#fff" stroke-width="40" stroke-linecap="round"/>`+
+      `<path d="M68 ${70+sy} V${30+sy} a52 52 0 0 1 104 0 V${70+sy}" fill="none" stroke="${INK}" stroke-width="22" stroke-linecap="round"/>`+
+      `${body(GOLD,bump(t,.5,.7)*.6)}${eye(88,130,1-happy)}${eye(152,130,1-happy)}<path d="M120 168 v22" stroke="${INK}" stroke-width="12" stroke-linecap="round"/><circle cx="120" cy="164" r="12" fill="${INK}"/>`;},
+};
+window.render=function(name,t,arg){S.innerHTML=E[name](t%D,arg);};
+</script></body></html>

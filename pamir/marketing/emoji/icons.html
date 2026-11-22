@@ -1,0 +1,54 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:Unb;font-weight:700 900;src:url(fonts/unbounded-latin.woff2)}
+html,body{margin:0;background:transparent}
+</style></head><body><svg id="s" width="100" height="100" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+// Набор эмодзи Mognu без самого Могну: фирменные цвета, тёмная обводка, белая «наклейка» по краю, блик.
+const INK="#14102A", LIME="#C8FF2E", GOLD="#FFC93C", LILAC="#B79CFF", MINT="#7FE3FF", PINK="#FF6B9A";
+const cl=(x,a,b)=>Math.max(a,Math.min(b,x)), k=(t,a,b)=>cl((t-a)/(b-a),0,1), bump=(t,a,b)=>Math.sin(Math.PI*k(t,a,b));
+const S=document.getElementById('s');
+// наклейка: белый край 9, тёмная обводка 5, заливка
+const st=(d,fill,extra='')=>`<path d="${d}" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"${extra}/><path d="${d}" fill="${fill}" stroke="${INK}" stroke-width="6" stroke-linejoin="round"${extra}/>`;
+const shine=(x,y,w=10)=>`<path d="M${x} ${y} q${w*.4} -${w*.6} ${w} -${w*.7}" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".85"/>`;
+const crownMini=(x,y,s=1,rot=0)=>`<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s})"><polygon points="-14,8 -16,-8 -7,-1 0,-13 7,-1 16,-8 14,8" fill="${GOLD}" stroke="${INK}" stroke-width="4" stroke-linejoin="round"/></g>`;
+function digit(n,fill,t){
+  const hop=bump(t,.1,.5), sq=bump(t,.5,.75);
+  return `<g transform="translate(60 ${64-8*hop}) scale(${1+.06*sq} ${1-.08*sq}) translate(-60 -64)">`+
+    `<text x="60" y="98" text-anchor="middle" font-family="Unb" font-weight="900" font-size="96" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round">${n}</text>`+
+    `<text x="60" y="98" text-anchor="middle" font-family="Unb" font-weight="900" font-size="96" fill="${fill}" stroke="${INK}" stroke-width="6" stroke-linejoin="round" paint-order="stroke">${n}</text></g>`+
+    crownMini(88,22-10*hop,.8,14+8*hop);
+}
+const E={
+  n1:t=>digit(1,LIME,t), n2:t=>digit(2,GOLD,t), n3:t=>digit(3,LILAC,t), n4:t=>digit(4,MINT,t), n5:t=>digit(5,PINK,t),
+  check:t=>{const d=k(t,.15,.55), L=90, off=t<1.75?L*(1-d):L*k(t,1.75,2), p=bump(t,.55,.85);
+    return `<g transform="translate(60 60) scale(${1+.07*p}) translate(-60 -60)">${st("M60 14 a46 46 0 1 1 -0.1 0 Z",LIME)}${shine(30,40,14)}`+
+      `<path d="M38 62 L54 78 L84 44" fill="none" stroke="${INK}" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${L}" stroke-dashoffset="${off}"/></g>`;},
+  lock:t=>{const c=k(t,.2,.5)-k(t,1.5,1.8), sy=-14*(1-c), p=bump(t,.48,.7);
+    return `<path d="M40 ${54+sy} V${40+sy} a20 20 0 0 1 40 0 V${54+sy}" fill="none" stroke="#fff" stroke-width="22" stroke-linecap="round"/>`+
+      `<path d="M40 ${54+sy} V${40+sy} a20 20 0 0 1 40 0 V${54+sy}" fill="none" stroke="${INK}" stroke-width="10" stroke-linecap="round"/>`+
+      `<g transform="translate(60 78) scale(${1+.06*p} ${1-.06*p}) translate(-60 -78)">${st("M28 52 h64 a10 10 0 0 1 10 10 v34 a10 10 0 0 1 -10 10 h-64 a10 10 0 0 1 -10 -10 v-34 a10 10 0 0 1 10 -10 Z",GOLD)}${shine(28,70,10)}`+
+      `<circle cx="60" cy="74" r="7" fill="${INK}"/><path d="M60 78 v12" stroke="${INK}" stroke-width="7" stroke-linecap="round"/></g>`;},
+  card:t=>{const r=Math.sin(t*Math.PI)*8;
+    return `<g transform="rotate(${-8+r} 60 60)">${st("M20 34 h80 a10 10 0 0 1 10 10 v40 a10 10 0 0 1 -10 10 h-80 a10 10 0 0 1 -10 -10 v-40 a10 10 0 0 1 10 -10 Z",LILAC)}`+
+      `<rect x="10" y="48" width="100" height="12" fill="${INK}"/><rect x="24" y="68" width="22" height="14" rx="4" fill="${GOLD}" stroke="${INK}" stroke-width="3"/>${shine(22,44,10)}</g>`;},
+  bolt:t=>{const f=.6+.4*Math.abs(Math.sin(t*Math.PI*2));
+    return `<g transform="translate(60 60) scale(${.92+.08*f}) translate(-60 -60)">${st("M66 10 L28 66 H56 L48 110 L92 48 H62 Z",GOLD)}</g>`+
+      `<g opacity="${f}"><path d="M98 26 l6 -6 M104 40 h8 M18 84 l-6 6" stroke="${LIME}" stroke-width="6" stroke-linecap="round"/></g>`;},
+  crown:t=>{const hop=bump(t,.1,.5), sp=bump(t,.6,1.2);
+    return `<g transform="translate(0 ${-8*hop})">${st("M18 88 L12 34 L40 58 L60 20 L80 58 L108 34 L102 88 Z",GOLD)}<rect x="16" y="88" width="88" height="14" rx="5" fill="${GOLD}" stroke="${INK}" stroke-width="6"/>`+
+      `<circle cx="60" cy="72" r="7" fill="${LIME}" stroke="${INK}" stroke-width="4"/>${shine(28,74,8)}</g>`+
+      `<path transform="translate(98 16) scale(${.4+.6*sp})" d="M0 -10 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3z" fill="#fff"/>`;},
+  rocket:t=>{const y=-4*Math.sin(t*Math.PI*2), fl=.7+.3*Math.abs(Math.sin(t*Math.PI*6));
+    return `<g transform="translate(0 ${y}) rotate(35 60 60)"><path d="M52 92 q8 ${22*fl} 16 0 Z" fill="${GOLD}" stroke="${INK}" stroke-width="4" stroke-linejoin="round"/>`+
+      `${st("M60 10 q22 22 22 56 v20 h-44 v-20 q0 -34 22 -56 Z",LIME)}${st("M38 70 l-14 18 h14 Z",LILAC)}${st("M82 70 l14 18 h-14 Z",LILAC)}`+
+      `<circle cx="60" cy="50" r="10" fill="${MINT}" stroke="${INK}" stroke-width="5"/></g>`;},
+  sync:t=>{const a=180*(k(t,.1,.7)+k(t,1.1,1.7));
+    const arc=(c)=>`<path d="M30 54 A32 32 0 0 1 86 38" fill="none" stroke="${c}" stroke-width="16" stroke-linecap="round"/><path d="M78 24 L94 40 L72 46 Z" fill="${c}" stroke="${c}" stroke-width="4" stroke-linejoin="round"/>`;
+    const one=(c)=>`<g>${arc('#fff').replace(/stroke-width="16"/,'stroke-width="28"').replace(/stroke-width="4"/,'stroke-width="16"')}</g><g>${arc(INK).replace(/stroke-width="16"/,'stroke-width="22"').replace(/stroke-width="4"/,'stroke-width="10"')}</g><g>${arc(c).replace(/stroke-width="16"/,'stroke-width="11"').replace(/stroke-width="4"/,'stroke-width="1"')}</g>`;
+    return `<g transform="rotate(${a} 60 60)">${one(LIME)}<g transform="rotate(180 60 60)">${one(LILAC)}</g></g>`;},
+  heart:t=>{const b=bump(t%1,.0,.35)*.12;
+    return `<g transform="translate(60 62) scale(${1+b}) translate(-60 -62)">${st("M60 100 C20 74 12 52 22 36 C32 20 52 22 60 38 C68 22 88 20 98 36 C108 52 100 74 60 100 Z",LIME)}${shine(30,46,10)}</g>`;},
+};
+window.render=(n,t)=>{S.innerHTML=E[n](t%2);};
+window.NAMES=Object.keys(E);
+</script></body></html>

@@ -1,0 +1,120 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:Unb;font-weight:700 900;src:url(fonts/unbounded-latin.woff2)}
+@font-face{font-family:Unb;font-weight:700 900;src:url(fonts/unbounded-cyrillic.woff2);unicode-range:U+0400-045F}
+html,body{margin:0;width:512px;height:512px;overflow:hidden;background:transparent}
+</style></head><body><svg id="s" width="512" height="512" viewBox="-80 -64 400 400" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+// Набор эмодзи «Mognu»: каждый значок — это сам Могну (лаймовая плитка с белой обводкой и короной) или его вещь.
+// Координаты как у on.svg (плитка 18..222), кадр 2 с, петля без рывка.
+const D=2, INK="#14102A", LIME="#C8FF2E", GOLD="#FFC93C", LILAC="#B79CFF";
+const cl=(x,a,b)=>Math.max(a,Math.min(b,x)), k=(t,a,b)=>cl((t-a)/(b-a),0,1);
+const bump=(t,a,b)=>Math.sin(Math.PI*k(t,a,b));            // 0→1→0 на [a,b]
+const S=document.getElementById('s');
+
+function body(fill=LIME,sq=0){ // плитка; sq — сплющивание (0..1)
+  const h=204*(1-.08*sq), w=204*(1+.06*sq), x=120-w/2, y=234-h;
+  return `<rect x="${x}" y="${y+10}" width="${w}" height="${h}" rx="58" fill="#080418" fill-opacity=".45"/>`+
+         `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="58" fill="#fff"/>`+
+         `<rect x="${x+10}" y="${y+10}" width="${w-20}" height="${h-20}" rx="50" fill="${fill}"/>`;
+}
+function crown(dy=0,rot=0,top=30){
+  return `<g transform="translate(0 ${dy+top-36}) rotate(${rot} 120 30)"><polygon points="84,44 80,2 104,22 120,-10 136,22 160,2 156,44" fill="#fff" stroke="#fff" stroke-width="16" stroke-linejoin="round"/>`+
+         `<polygon points="84,44 80,2 104,22 120,-10 136,22 160,2 156,44" fill="${GOLD}"/></g>`;
+}
+const eye=(x,y,open=1)=>open>.15?`<ellipse cx="${x}" cy="${y}" rx="13" ry="${17*open}" fill="${INK}"/><circle cx="${x+4}" cy="${y-6*open}" r="4" fill="#fff"/>`
+  :`<path d="M${x-14} ${y} q14 10 28 0" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`;
+const smile=(w=1)=>`<path d="M${120-28*w} 168 q${28*w} ${24*w} ${56*w} 0" fill="none" stroke="${INK}" stroke-width="9" stroke-linecap="round"/>`;
+
+const E={
+  // подмигивает
+  wink(t){const hop=bump(t,.15,.55), w=bump(t,.9,1.3);
+    return `<g transform="translate(0 ${-10*hop})">${body(LIME,0)}${crown(-14*hop,-6*hop)}${eye(88,120,1)}${eye(152,120,1-w)}${smile(1+.15*w)}</g>`;},
+  // цифра на плитке
+  num(t,n){const hop=bump(t,.1,.5), sq=bump(t,.5,.75);
+    return `<g transform="translate(0 ${-12*hop})">${body(LIME,sq)}${crown(-16*hop+10*sq,0,30+18*sq)}<text x="120" y="${190}" text-anchor="middle" font-family="Unb" font-weight="900" font-size="150" fill="${INK}">${n}</text></g>`;},
+  // галочка
+  check(t){const d=k(t,.15,.6), hop=bump(t,.6,1.0);
+    const L=150, off=t<1.75?L*(1-d):L*k(t,1.75,2.0);
+    return `<g transform="translate(0 ${-8*hop})">${body(LIME,0)}${crown(-14*hop,8*hop)}<path d="M66 132 L104 168 L176 92" fill="none" stroke="${INK}" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="${L}" stroke-dashoffset="${off}"/></g>`;},
+  // замок: дужка закрывается, Могну довольно жмурится
+  lock(t){const c=k(t,.2,.55)-k(t,1.5,1.85), happy=k(t,.55,.7)-k(t,1.4,1.5);
+    const sy=-40*(1-c);
+    return `<path d="M68 ${70+sy} V${30+sy} a52 52 0 0 1 104 0 V${70+sy}" fill="none" stroke="#fff" stroke-width="40" stroke-linecap="round"/>`+
+      `<path d="M68 ${70+sy} V${30+sy} a52 52 0 0 1 104 0 V${70+sy}" fill="none" stroke="${INK}" stroke-width="22" stroke-linecap="round"/>`+
+      `${body(GOLD,bump(t,.5,.7)*.6)}${eye(88,130,1-happy)}${eye(152,130,1-happy)}<path d="M120 168 v22" stroke="${INK}" stroke-width="12" stroke-linecap="round"/><circle cx="120" cy="164" r="12" fill="${INK}"/>`;},
+  // в очках: корона подпрыгивает, блик бежит по очкам
+  cool(t){const hop=bump(t,.15,.55), g=k(t,.7,1.2);
+    const GL="M50 108 L112 108 L120 124 L128 108 L190 108 L186 120 L176 146 Q170 152 160 152 L142 152 Q132 152 130 142 L124 126 L116 126 L110 142 Q108 152 98 152 L80 152 Q70 152 64 146 L54 120 Z";
+    return `<g transform="translate(0 ${-10*hop})">${body(LIME,0)}${crown(-16*hop,6*hop)}<path d="${GL}" fill="${INK}"/>`+
+      `<clipPath id="gc"><path d="${GL}"/></clipPath><rect x="${30+170*g}" y="100" width="18" height="60" fill="#fff" opacity=".55" transform="skewX(-20)" clip-path="url(#gc)"/>`+
+      `<path d="M98 180 q26 16 52 -8" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/></g>`;},
+  // спит: дышит, буквы z улетают
+  sleep(t){const br=Math.sin(t*Math.PI), z1=(t/2)%1, z2=((t+1)/2)%1;
+    const z=(p,x,s)=>`<text x="${x+30*p}" y="${20-60*p}" font-family="Unb" font-weight="900" font-size="${s}" fill="#fff" stroke="${INK}" stroke-width="5" paint-order="stroke" opacity="${Math.sin(Math.PI*p)}">z</text>`;
+    return `<g transform="translate(120 234) scale(${1+.03*br} ${1-.03*br}) translate(-120 -234)">${body(LIME,0)}${crown(4,-14)}${eye(88,128,0)}${eye(152,128,0)}<path d="M108 172 q12 6 24 0" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/></g>${z(z1,190,44)}${z(z2,200,32)}`;},
+  // удивлён: подпрыгивает, глаза круглые, рот «О»
+  wow(t){const j=bump(t,.1,.45), o=.6+.4*bump(t,.1,.9);
+    return `<g transform="translate(0 ${-12*j})">${body(LIME,bump(t,.45,.65)*.7)}${crown(-12*j,-10*j)}`+
+      `<circle cx="88" cy="118" r="${15+5*j}" fill="#fff" stroke="${INK}" stroke-width="7"/><circle cx="88" cy="118" r="7" fill="${INK}"/>`+
+      `<circle cx="152" cy="118" r="${15+5*j}" fill="#fff" stroke="${INK}" stroke-width="7"/><circle cx="152" cy="118" r="7" fill="${INK}"/>`+
+      `<ellipse cx="120" cy="178" rx="${12*o}" ry="${16*o}" fill="${INK}"/></g>`;},
+  // смеётся: трясётся, глаза-дуги, открытый рот
+  laugh(t){const sh=Math.sin(t*Math.PI*8)*(t<1.4?1:0)*4, m=.7+.3*Math.abs(Math.sin(t*Math.PI*8));
+    return `<g transform="translate(${sh} ${-Math.abs(sh)}) rotate(${sh} 120 140)">${body(LIME,0)}${crown(-Math.abs(sh)*2,sh*2)}`+
+      `<path d="M72 126 q16 -18 32 0 M136 126 q16 -18 32 0" fill="none" stroke="${INK}" stroke-width="9" stroke-linecap="round"/>`+
+      `<path d="M90 158 h60 q0 ${34*m} -30 ${34*m} q-30 0 -30 ${-34*m} Z" fill="${INK}"/><path d="M104 ${170+18*m} q16 ${-10} 32 0" fill="#FF6B9A" opacity=".9"/></g>`;},
+  // грустит: слеза катится
+  sad(t){const d=k(t,.2,1.4), b=bump(t,0,2)*.03;
+    return `<g transform="translate(120 234) scale(${1+b} ${1-b}) translate(-120 -234)">${body(LIME,0)}${crown(10,-18)}`+
+      `<path d="M70 112 Q90 110 106 98 M170 112 Q150 110 134 98" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`+
+      `${eye(88,134,.8)}${eye(152,134,.8)}<path d="M100 190 q20 -16 40 0" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`+
+      `<path d="M${84} ${150+60*d} q-8 12 0 18 q8 -6 0 -18 Z" fill="#7FE3FF" stroke="${INK}" stroke-width="3" opacity="${1-k(t,1.2,1.5)}"/></g>`;},
+  // думает: рука у подбородка, вопрос
+  think(t){const q=bump(t,.2,1.0), lk=6*Math.sin(t*Math.PI);
+    return `${body(LIME,0)}${crown(0,6)}${eye(88+lk,122,1)}${eye(152+lk,122,.6)}<path d="M102 178 h40" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`+
+      `<text x="${206}" y="${30-10*q}" font-family="Unb" font-weight="900" font-size="70" fill="${LILAC}" stroke="#fff" stroke-width="10" paint-order="stroke" opacity="${.3+.7*q}">?</text>`;},
+  // поддержка: Могну в гарнитуре кивает, мигает зелёная точка «на связи»
+  support(t){const nod=Math.sin(t*Math.PI*2)*4, blink=bump(t,1.2,1.35), on=.55+.45*Math.abs(Math.sin(t*Math.PI*2));
+    const band=`<path d="M16 120 C16 -26 224 -26 224 120" fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round"/><path d="M16 120 C16 -26 224 -26 224 120" fill="none" stroke="${INK}" stroke-width="16" stroke-linecap="round"/>`;
+    const cup=(x)=>`<rect x="${x-20}" y="96" width="40" height="64" rx="18" fill="#fff"/><rect x="${x-14}" y="102" width="28" height="52" rx="13" fill="${LILAC}" stroke="${INK}" stroke-width="7"/>`;
+    const mic=`<path d="M206 150 C206 196 176 206 148 204" fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round"/><path d="M206 150 C206 196 176 206 148 204" fill="none" stroke="${INK}" stroke-width="9" stroke-linecap="round"/><circle cx="144" cy="204" r="14" fill="${INK}" stroke="#fff" stroke-width="6"/>`;
+    return `<g transform="rotate(${nod} 120 230)">${body(LIME,0)}${band}${crown(-2-Math.abs(nod),nod)}${eye(88,122,1-blink)}${eye(152,122,1-blink)}${smile(.9)}${cup(16)}${cup(224)}${mic}</g>`+
+      `<circle cx="226" cy="10" r="20" fill="#fff"/><circle cx="226" cy="10" r="13" fill="#3DDC84" opacity="${on}"/>`;},
+};
+
+// Стикеры поддержки: Могну-оператор + подпись (512×512, 2 с, петля)
+const cap=(txt,c=LIME)=>{const fs=txt.length>12?21:26, w=txt.length*fs*.8+56;return `<rect x="${120-w/2}" y="268" width="${w}" height="58" rx="29" fill="#fff"/><rect x="${120-w/2+6}" y="274" width="${w-12}" height="46" rx="23" fill="${c}" stroke="${INK}" stroke-width="5"/>`+
+  `<text x="120" y="${fs>21?306:304}" text-anchor="middle" font-family="Unb" font-weight="900" font-size="${fs}" fill="${INK}">${txt}</text>`;};
+const pop=(t,a,b)=>{const x=k(t,a,b);return x<1?1.2*Math.sin(x*Math.PI*.75)/Math.sin(Math.PI*.75):1;};
+const ST={
+  hello(t){const w=Math.sin(t*Math.PI*4)*18;
+    return E.support(t)+`<g transform="rotate(${w} 262 150)"><path d="M248 156 v-44 a8 8 0 0 1 16 0 v-12 a8 8 0 0 1 16 0 v6 a8 8 0 0 1 16 0 v40 c0 26 -14 40 -32 40 c-14 0 -24 -10 -24 -24 v-10 a7 7 0 0 1 14 0 Z" fill="#fff" stroke="#fff" stroke-width="14" stroke-linejoin="round"/>`+
+      `<path d="M248 156 v-44 a8 8 0 0 1 16 0 v-12 a8 8 0 0 1 16 0 v6 a8 8 0 0 1 16 0 v40 c0 26 -14 40 -32 40 c-14 0 -24 -10 -24 -24 v-10 a7 7 0 0 1 14 0 Z" fill="${GOLD}" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/></g>`+cap("Привет!");},
+  wait(t){const d=i=>bump(t%1,i*.2,i*.2+.45);
+    return E.support(t)+`<path d="M-50 -30 h96 a22 22 0 0 1 22 22 v28 a22 22 0 0 1 -22 22 h-60 l-22 18 v-18 h-14 a22 22 0 0 1 -22 -22 v-28 a22 22 0 0 1 22 -22 Z" fill="#fff" stroke="${INK}" stroke-width="6"/>`+
+      [0,1,2].map(i=>`<circle cx="${-24+i*28}" cy="${4-8*d(i)}" r="9" fill="${INK}" opacity="${.35+.65*d(i)}"/>`).join('')+cap("Секунду, смотрю",LILAC);},
+  done(t){const s=pop(t,.2,.55), d=k(t,.4,.7);
+    return E.support(t)+`<g transform="translate(262 40) scale(${s})"><circle r="40" fill="#fff"/><circle r="32" fill="#3DDC84" stroke="${INK}" stroke-width="6"/>`+
+      `<path d="M-14 0 L-3 11 L16 -10" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="44" stroke-dashoffset="${44*(1-d)}"/></g>`+cap("Готово!");},
+  thanks(t){const b=1+.12*bump(t%1,0,.35);
+    return E.support(t)+`<g transform="translate(262 46) scale(${b})"><path d="M0 34 C-30 14 -38 -4 -30 -18 C-22 -30 -6 -28 0 -16 C6 -28 22 -30 30 -18 C38 -4 30 14 0 34 Z" fill="#fff" stroke="#fff" stroke-width="14" stroke-linejoin="round"/>`+
+      `<path d="M0 34 C-30 14 -38 -4 -30 -18 C-22 -30 -6 -28 0 -16 C6 -28 22 -30 30 -18 C38 -4 30 14 0 34 Z" fill="#FF6B9A" stroke="${INK}" stroke-width="6" stroke-linejoin="round"/></g>`+cap("Спасибо!",GOLD);},
+  shot(t){const f=bump(t,.6,.8);
+    return E.support(t)+`<g transform="translate(264 80) rotate(12)"><rect x="-30" y="-50" width="60" height="100" rx="12" fill="#fff" stroke="#fff" stroke-width="14"/><rect x="-30" y="-50" width="60" height="100" rx="12" fill="${LILAC}" stroke="${INK}" stroke-width="6"/>`+
+      `<rect x="-20" y="-38" width="40" height="66" rx="5" fill="${f>0?'#fff':'#7FE3FF'}" stroke="${INK}" stroke-width="4"/><circle cx="0" cy="38" r="4" fill="${INK}"/></g>`+
+      `<g opacity="${f}"><path d="M300 10 l12 -12 M312 40 h16 M296 -14 v-14" stroke="${GOLD}" stroke-width="7" stroke-linecap="round"/></g>`+cap("Пришлите скриншот",LILAC);},
+};
+window.sticker=(n,t)=>{S.innerHTML=ST[n](t%D);};
+
+
+// Аватар поддержки: Могну-оператор на глубоком фиолетовом со свечением (Telegram обрезает кругом)
+window.avatar=(t)=>{const g=.85+.15*Math.sin(t*Math.PI);
+  const sp=(x,y,s,ph)=>`<path transform="translate(${x} ${y}) scale(${s*(.6+.4*Math.abs(Math.sin(t*Math.PI+ph)))})" d="M0 -14 C2 -4 4 -2 14 0 C4 2 2 4 0 14 C-2 4 -4 2 -14 0 C-4 -2 -2 -4 0 -14 Z" fill="${GOLD}"/>`;
+  S.innerHTML=`<defs><radialGradient id="bg" cx=".5" cy=".42" r=".75"><stop offset="0" stop-color="#5A3FB0"/><stop offset=".55" stop-color="#2A1C5E"/><stop offset="1" stop-color="#120E26"/></radialGradient>`+
+   `<radialGradient id="gl"><stop offset="0" stop-color="#C8FF2E" stop-opacity="${.38*g}"/><stop offset=".6" stop-color="#C8FF2E" stop-opacity=".06"/><stop offset="1" stop-color="#C8FF2E" stop-opacity="0"/></radialGradient></defs>`+
+   `<rect x="-80" y="-64" width="400" height="400" fill="url(#bg)"/><circle cx="120" cy="136" r="190" fill="url(#gl)"/>`+
+   sp(-30,30,1,0)+sp(282,250,.8,1.3)+sp(-20,260,.6,2.1)+
+   `<g transform="translate(120 140) scale(.92) translate(-120 -140)">${E.support(t%2)}</g>`;};
+
+window.render=function(name,t,arg){S.innerHTML=E[name](t%D,arg);};
+</script></body></html>

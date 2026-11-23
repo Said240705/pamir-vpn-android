@@ -72,6 +72,13 @@ const E={
   think(t){const q=bump(t,.2,1.0), lk=6*Math.sin(t*Math.PI);
     return `${body(LIME,0)}${crown(0,6)}${eye(88+lk,122,1)}${eye(152+lk,122,.6)}<path d="M102 178 h40" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>`+
       `<text x="${206}" y="${30-10*q}" font-family="Unb" font-weight="900" font-size="70" fill="${LILAC}" stroke="#fff" stroke-width="10" paint-order="stroke" opacity="${.3+.7*q}">?</text>`;},
+  // поддержка: Могну в гарнитуре кивает, мигает зелёная точка «на связи»
+  support(t){const nod=Math.sin(t*Math.PI*2)*4, blink=bump(t,1.2,1.35), on=.55+.45*Math.abs(Math.sin(t*Math.PI*2));
+    const band=`<path d="M16 120 C16 -26 224 -26 224 120" fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round"/><path d="M16 120 C16 -26 224 -26 224 120" fill="none" stroke="${INK}" stroke-width="16" stroke-linecap="round"/>`;
+    const cup=(x)=>`<rect x="${x-20}" y="96" width="40" height="64" rx="18" fill="#fff"/><rect x="${x-14}" y="102" width="28" height="52" rx="13" fill="${LILAC}" stroke="${INK}" stroke-width="7"/>`;
+    const mic=`<path d="M206 150 C206 196 176 206 148 204" fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round"/><path d="M206 150 C206 196 176 206 148 204" fill="none" stroke="${INK}" stroke-width="9" stroke-linecap="round"/><circle cx="144" cy="204" r="14" fill="${INK}" stroke="#fff" stroke-width="6"/>`;
+    return `<g transform="rotate(${nod} 120 230)">${body(LIME,0)}${band}${crown(-2-Math.abs(nod),nod)}${eye(88,122,1-blink)}${eye(152,122,1-blink)}${smile(.9)}${cup(16)}${cup(224)}${mic}</g>`+
+      `<circle cx="226" cy="10" r="20" fill="#fff"/><circle cx="226" cy="10" r="13" fill="#3DDC84" opacity="${on}"/>`;},
 };
 window.render=function(name,t,arg){S.innerHTML=E[name](t%D,arg);};
 </script></body></html>

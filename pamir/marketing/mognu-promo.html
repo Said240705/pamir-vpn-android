@@ -1,0 +1,193 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@font-face{font-family:Unb;font-weight:700 900;src:url(fonts/unbounded-latin.woff2)}
+@font-face{font-family:Unb;font-weight:700 900;src:url(fonts/unbounded-cyrillic.woff2);unicode-range:U+0400-045F}
+@font-face{font-family:Onest;font-weight:400 800;src:url(fonts/onest-latin.woff2)}
+@font-face{font-family:Onest;font-weight:400 800;src:url(fonts/onest-cyrillic.woff2);unicode-range:U+0400-045F}
+html,body{margin:0;width:1080px;height:1920px;overflow:hidden}
+</style></head><body><svg id="s" width="1080" height="1920" viewBox="0 0 1080 1920" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+// Рекламный ролик Mognu VPN под озвучку (40,5 с): каждая фраза — своя сцена с фишкой.
+const DURATION=41;
+const INK="#14102A",LIME="#C8FF2E",GOLD="#FFC93C",LILAC="#B79CFF",MINT="#7FE3FF",PINK="#FF6B9A",RED="#FF4D5E";
+const cl=(x,a,b)=>Math.max(a,Math.min(b,x)), k=(t,a,b)=>cl((t-a)/(b-a),0,1), eo=x=>1-Math.pow(1-cl(x,0,1),3);
+const back=x=>{x=cl(x,0,1);const c=1.8;return 1+(c+1)*Math.pow(x-1,3)+c*Math.pow(x-1,2)};
+const bump=(t,a,b)=>Math.sin(Math.PI*k(t,a,b));
+let sd=11;const R=()=>(sd=(sd*16807)%2147483647)/2147483647;
+const ST=[];for(let i=0;i<80;i++)ST.push([R()*1080,R()*1920,R()*2.4+.6,R()]);
+const CONF=[];for(let i=0;i<60;i++)CONF.push([R()*2-1,R(),R(),[LIME,GOLD,LILAC,MINT,PINK][i%5]]);
+const T=(x,y,s,txt,o={})=>`<text x="${x}" y="${y}" font-family="${o.f||'Unb'}" font-weight="${o.w||800}" font-size="${s}" fill="${o.c||'#fff'}" text-anchor="${o.a||'middle'}" opacity="${o.op??1}"${o.st?` stroke="${o.st}" stroke-width="${o.sw||14}" paint-order="stroke" stroke-linejoin="round"`:''}>${txt}</text>`;
+// наклейка: белый край, тёмная обводка
+const st=(d,fill,sw=6)=>`<path d="${d}" fill="#fff" stroke="#fff" stroke-width="${sw*3}" stroke-linejoin="round"/><path d="${d}" fill="${fill}" stroke="${INK}" stroke-width="${sw}" stroke-linejoin="round"/>`;
+const mognu=(x,y,s,img='on.svg',rot=0)=>`<g transform="translate(${x} ${y}) rotate(${rot}) scale(${s}) translate(-120 -145)"><image href="${img}" width="240" height="290"/></g>`;
+// фразы (секунды по озвучке)
+const SC=[[0,3.1],[3.1,5.0],[5.0,9.7],[9.7,13.7],[13.7,18.2],[18.2,22.3],[22.3,27.0],[27.0,31.2],[31.2,34.25],[34.25,41]];
+const BG=[["#120E26","#2A1C5E"],["#2A1C5E","#5A3FB0"],["#1E1640","#3A2A78"],["#10233F","#1E4A7A"],["#1E1640","#3A2A78"],["#2A1438","#5A2A6E"],["#1E1640","#3A2A78"],["#14203A","#2A3F78"],["#2A1C5E","#5A3FB0"],["#1E1640","#3A2A78"]];
+function scene(t){for(let i=0;i<SC.length;i++)if(t<SC[i][1])return i;return SC.length-1;}
+
+// ---------- иконки-наклейки ----------
+const ic={
+ chat:(c=LILAC)=>st("M-60 -48 h120 a16 16 0 0 1 16 16 v60 a16 16 0 0 1 -16 16 h-70 l-30 26 v-26 h-20 a16 16 0 0 1 -16 -16 v-60 a16 16 0 0 1 16 -16 Z",c)+`<circle cx="-28" cy="-4" r="9" fill="${INK}"/><circle cx="0" cy="-4" r="9" fill="${INK}"/><circle cx="28" cy="-4" r="9" fill="${INK}"/>`,
+ play:(c=RED)=>st("M-70 -50 h140 a22 22 0 0 1 22 22 v56 a22 22 0 0 1 -22 22 h-140 a22 22 0 0 1 -22 -22 v-56 a22 22 0 0 1 22 -22 Z",c)+`<path d="M-14 -24 L26 0 L-14 24 Z" fill="#fff" stroke="${INK}" stroke-width="5" stroke-linejoin="round"/>`,
+ game:(c=MINT)=>st("M-70 -30 h140 a30 30 0 0 1 28 40 l-12 30 a20 20 0 0 1 -34 6 l-16 -18 h-72 l-16 18 a20 20 0 0 1 -34 -6 l-12 -30 a30 30 0 0 1 28 -40 Z",c)+`<path d="M-50 0 h28 M-36 -14 v28" stroke="${INK}" stroke-width="9" stroke-linecap="round"/><circle cx="36" cy="-6" r="8" fill="${INK}"/><circle cx="54" cy="10" r="8" fill="${INK}"/>`,
+ power:(c=LIME)=>st("M0 -90 a90 90 0 1 1 -0.1 0 Z",c)+`<path d="M-30 -36 a46 46 0 1 0 60 0 M0 -56 v46" fill="none" stroke="${INK}" stroke-width="16" stroke-linecap="round"/>`,
+ phone:(c=LILAC,scr="#2A1F5A")=>st("M-70 -130 h140 a22 22 0 0 1 22 22 v216 a22 22 0 0 1 -22 22 h-140 a22 22 0 0 1 -22 -22 v-216 a22 22 0 0 1 22 -22 Z",c)+`<rect x="-62" y="-112" width="124" height="196" rx="12" fill="${scr}" stroke="${INK}" stroke-width="5"/><path d="M-14 106 h28" stroke="${INK}" stroke-width="7" stroke-linecap="round"/>`,
+ laptop:(c=MINT)=>st("M-110 -80 h220 a14 14 0 0 1 14 14 v120 h-248 v-120 a14 14 0 0 1 14 -14 Z",c)+`<rect x="-96" y="-66" width="192" height="108" rx="8" fill="#2A1F5A" stroke="${INK}" stroke-width="5"/>`+st("M-150 54 h300 l-20 26 h-260 Z",LILAC),
+ tv:(c=GOLD)=>st("M-130 -90 h260 a16 16 0 0 1 16 16 v140 a16 16 0 0 1 -16 16 h-260 a16 16 0 0 1 -16 -16 v-140 a16 16 0 0 1 16 -16 Z",c)+`<rect x="-114" y="-74" width="228" height="132" rx="8" fill="#2A1F5A" stroke="${INK}" stroke-width="5"/><path d="M-40 84 l-20 30 M40 84 l20 30" stroke="${INK}" stroke-width="9" stroke-linecap="round"/>`,
+ key:(c=GOLD)=>st("M-60 -36 a36 36 0 1 1 0 72 a36 36 0 0 1 0 -72 Z M-26 -10 h110 v20 h-18 v18 h-20 v-18 h-72 Z",c)+`<circle cx="-60" cy="0" r="12" fill="${INK}"/>`,
+ gift:(c=LILAC)=>st("M-80 -20 h160 v100 a14 14 0 0 1 -14 14 h-132 a14 14 0 0 1 -14 -14 Z",c)+`<rect x="-14" y="-20" width="28" height="114" fill="${LIME}" stroke="${INK}" stroke-width="5"/>`,
+ giftLid:(c=LILAC)=>st("M-92 -56 h184 v36 h-184 Z",c)+`<rect x="-14" y="-56" width="28" height="36" fill="${LIME}" stroke="${INK}" stroke-width="5"/><path d="M0 -56 C-30 -100 -64 -86 -46 -60 Z M0 -56 C30 -100 64 -86 46 -60 Z" fill="${LIME}" stroke="${INK}" stroke-width="5" stroke-linejoin="round"/>`,
+ house:(c=GOLD)=>st("M0 -110 L120 0 H96 V110 H-96 V0 H-120 Z",c)+st("M-26 30 h52 v80 h-52 Z",LIME)+`<rect x="-76" y="10" width="34" height="34" rx="4" fill="${MINT}" stroke="${INK}" stroke-width="4"/><rect x="42" y="10" width="34" height="34" rx="4" fill="${MINT}" stroke="${INK}" stroke-width="4"/>`,
+ plane:(c="#fff")=>st("M-120 0 C-80 -10 60 -14 110 -6 C130 -2 130 6 110 8 C60 16 -80 12 -120 0 Z M-10 -8 L-60 -70 h24 L40 -8 Z M-10 8 L-60 70 h24 L40 8 Z M-110 -2 L-130 -36 h18 L-84 -4 Z",c),
+ bank:(c=MINT)=>st("M0 -80 L100 -30 H-100 Z M-90 -24 h180 v14 h-180 Z M-80 90 h160 v16 h-160 Z",c)+[-60,-20,20,60].map(x=>st(`M${x-10} -6 h20 v92 h-20 Z`,c,4)).join(''),
+ ad:(c=PINK,w=220,h=150)=>st(`M${-w/2} ${-h/2} h${w} v${h} h${-w} Z`,"#fff")+`<rect x="${-w/2}" y="${-h/2}" width="${w}" height="34" fill="${c}" stroke="${INK}" stroke-width="5"/>`+T(-w/2+12,-h/2+26,20,'РЕКЛАМА',{a:'start',c:'#fff',f:'Unb'})+`<path d="M${w/2-28} ${-h/2+8} l18 18 M${w/2-10} ${-h/2+8} l-18 18" stroke="#fff" stroke-width="5" stroke-linecap="round"/>`+
+   `<rect x="${-w/2+16}" y="${-h/2+50}" width="${w*.55}" height="16" rx="6" fill="#E4DDF7"/><rect x="${-w/2+16}" y="${-h/2+76}" width="${w*.7}" height="16" rx="6" fill="#E4DDF7"/><rect x="${-w/2+16}" y="${h/2-40}" width="${w*.4}" height="26" rx="13" fill="${c}"/>`,
+};
+function flag(cols,cross){ // флажок-наклейка 200×130
+  let s=`<g>`+`<rect x="-100" y="-66" width="200" height="132" rx="18" fill="#fff"/>`+`<clipPath id="fc${cols.join('')}"><rect x="-92" y="-58" width="184" height="116" rx="12"/></clipPath><g clip-path="url(#fc${cols.join('')})">`;
+  const n=cols.length;cols.forEach((c,i)=>{const h=cross?116:(cols.length===3&&cols[0]===cols[2]?[29,58,29][i]:116/n);const y=cross?-58:(-58+(cols.length===3&&cols[0]===cols[2]?[0,29,87][i]:i*116/n));s+=`<rect x="-92" y="${y}" width="184" height="${h}" fill="${c}"/>`;});
+  if(cross)s+=`<rect x="-92" y="-12" width="184" height="24" fill="${cross}"/><rect x="-44" y="-58" width="24" height="116" fill="${cross}"/>`;
+  return s+`</g><rect x="-92" y="-58" width="184" height="116" rx="12" fill="none" stroke="${INK}" stroke-width="6"/></g>`;
+}
+const FLAGS=[["Испания",["#E8343A","#FFC93C","#E8343A"]],["Польша",["#FFFFFF","#E8343A"]],["Германия",["#14102A","#E8343A","#FFC93C"]],["Финляндия",["#FFFFFF"],"#2F5FD0"]];
+
+window.render=function(t){
+  const i=scene(t), [a,b]=SC[i], lt=t-a, d=b-a, inT=k(lt,0,.35), outT=k(t,b-.25,b);
+  const [c1,c2]=BG[i];
+  // тряска камеры на «ударах»
+  const hits=[3.1,5.0,7.0,15.25,22.3,31.2,33.05];
+  let shake=0;for(const h of hits){const x=t-h;if(x>=0&&x<.35)shake=Math.max(shake,(1-x/.35)*14);}
+  const sx=shake*Math.sin(t*90), sy=shake*Math.cos(t*77);
+  let o=`<defs><radialGradient id="bg" cx=".5" cy=".5" r=".85"><stop offset="0" stop-color="${c2}"/><stop offset="1" stop-color="${c1}"/></radialGradient>
+   <radialGradient id="gl"><stop offset="0" stop-color="${LIME}" stop-opacity=".4"/><stop offset=".6" stop-color="${LIME}" stop-opacity=".06"/><stop offset="1" stop-color="${LIME}" stop-opacity="0"/></radialGradient></defs>
+   <rect width="1080" height="1920" fill="url(#bg)"/>`;
+  // лучи на фоне
+  o+=`<g transform="translate(540 980) rotate(${t*8})" opacity=".07">`+Array.from({length:12},(_,j)=>`<path d="M0 0 L-90 -1400 L90 -1400 Z" fill="#fff" transform="rotate(${j*30})"/>`).join('')+`</g>`;
+  for(const [x,y,r,p] of ST)o+=`<circle cx="${x}" cy="${(y-t*20*(.4+p))%1920+((y-t*20*(.4+p))%1920<0?1920:0)}" r="${r}" fill="#fff" opacity="${.12+.3*Math.abs(Math.sin(t*1.3+p*7))}"/>`;
+  o+=`<g transform="translate(${sx} ${sy})">`;
+  const cap=(txt,y,s,col='#fff',delay=0)=>{const e=back(k(lt,delay,delay+.4));return `<g transform="translate(540 ${y}) scale(${e})">${T(0,0,s,txt,{c:col,st:INK,sw:16})}</g>`;};
+  const sub=(txt,y,s=40,delay=.2)=>T(540,y+20*(1-eo(k(lt,delay,delay+.4))),s,txt,{f:'Onest',w:700,c:'#E4DDF7',op:eo(k(lt,delay,delay+.4))});
+
+  if(i===0){ // Тс-с… почему у меня всё открывается?
+    const peek=eo(k(lt,0,.6));
+    o+=`<circle cx="540" cy="1050" r="420" fill="url(#gl)" opacity="${.6*peek}"/>`;
+    o+=mognu(540-500+500*peek,1080,2.2,'on.svg',-8+8*peek);
+    // палец «тс-с» — лаймовая наклейка у рта
+    o+=`<g opacity="${k(lt,.3,.6)}" transform="translate(620 1180)">${st("M-10 -60 a12 12 0 0 1 24 0 v80 a12 12 0 0 1 -24 0 Z",GOLD,5)}</g>`;
+    o+=cap('Тс-с…',560,110,LIME,.1)+sub('знаешь, почему у меня',700,46,.8)+sub('всё открывается?',760,46,1.2);
+    ['lock1','lock2','lock3'].forEach((_,j)=>{const p=k(lt,1.4+j*.35,1.8+j*.35);const x=[200,880,170][j],y=[1520,1460,1320][j];
+      o+=`<g transform="translate(${x} ${y}) scale(${back(p)*.9}) rotate(${-10+j*12})">${st("M-46 -10 h92 a10 10 0 0 1 10 10 v60 a10 10 0 0 1 -10 10 h-92 a10 10 0 0 1 -10 -10 v-60 a10 10 0 0 1 10 -10 Z",GOLD,5)}<path d="M-26 -10 v-24 a26 26 0 0 1 52 0 v${-10+30*(1-p)}" fill="none" stroke="${INK}" stroke-width="10" stroke-linecap="round" transform="translate(0 ${-14*p})"/></g>`;});
+  }
+  if(i===1){ // Это Mognu VPN!
+    const e=back(k(lt,0,.45));
+    o+=`<circle cx="540" cy="1000" r="${300+300*eo(k(lt,0,.6))}" fill="none" stroke="${LIME}" stroke-width="${30*(1-k(lt,0,.8))}" opacity="${1-k(lt,0,.8)}"/>`;
+    o+=`<circle cx="540" cy="1000" r="460" fill="url(#gl)"/>`+mognu(540,1000+10*Math.sin(t*6),2.4*e,'on.svg');
+    o+=`<g transform="translate(540 560) scale(${back(k(lt,.15,.55))})">`+T(0,0,140,'MOGNU',{c:LIME,st:INK,sw:20})+T(0,120,90,'VPN',{c:'#fff',st:INK,sw:16})+`</g>`;
+    for(const [dx,dy,r,c] of CONF){const p=k(lt,0,1.6);const x=540+dx*600*p, y=1000-(700+500*dy)*p+1200*p*p;o+=`<rect x="${x}" y="${y}" width="22" height="12" rx="3" fill="${c}" opacity="${1-k(p,.7,1)}" transform="rotate(${720*p*r} ${x} ${y})"/>`;}
+  }
+  if(i===2){ // Одна кнопка — и ты подключён. Соцсети, видео, игры — всё летает.
+    if(lt<2.1){
+      const press=bump(lt,.9,1.2), on=lt>1.05;
+      o+=`<circle cx="540" cy="1050" r="${on?380:260}" fill="url(#gl)" opacity="${on?1:.4}"/>`;
+      o+=`<g transform="translate(540 1050) scale(${(1.9-.25*press)*back(k(lt,0,.4))})">${ic.power(on?LIME:"#8D86B5")}</g>`;
+      if(on) o+=`<circle cx="540" cy="1050" r="${180+400*k(lt,1.05,1.8)}" fill="none" stroke="${LIME}" stroke-width="10" opacity="${1-k(lt,1.05,1.8)}"/>`;
+      // палец
+      o+=`<g transform="translate(${700-80*k(lt,.5,.9)} ${1260-90*k(lt,.5,.9)+30*press})">${st("M0 0 c-6 -40 -6 -80 10 -84 c16 -4 20 20 20 40 l40 -4 c20 0 26 14 24 30 l-6 60 c-4 30 -30 46 -60 46 c-30 0 -50 -20 -54 -50 Z",GOLD,5)}</g>`;
+      o+=cap('Одна кнопка —',560,80,'#fff',.1)+(on?cap('и ты подключён!',660,72,LIME,0):'');
+    } else {
+      const l2=lt-2.1;
+      o+=mognu(540,1640,1.2,'on.svg',6*Math.sin(t*5));
+      [['chat',260,980,LILAC],['play',540,880,RED],['game',820,1000,MINT]].forEach(([n,x,y,c],j)=>{
+        const p=back(k(l2,j*.3,j*.3+.45)); const fly=k(l2,1.6,2.6);
+        o+=`<g transform="translate(${x+(j-1)*120*fly} ${y-600*fly*fly+18*Math.sin(t*4+j)}) rotate(${10*Math.sin(t*3+j)-30*fly*(j-1)}) scale(${1.6*p})">${ic[n](c)}</g>`;
+        o+=T(x,y+170-600*fly*fly,40,['Соцсети','Видео','Игры'][j],{c:'#fff',st:INK,sw:12,op:k(l2,j*.3+.2,j*.3+.5)*(1-fly)});
+      });
+      o+=cap('всё летает!',600,92,LIME,1.5);
+      // реактивные следы
+      if(l2>1.6) for(let j=0;j<14;j++){const y=1500-((l2*900+j*130)%1200);o+=`<rect x="${120+j*65}" y="${y}" width="8" height="90" rx="4" fill="#fff" opacity=".25"/>`;}
+    }
+  }
+  if(i===3){ // страны
+    o+=`<g transform="translate(540 1500)" opacity=".18"><circle r="380" fill="none" stroke="#fff" stroke-width="4"/><ellipse rx="160" ry="380" fill="none" stroke="#fff" stroke-width="4" transform="rotate(${t*20})"/><path d="M-380 0 H380 M-330 -190 H330 M-330 190 H330" stroke="#fff" stroke-width="4"/></g>`;
+    FLAGS.forEach(([name,cols,cross],j)=>{const p=back(k(lt,j*.55,j*.55+.45));const x=j%2?760:320, y=820+Math.floor(j/2)*380;const pick=(j===Math.floor(k(lt,2.4,3.9)*4.999)%4)&&lt>2.4;
+      o+=`<g transform="translate(${x} ${y+12*Math.sin(t*3+j)}) rotate(${(j%2?6:-6)*Math.sin(t*2+j)}) scale(${1.5*p*(pick?1.12:1)})">${flag(cols,cross)}</g>`+T(x,y+150,42,name,{c:pick?LIME:'#fff',st:INK,sw:12,op:k(lt,j*.55+.2,j*.55+.5)});});
+    o+=cap('Выбирай любую страну',560,64,'#fff',2.2);
+  }
+  if(i===4){ // LTE режет → LTE Обход
+    const fix=lt>1.5, f=k(lt,1.5,2.0);
+    o+=`<g transform="translate(540 1050) scale(${1.9*back(k(lt,0,.4))})">${ic.phone(LILAC,fix?"#2A3F20":"#2A1F5A")}`;
+    [0,1,2,3].forEach(j=>{o+=`<rect x="${-42+j*24}" y="${30-j*22}" width="16" height="${26+j*22}" rx="4" fill="${fix?LIME:(j<1?RED:'#4A3F80')}"/>`;});
+    o+=T(0,-60,34,'LTE',{c:fix?LIME:'#B9B2D9'});
+    if(!fix) o+=`<g opacity="${bump(lt%0.5,0,.5)*.6+.4}"><circle cx="0" cy="-10" r="56" fill="none" stroke="${RED}" stroke-width="9"/><path d="M-38 28 L38 -48" stroke="${RED}" stroke-width="9" stroke-linecap="round"/></g>`;
+    o+=`</g>`;
+    if(!fix){o+=cap('Мобильный интернет режет?',560,56,'#fff',.05);}
+    else{
+      o+=`<g transform="translate(540 1560) scale(${back(f)})"><rect x="-230" y="-50" width="460" height="100" rx="50" fill="#fff"/><rect x="-222" y="-42" width="444" height="84" rx="42" fill="${LIME}"/>`+T(-30,14,40,'LTE Обход',{c:INK})+`<circle cx="${160}" cy="0" r="32" fill="#fff" stroke="${INK}" stroke-width="5"/></g>`;
+      o+=cap('LTE Обход —',540,76,LIME,0)+cap('и снова всё работает',640,58,'#fff',.4);
+      for(let j=0;j<8;j++){const p=k(lt,1.6+j*.08,2.6+j*.08);o+=`<path transform="translate(${540+Math.cos(j*.8)*420*p} ${1050+Math.sin(j*.8)*420*p}) scale(${1-p})" d="M0 -18 L5 -5 L18 0 L5 5 L0 18 L-5 5 L-18 0 L-5 -5 Z" fill="${GOLD}"/>`;}
+    }
+  }
+  if(i===5){ // Уехал за границу? Режим «Домой»
+    if(lt<1.1){
+      const p=k(lt,0,1.1);
+      o+=`<g transform="translate(${-200+1480*p} ${1100-200*p}) rotate(-12) scale(1.7)">${ic.plane()}</g>`;
+      for(let j=0;j<5;j++)o+=`<rect x="${-200+1480*p-260-j*90}" y="${1110-200*p+j*6}" width="70" height="8" rx="4" fill="#fff" opacity="${.3-j*.05}"/>`;
+      o+=cap('Уехал за границу?',580,70,'#fff',0);
+    } else {
+      const l2=lt-1.1;
+      o+=`<circle cx="540" cy="1080" r="420" fill="url(#gl)"/>`;
+      o+=`<g transform="translate(540 1080) scale(${1.9*back(k(l2,0,.45))})">${ic.house()}</g>`;
+      o+=`<g transform="translate(${250} ${1560}) scale(${1.5*back(k(l2,.5,.9))}) rotate(-8)">${ic.bank()}</g>`;
+      o+=`<g transform="translate(760 1560) scale(${1.4*back(k(l2,.8,1.2))}) rotate(6)"><rect x="-140" y="-40" width="280" height="80" rx="40" fill="#fff"/><rect x="-132" y="-32" width="264" height="64" rx="32" fill="${MINT}"/>`+T(0,12,30,'🇷🇺 российский IP',{c:INK,f:'Onest',w:800})+`</g>`;
+      o+=cap('Режим «Домой»',560,82,LIME,0)+sub('банки и Госуслуги — как дома',680,46,.5);
+    }
+  }
+  if(i===6){ // реклама — Могну её съедает
+    const ads=[[250,820,PINK,-8],[820,760,GOLD,7],[300,1380,MINT,5],[800,1420,LILAC,-6],[560,1700,PINK,3]];
+    const eat=k(lt,2.0,3.6), mouth=Math.abs(Math.sin(lt*14))*(lt>2.0&&lt<3.8?1:0);
+    ads.forEach(([x,y,c,r],j)=>{const p=back(k(lt,j*.22,j*.22+.35));const e=k(eat,j*.15,j*.15+.35);
+      if(e<1) o+=`<g transform="translate(${x+(540-x)*e} ${y+(1080-y)*e}) rotate(${r+200*e}) scale(${p*(1-e)*1.3})">${ic.ad(c)}</g>`;});
+    o+=`<circle cx="540" cy="1080" r="360" fill="url(#gl)" opacity="${k(lt,1.8,2.2)}"/>`;
+    o+=`<g transform="translate(540 1080) scale(${2*back(k(lt,1.6,2.1))*(1+.06*mouth)})"><g transform="translate(-120 -145)"><image href="on.svg" width="240" height="290"/></g>`+
+       (mouth>0?`<ellipse cx="0" cy="38" rx="${30+16*mouth}" ry="${8+26*mouth}" fill="${INK}"/>`:'')+`</g>`;
+    o+=cap('Без рекламы',560,90,'#fff',.1);
+    const cnt=Math.floor(312*eo(k(lt,2.2,4.2)));
+    if(lt>2.2) o+=`<g transform="translate(540 1560) scale(${back(k(lt,2.2,2.6))})"><rect x="-300" y="-56" width="600" height="112" rx="56" fill="#fff"/><rect x="-292" y="-48" width="584" height="96" rx="48" fill="${LIME}"/>`+T(0,16,42,`👑 съедено: ${cnt}`,{c:INK})+`</g>`;
+  }
+  if(i===7){ // устройства, один ключ на два
+    const it=[['phone',260,900,1.1],['laptop',780,900,1.15],['tv',540,1300,1.15]];
+    it.forEach(([n,x,y,s],j)=>{const p=back(k(lt,j*.35,j*.35+.45));o+=`<g transform="translate(${x} ${y+10*Math.sin(t*3+j)}) scale(${s*p})">${ic[n]()}</g>`;});
+    o+=T(260,1080,40,'Телефон',{c:'#fff',st:INK,sw:12,op:k(lt,.2,.5)})+T(780,1050,40,'Компьютер',{c:'#fff',st:INK,sw:12,op:k(lt,.55,.85)})+T(540,1480,40,'Телевизор',{c:'#fff',st:INK,sw:12,op:k(lt,.9,1.2)});
+    const kp=back(k(lt,2.0,2.5));
+    o+=`<g transform="translate(540 1680) scale(${1.5*kp})"><g transform="translate(-180 0) rotate(${-20+14*Math.sin(t*4)})">${ic.key()}</g>`+T(80,18,60,'= 2',{c:LIME,st:INK,sw:14,a:'middle'})+`</g>`;
+    o+=cap('Все устройства',560,82,'#fff',0)+sub('один ключ — на два устройства',670,46,1.9);
+  }
+  if(i===8){ // первые дни бесплатно / пора могнуть
+    if(lt<1.85){
+      const lid=k(lt,.4,.8);
+      o+=`<circle cx="540" cy="1100" r="420" fill="url(#gl)"/>`;
+      o+=`<g transform="translate(540 1150) scale(${2*back(k(lt,0,.35))})">${ic.gift()}<g transform="translate(${40*lid} ${-120*lid}) rotate(${25*lid})">${ic.giftLid()}</g></g>`;
+      for(const [dx,dy,r,c] of CONF){const p=k(lt,.45,1.8);const x=540+dx*500*p, y=1000-(600+400*dy)*p+1000*p*p;o+=`<rect x="${x}" y="${y}" width="22" height="12" rx="3" fill="${c}" opacity="${1-k(p,.7,1)}" transform="rotate(${720*p*r} ${x} ${y})"/>`;}
+      o+=cap('Первые дни —',560,82,'#fff',0)+cap('бесплатно!',680,100,LIME,.25);
+    } else {
+      const l2=lt-1.85;
+      o+=`<circle cx="540" cy="1000" r="480" fill="url(#gl)"/>`+mognu(540,1050+10*Math.sin(t*7),2.5*back(k(l2,0,.35)),'on.svg',4*Math.sin(t*9));
+      o+=cap('Пора',520,120,'#fff',0)+cap('МОГНУТЬ!',660,140,LIME,.1);
+    }
+  }
+  if(i===9){ // сайт и бот
+    o+=`<circle cx="540" cy="760" r="380" fill="url(#gl)"/>`+mognu(540,760+10*Math.sin(t*3),1.7*back(k(lt,0,.4)),'on.svg');
+    const s1=back(k(lt,.1,.5)), s2=back(k(lt,2.6,3.0)), hl1=lt<2.5, hl2=lt>2.6&&lt<6;
+    o+=`<g transform="translate(540 1210) scale(${s1*(hl1?1+.04*Math.sin(t*8):1)})"><rect x="-330" y="-70" width="660" height="140" rx="70" fill="#fff"/><rect x="-320" y="-60" width="640" height="120" rx="60" fill="${LIME}"/>`+T(0,22,64,'mognu.app',{c:INK})+`</g>`;
+    o+=T(540,1340,34,'сайт',{f:'Onest',w:700,c:'#B9B2D9',op:k(lt,.3,.6)});
+    o+=`<g transform="translate(540 1500) scale(${s2*(hl2?1+.04*Math.sin(t*8):1)})"><rect x="-380" y="-70" width="760" height="140" rx="70" fill="#fff"/><rect x="-370" y="-60" width="740" height="120" rx="60" fill="#2AABEE"/>`+
+      `<path d="M-300 -6 L-230 -36 L-246 30 L-266 12 L-282 24 Z" fill="#fff"/>`+T(40,20,54,'@pamirlink_bot',{c:'#fff'})+`</g>`;
+    o+=T(540,1630,34,'бот в Telegram',{f:'Onest',w:700,c:'#B9B2D9',op:k(lt,2.8,3.1)});
+    o+=T(540,1790,40,'Пора могнуть! 👑',{c:'#fff',op:k(lt,4.2,4.8)});
+  }
+  o+=`</g>`;
+  // вспышка-переход в начале каждой сцены
+  const fl=1-k(lt,0,.18);
+  if(i>0&&fl>0) o+=`<rect width="1080" height="1920" fill="#fff" opacity="${fl*.55}"/>`;
+  document.getElementById('s').innerHTML=o;
+};
+</script></body></html>

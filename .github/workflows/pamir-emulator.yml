@@ -16,6 +16,9 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: write   # снимки «Без рекламы» — в пре-релиз android-screens
+
 jobs:
   emulator:
     runs-on: ubuntu-latest
@@ -54,6 +57,16 @@ jobs:
         disable-animations: true
         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
         script: bash pamir/${{ inputs.tv && 'emu_tv_test.sh' || 'emu_test.sh' }}
+
+    - name: Ad blocking screenshots to a release
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # только снимки «Без рекламы»: на них интерфейс, без ключей и адресов подписки
+        ls shots/*adblock*.png >/dev/null 2>&1 || exit 0
+        gh release view android-screens -R ${{ github.repository }} >/dev/null 2>&1 || gh release create android-screens -R ${{ github.repository }} --prerelease --latest=false --title 'Mognu VPN для Android — скриншоты из проверки' --notes 'Снимки экрана из проверки на эмуляторе.'
+        gh release upload android-screens shots/*adblock*.png -R ${{ github.repository }} --clobber
 
     - name: Send to Telegram
       if: always()

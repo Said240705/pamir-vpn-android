@@ -103,6 +103,19 @@ adb shell input keyevent KEYCODE_BACK; sleep 2
 log "== настройки"
 tap_text '^Настройки$'; sleep 3; shot settings
 
+log "== без рекламы (переключатель, реклама в браузере, счётчик)"
+tap_scroll '^Без рекламы$'; sleep 10; vpn_state; shot adblock_on
+# рекламные адреса из списка geosite:category-ads-all: ядро должно их отбросить, сторож — посчитать (раз в минуту)
+for u in https://googleads.g.doubleclick.net/pagead/id https://pagead2.googlesyndication.com/pagead/show_ads.js \
+         https://an.yandex.ru/ https://mc.yandex.ru/metrika/tag.js https://ad.mail.ru/ https://www.googletagservices.com/tag/js/gpt.js; do
+  adb shell am start -a android.intent.action.VIEW -d "$u" >/dev/null 2>&1; sleep 5
+done
+shot adblock_browser
+adb shell monkey -p $P -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; sleep 90
+tap_text '^VPN$'; sleep 3; shot adblock_counter
+expect 'Могну съел' 'счётчик рекламы на главном экране'
+tap_text '^Настройки$'; sleep 3; shot adblock_settings
+
 log "== приложения без VPN"
 tap_text '^Приложения без VPN$'; sleep 4; shot apps_screen
 adb shell input keyevent KEYCODE_BACK; sleep 2

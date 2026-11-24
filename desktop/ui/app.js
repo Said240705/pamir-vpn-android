@@ -908,15 +908,27 @@ async function connect() {
   S.active = srv; S.state = "busy"; step("Запускаем защищённый туннель");
   try {
     const ports = await invoke("free_ports");
-    await invoke("core_start", { config: JSON.stringify(buildConfig(srv, ports, coreOpts())) });
-    step("Стучимся на сервер " + cleanName(srv.name).name);
-    await new Promise((r) => setTimeout(r, 350));
-    step("Проверяем, что интернет идёт через VPN");
-    // в режиме «весь трафик» Windows поднимает адаптер и маршруты не сразу: первая проверка может не пройти
-    // (так 0.4.0 один раз не подключился в CI), поэтому даём ещё одну попытку через пару секунд
-    let ok = await verify(ports.http);
-    if (!ok && tun) { await new Promise((r) => setTimeout(r, 2500)); ok = await verify(ports.http); }
-    if (!ok) throw new Error("Сервер не отвечает — попробуй другой");
+    // Выбранный сервер может не пропускать трафик из сети человека: тогда сами пробуем самые быстрые остальные
+    // (того же вида — обычные или LTE), как при переподключении в heal(), вместо «попробуй другой».
+    const others = S.servers.filter((p) => !isStub(p) && !S.down[keyOf(p)] && isLte(p) === isLte(srv) && keyOf(p) !== keyOf(srv))
+      .sort((a, b) => (S.pings[keyOf(a)] || 9e9) - (S.pings[keyOf(b)] || 9e9));
+    let used = null;
+    for (const cand of [srv, ...others].slice(0, 3)) {
+      S.active = cand;
+      await invoke("core_start", { config: JSON.stringify(buildConfig(cand, ports, coreOpts())) });
+      step("Стучимся на сервер " + cleanName(cand.name).name);
+      await new Promise((r) => setTimeout(r, 350));
+      step("Проверяем, что интернет идёт через VPN");
+      // в режиме «весь трафик» Windows поднимает адаптер и маршруты не сразу: первая проверка может не пройти
+      // (так 0.4.0 один раз не подключился в CI), поэтому даём ещё одну попытку через пару секунд
+      let ok = await verify(ports.http);
+      if (!ok && tun) { await new Promise((r) => setTimeout(r, 2500)); ok = await verify(ports.http); }
+      if (ok) { used = cand; break; }
+      invoke("core_note", { text: "не пропускает трафик: " + cleanName(cand.name).name }).catch(() => {});
+      if (S.state !== "busy") break; // пока пробовали, человек нажал «Отключить»
+    }
+    if (!used) throw new Error("Серверы не отвечают из вашей сети — попробуйте позже или LTE Обход");
+    if (keyOf(used) !== keyOf(srv)) toast(cleanName(srv.name).name + " не отвечает в вашей сети — подключили " + cleanName(used.name).name);
     // в режиме «весь трафик» системный прокси не нужен: трафик и так идёт через адаптер Mognu
     if (!tun) { step("Включаем VPN для браузеров и программ"); await invoke("proxy_set", { port: ports.http }); }
     S.ports = ports; S.state = "on"; S.step = "";

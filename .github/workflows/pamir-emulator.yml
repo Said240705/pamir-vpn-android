@@ -62,11 +62,23 @@ jobs:
       if: always()
       env:
         GH_TOKEN: ${{ github.token }}
+        SUB_URL: ${{ secrets.TEST_SUB_URL }}
       run: |
         # только снимки «Без рекламы»: на них интерфейс, без ключей и адресов подписки
         ls shots/*adblock*.png >/dev/null 2>&1 || exit 0
         gh release view android-screens -R ${{ github.repository }} >/dev/null 2>&1 || gh release create android-screens -R ${{ github.repository }} --prerelease --latest=false --title 'Mognu VPN для Android — скриншоты из проверки' --notes 'Снимки экрана из проверки на эмуляторе.'
         gh release upload android-screens shots/*adblock*.png -R ${{ github.repository }} --clobber
+        # отчёт и журнал для разбора (адрес подписки в них уже скрыт)
+        python3 - <<'PY'
+        import os,urllib.parse
+        u=os.environ.get('SUB_URL','')
+        for f in ('shots/report.txt','shots/adblock_logcat.txt'):
+            if u and os.path.exists(f):
+                t=open(f,errors='ignore').read()
+                for v in (u,urllib.parse.quote(u,safe=''),u.rsplit('/',1)[-1]): t=t.replace(v,'***')
+                open(f,'w').write(t)
+        PY
+        for f in shots/report.txt shots/adblock_logcat.txt; do [ -s "$f" ] && cp "$f" "${f%.txt}-adblock.txt" && gh release upload android-screens "${f%.txt}-adblock.txt" -R ${{ github.repository }} --clobber; done
 
     - name: Send to Telegram
       if: always()

@@ -136,6 +136,7 @@ import com.v2ray.ang.util.HttpUtil
 import com.v2ray.ang.util.Utils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -245,6 +246,9 @@ open class PamirActivity : AppCompatActivity() {
     private var lastUpdate by mutableLongStateOf(0L)
     private var whitelist by mutableStateOf(false)
     private var autoSwitched = false
+    /** Servers left automatically during the current connect because nothing went through them; cleared by the user's own connect or choice. */
+    private val failoverTried = mutableSetOf<String>()
+    private var verifyJob: Job? = null
     private var lteReturnJob: kotlinx.coroutines.Job? = null
     private var lastPrecheck = 0L
     private var newVersion by mutableStateOf<String?>(null)
@@ -1513,7 +1517,21 @@ open class PamirActivity : AppCompatActivity() {
             toast("Подписка не активна или исчерпан лимит устройств")
             return
         }
-        val cur = servers.firstOrNull { it.guid == sel }
+        failoverTried.clear()
+        val chosen = servers.firstOrNull { it.guid == sel }
+        // The last check (precheck, a minute ago at most) saw this server dead from here while another regular one
+        // answers: start on that one right away instead of connecting to a server that will not carry traffic.
+        val alt = if (chosen != null && isRegular(chosen) && pings[chosen.guid] == -1)
+            servers.filter { isRegular(it) && it.guid != chosen.guid && (pings[it.guid] ?: -1) > 0 && !PamirLocations.isDown(it.rawRemarks) }
+                .minByOrNull { pings[it.guid] ?: Int.MAX_VALUE }
+        else null
+        if (chosen != null && alt != null) {
+            Log.w("Pamir", "selected server did not answer the last check, starting on another one")
+            toast("${chosen.name} сейчас не отвечает — подключаем ${alt.name}")
+            selected = alt.guid
+            MmkvManager.setSelectServer(alt.guid)
+        }
+        val cur = alt ?: chosen
         if (cur != null && !cur.isLte && whitelist && smartLte()) {
             lteServer()?.let {
                 useLte(it)
@@ -1540,6 +1558,7 @@ open class PamirActivity : AppCompatActivity() {
     }
 
     private fun selectServer(guid: String) {
+        failoverTried.clear()
         selected = guid
         MmkvManager.setSelectServer(guid)
         MmkvManager.encodeSettings(PREF_AUTO_BEST, false)
@@ -1605,28 +1624,32 @@ open class PamirActivity : AppCompatActivity() {
         pingBusy = false
     }
 
+    private fun isRegular(s: PServer) = !s.isStub && !s.isLte && !s.isHome
+
+    /**
+     * Right after connecting: does traffic really go through the server? The request through the tunnel is the
+     * test (the IP service alone was often silent on mobile and slow to answer). When nothing goes through:
+     * "white lists" -> LTE Обход as before; otherwise the regular server that answers fastest from here, at most
+     * twice per connect, so people no longer have to reconnect by hand until one works.
+     */
     private fun fetchIp() {
-        lifecycleScope.launch {
-            delay(2000)
-            var info: com.v2ray.ang.handler.SpeedtestManager.RemoteEndpointInfo? = null
-            for (i in 0 until 2) {
-                if (!running) return@launch
-                info = withContext(Dispatchers.IO) { runCatching { com.v2ray.ang.handler.SpeedtestManager.getRemoteIPInfo() }.getOrNull() }
-                if (info?.ipAddress != null) break
-                delay(2500)
+        verifyJob?.cancel()
+        verifyJob = lifecycleScope.launch {
+            delay(1500)
+            if (!running) return@launch
+            var works = withContext(Dispatchers.IO) { proxyWorks() }
+            if (!works && running) {   // the first request after start can fall on the tunnel warming up
+                delay(2000)
+                works = running && withContext(Dispatchers.IO) { proxyWorks() }
             }
             if (!running) return@launch
-            val ip = info?.ipAddress
-            if (ip != null) {
-                ipInfo = if (info?.country.isNullOrBlank()) ip else "$ip (${info?.country})"
-                Log.w("Pamir", "ip ok $ipInfo")
-                return@launch
-            }
-            Log.w("Pamir", "ip check failed")
-            // Сервис определения IP мог просто не ответить (на мобильном это частое): проверяем само соединение
-            if (withContext(Dispatchers.IO) { proxyWorks() }) {
-                if (running) ipInfo = "подключено"
-                Log.w("Pamir", "ip service silent, but the connection works")
+            if (works) {
+                failoverTried.clear()
+                ipInfo = "подключено"
+                Log.w("Pamir", "connection works")
+                val info = withContext(Dispatchers.IO) { runCatching { com.v2ray.ang.handler.SpeedtestManager.getRemoteIPInfo() }.getOrNull() }
+                val ip = info?.ipAddress
+                if (running && ip != null) ipInfo = if (info?.country.isNullOrBlank()) ip else "$ip (${info?.country})"
                 return@launch
             }
             val cur = servers.firstOrNull { it.guid == selected }
@@ -1641,12 +1664,41 @@ open class PamirActivity : AppCompatActivity() {
                 connecting = true
                 LauncherManager.restartService(this@PamirActivity)
                 delay(3000); connecting = false
-                fetchIp()
-            } else {
-                ipInfo = "нет ответа"
-                toast("Нет соединения через VPN. Попробуйте другой сервер", true, action = "Сменить") { sheetOpen = true }
+                return@launch
             }
+            val next = if (cur != null && isRegular(cur) && !whitelistNow && failoverTried.size < 2) {
+                failoverTried += cur.guid
+                fastestRegular(exclude = failoverTried)
+            } else null
+            if (cur != null && next != null) {
+                Log.w("Pamir", "nothing goes through the server, switching to another one")
+                selected = next.guid
+                MmkvManager.setSelectServer(next.guid)
+                MmkvManager.encodeSettings(PREF_USER_CHOSE, true) // keep it when the app reloads the list
+                MmkvManager.encodeSettings(PREF_AUTO_BEST, false)
+                toast("🔄 ${cur.name} не отвечает в вашей сети — подключили ${next.name}", true)
+                connecting = true
+                LauncherManager.restartService(this@PamirActivity) // the new start runs this check again
+                delay(3000); connecting = false
+                return@launch
+            }
+            ipInfo = "нет ответа"
+            toast("Нет соединения через VPN. Попробуйте другой сервер", true, action = "Сменить") { sheetOpen = true }
         }
+    }
+
+    /** The regular server that answers a direct TCP connect fastest (the app itself is outside the VPN). */
+    private suspend fun fastestRegular(exclude: Set<String>): PServer? = coroutineScope {
+        servers.filter { isRegular(it) && it.guid !in exclude && !PamirLocations.isDown(it.rawRemarks) }
+            .map { s ->
+                async(Dispatchers.IO) {
+                    s to runCatching {
+                        val t0 = System.nanoTime()
+                        Socket().use { it.connect(InetSocketAddress(s.host, s.port), 3000) }
+                        (System.nanoTime() - t0) / 1_000_000
+                    }.getOrDefault(-1L)
+                }
+            }.awaitAll().filter { it.second >= 0 }.minByOrNull { it.second }?.first
     }
 
     /** Работает ли соединение через VPN: два адреса generate_204 через локальный HTTP-вход ядра. */
@@ -1654,7 +1706,7 @@ open class PamirActivity : AppCompatActivity() {
         val port = SettingsManager.getHttpPort()
         if (port == 0) return false
         return listOf(AppConfig.DELAY_TEST_URL, AppConfig.DELAY_TEST_URL2).any { url ->
-            HttpUtil.getUrlContent(UrlContentRequest(url = url, timeout = 7000, httpPort = port,
+            HttpUtil.getUrlContent(UrlContentRequest(url = url, timeout = 5000, httpPort = port,
                 proxyUsername = SettingsManager.getSocksUsername(), proxyPassword = SettingsManager.getSocksPassword())) != null
         }
     }

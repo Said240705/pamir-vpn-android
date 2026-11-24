@@ -2452,6 +2452,7 @@ open class PamirActivity : AppCompatActivity() {
             AnimatedVisibility(visible = running, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
                 SpeedLine()
             }
+            AdsLine()
             Spacer(Modifier.height(Gap.l))
             if (current != null && !running) ServerCard(current, onPick)
             if (!running && !tv) {
@@ -2462,6 +2463,28 @@ open class PamirActivity : AppCompatActivity() {
             }
             if (tv) TvFooter()
             Spacer(Modifier.height(Gap.l))
+        }
+    }
+
+    /** «Без рекламы» on and connected: how many ads Mognu has blocked this week (PamirAds counts them in the core process). */
+    @Composable
+    private fun AdsLine() {
+        if (!running || !PamirAds.enabled()) return
+        var week by remember { mutableStateOf(PamirAds.week()) }
+        LaunchedEffect(Unit) { while (true) { delay(30_000); week = PamirAds.week() } }
+        if (week <= 0) return
+        Text(
+            "👑 Могну съел ${PamirAds.phrase(week)} за неделю",
+            style = PamirType.support, color = Pamir.colors.textDim, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = Gap.xs)
+        )
+    }
+
+    private fun setAds(on: Boolean) {
+        PamirAds.setEnabled(on)
+        if (running) {
+            LauncherManager.restartService(this)
+            toast(if (on) "Реклама теперь блокируется — переподключаемся" else "Блокировка рекламы выключена — переподключаемся")
         }
     }
 
@@ -3814,6 +3837,7 @@ open class PamirActivity : AppCompatActivity() {
         var boot by remember { mutableStateOf(MmkvManager.decodeStartOnBoot()) }
         var smart by remember { mutableStateOf(smartLte()) }
         var autoSwitch by remember { mutableStateOf(MmkvManager.decodeSettingsBool(PamirWatch.K_AUTO_SWITCH, true)) }
+        var ads by remember { mutableStateOf(PamirAds.enabled()) }
         val c = Pamir.colors
         Column(
             Modifier
@@ -3826,6 +3850,13 @@ open class PamirActivity : AppCompatActivity() {
             SectionHeader("Подключение")
             RowGroup {
                 ToggleRow(PamirIcons.Split, "Сайты РФ напрямую", "Госуслуги, банки — без VPN", ru) { ru = it; setRuDirect(it) }
+                RowDivider()
+                val eaten = PamirAds.total()
+                ToggleRow(
+                    PamirIcons.Shield, "Без рекламы",
+                    if (ads && eaten > 0) "Могну уже съел ${PamirAds.phrase(eaten)}" else "Убираем рекламу и трекеры в приложениях и браузере",
+                    ads
+                ) { ads = it; setAds(it) }
                 RowDivider()
                 ToggleRow(PamirIcons.Refresh, "Автосмена сервера", "Если сервер перестал отвечать, подключим другой", autoSwitch) {
                     autoSwitch = it; MmkvManager.encodeSettings(PamirWatch.K_AUTO_SWITCH, it)

@@ -14,7 +14,7 @@ const ST=[];for(let i=0;i<50;i++)ST.push([R()*1280,R()*720,R()*2+.6,R()]);
 const LETTERS=["A","Я","ғ","ӯ","B","Ж","ҷ","Q","ӣ","W","Ф","ҳ"];const FLY=LETTERS.map((c,i)=>[c,R()*560,R(),R()]);
 const T=(x,y,s,txt,o={})=>`<text x="${x}" y="${y}" font-family="${o.f||'Unb'}" font-weight="${o.w||800}" font-size="${s}" fill="${o.c||'#fff'}" text-anchor="${o.a||'start'}" opacity="${o.op??1}">${txt}</text>`;
 // пузырь над Могну: Привет → Hello → а по-шугнански?
-const BUB=[["Привет!","#C8FF2E"],["Hello!","#7FE3FF"],["А по-шугнански?","#FFC93C"]];
+const BUB=[["Привет!","#C8FF2E"],["Hello!","#7FE3FF"],["А на шугнанском?","#FFC93C"]];
 window.render=function(t){
   let o=`<defs><radialGradient id="bg" cx=".3" cy=".45" r=".9"><stop offset="0" stop-color="#3A2A78"/><stop offset=".55" stop-color="#1E1640"/><stop offset="1" stop-color="#120E26"/></radialGradient>
   <radialGradient id="gl"><stop offset="0" stop-color="#C8FF2E" stop-opacity=".34"/><stop offset=".6" stop-color="#C8FF2E" stop-opacity=".06"/><stop offset="1" stop-color="#C8FF2E" stop-opacity="0"/></radialGradient></defs>
@@ -37,7 +37,7 @@ window.render=function(t){
      T(640,262,58,'Могну учит')+T(640,332,58,'новые языки')+
      T(640,392,26,'Ищем носителей языка для перевода',{f:'Onest',w:600,c:'#B9B2D9'})+`</g>`;
   const chip=(x,y,txt,c,d)=>{const e=back(k(t,d,d+.5));const w=txt.length*17+60;return `<g transform="translate(${x} ${y}) scale(${e})"><rect x="0" y="-34" width="${w}" height="60" rx="30" fill="${c}"/>${T(w/2,6,25,txt,{a:'middle',c:'#14102A'})}</g>`;};
-  o+=chip(640,470,'English','#7FE3FF',.5)+chip(838,470,'Шугнанский · кириллица','#FFC93C',.7);
+  o+=chip(640,470,'English','#7FE3FF',.5)+chip(838,470,'Шугнанский','#FFC93C',.7);
   o+=`<g opacity="${eo(k(t,.9,1.4))}">`+T(640,585,26,'💬 Пишите в поддержку',{f:'Onest',w:700})+T(640,628,22,'mognu.app · @pamirlink_bot',{f:'Unb',w:800,c:'#B9B2D9'})+`</g>`;
   document.getElementById('s').innerHTML=o;
 };

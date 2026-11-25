@@ -1,78 +1,64 @@
-import re, glob, os, sys
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
+"""Тексты приложения для перевода: шаблоны Kotlin (${...}, $name, %.1f) превращаются в понятные {метки}."""
+import re, glob, os, sys, json
+sys.path.insert(0, os.path.dirname(__file__))
 SRC = "/home/user/pamir-vpn-android/pamir/src"
-WHERE = {
- "Home":"Главный экран","HomeHeader":"Главный экран","HomeNotice":"Главный экран","Settings":"Настройки","ServerCard":"Главный экран",
- "StubCard":"Главный экран","WhitelistCard":"Главный экран","SpeedLine":"Главный экран","AdsLine":"Главный экран",
- "toggle":"Подключение","startVpn":"Подключение","fetchIp":"Подключение","selectServer":"Подключение","pickBest":"Подключение",
- "updateSubscription":"Обновление серверов","importFromClipboard":"Добавление подписки","checkAppUpdate":"Обновление приложения",
- "Root":"Навигация","TvFooter":"Телевизор",
-}
-WHERE.update({
- "AppsScreen":"Приложения без VPN","AutopayCard":"Кабинет: автоплатёж","BalanceCard":"Кабинет: баланс","CabinetScreen":"Кабинет",
- "CardOffer":"Кабинет: привязка карты","CardUnlinkSheet":"Кабинет: отвязка карты","DevicesCard":"Кабинет: устройства",
- "EmailCodeStep":"Вход по почте","EmailLoginSheet":"Вход по почте","HomeCard":"Кабинет","KeyCard":"Кабинет: ключ",
- "KeyPickerSheet":"Выбор ключа","NewsSheet":"Новости","NoKeyHome":"Главный экран (нет ключа)","OnboardingActions":"Первый запуск",
- "OnboardingIntro":"Первый запуск","PamirApi":"Ошибки связи","PamirTheme":"Оформление","PaymentsCard":"Кабинет: платежи",
- "PromoCard":"Кабинет: промокод","ReferralCard":"Кабинет: пригласить друга","RenameKeySheet":"Переименование ключа",
- "RenewContent":"Продление и тарифы","RenewSheet":"Продление и тарифы","ReportSheet":"Сообщить о проблеме",
- "RequiredUpdate":"Обязательное обновление","ServerItem":"Список серверов","ServerSheet":"Список серверов",
- "TopupSheet":"Пополнение баланса","TrialCard":"Пробный период","UpdateSheet":"Обновление приложения",
- "activateTrial":"Пробный период","afterPurchase":"Оплата","agoText":"Время («минуту назад»)","applyAppsIfChanged":"Приложения без VPN",
- "applyDeviceKey":"Выбор ключа","applyLastChance":"Предложения","applyPromo":"Кабинет: промокод","ask":"Поддержка: частые вопросы",
- "askNotifications":"Разрешение на уведомления","bindCard":"Кабинет: привязка карты","closeTicket":"Поддержка","connectedFor":"Главный экран",
- "copyText":"Копирование","finishEmailLogin":"Вход по почте","fmtBytes":"Скорость и трафик","forgotPassword":"Вход по почте",
- "greet":"Главный экран: приветствие","homeToggle":"Главный экран","installUpdate":"Обновление приложения","keyExpiry":"Кабинет: ключ",
- "keyName":"Кабинет: ключ","loginEmail":"Вход по почте","loginTelegram":"Вход через Telegram","mbit":"Скорость и трафик",
- "onLoggedIn":"Вход","onReceive":"Подключение","onResume":"Главный экран","openUrl":"Открытие ссылок","pay":"Оплата",
- "pingText":"Список серверов","proxyPort":"Подключение","registerEmail":"Регистрация по почте","reloadServers":"Список серверов",
- "removeDevice":"Кабинет: устройства","renameKey":"Переименование ключа","resendEmailCode":"Вход по почте","sendReport":"Сообщить о проблеме",
- "sendSupport":"Поддержка","shareKey":"Кабинет: поделиться ключом","signOut":"Выход из аккаунта","toggleAutoRenew":"Кабинет: автоплатёж",
- "toggleFavorite":"Список серверов","topUp":"Пополнение баланса","unlinkCard":"Кабинет: отвязка карты","verifyEmailCode":"Вход по почте",
- "watchLteReturn":"Подключение","watchPayment":"Оплата","setAds":"Без рекламы","—":"Разное",
-})
+exec(open(os.path.join(os.path.dirname(__file__), "extract.py")).read().split("cyr = re.compile")[0].split("from openpyxl")[0])  # noqa
+WH = {}
+src_where = open(os.path.join(os.path.dirname(__file__), "extract.py")).read()
+ns = {}; exec("WHERE={}\n" + src_where[src_where.index("WHERE.update("):src_where.index("cyr = re.compile")], ns); WHERE = ns["WHERE"]
+FILEWHERE = {"PamirWatch":"Уведомления","PamirNews":"Новости","PamirSeason":"Новый год","PamirSupport":"Поддержка","PamirOffers":"Предложения",
+  "PamirUpdater":"Обновление приложения","PamirPay":"Оплата","PamirAds":"Без рекламы","PamirApi":"Ошибки связи","PamirTheme":"Оформление",
+  "PamirTv":"Телевизор","QSTileService":"Плитка в шторке","WidgetProvider":"Виджет"}
+HINT = {"from":"сервер","to":"сервер","name":"название","n":"число","count":"число","topic":"тема","link":"ссылка","email":"почта","pct":"процент",
+        "b":"число","t":"текст","d":"дней","days":"дней","min":"минут","h":"часов","price":"цена","rub":"сумма","balance":"сумма","ip":"адрес",
+        "server":"сервер","title":"название","key":"ключ","keyName":"ключ","version":"версия","v":"версия","phrase":"число"}
+def hint(expr):
+    e = expr.strip()
+    for w, h in HINT.items():
+        if re.search(r'\b' + re.escape(w) + r'\b', e, re.I): return "{" + h + "}"
+    if re.search(r'rub|minor|balance|price|amount', e, re.I): return "{сумма}"
+    if re.search(r'name', e, re.I): return "{название}"
+    if re.search(r'day|date|ago|time', e, re.I): return "{время}"
+    return "{…}"
+def strings_in(line):
+    """Строковые литералы строки с заменой ${...} (с учётом вложенных скобок и кавычек) на метки."""
+    out, i = [], 0
+    while i < len(line):
+        if line[i] == '"' and not line.startswith('"""', i):
+            j, buf = i + 1, []
+            while j < len(line) and line[j] != '"':
+                if line[j] == '\\' and j + 1 < len(line): buf.append(line[j:j+2]); j += 2; continue
+                if line.startswith("${", j):
+                    depth, m = 0, j + 1
+                    while m < len(line):
+                        if line[m] == '{': depth += 1
+                        elif line[m] == '}':
+                            depth -= 1
+                            if depth == 0: break
+                        m += 1
+                    buf.append(hint(line[j+2:m])); j = m + 1; continue
+                mm = re.match(r'\$([A-Za-z_][A-Za-z0-9_]*)', line[j:])
+                if mm: buf.append(hint(mm.group(1))); j += len(mm.group(0)); continue
+                buf.append(line[j]); j += 1
+            out.append("".join(buf)); i = j + 1
+        else: i += 1
+    return out
 cyr = re.compile(r"[А-Яа-яЁё]")
-lit = re.compile(r'"((?:[^"\\]|\\.)*)"')
-rows, seen = [], {}
+rows, seen = [], set()
 for f in sorted(glob.glob(os.path.join(SRC, "*.kt"))):
-    fn = "—"; name = os.path.basename(f)[:-3]
-    for i, line in enumerate(open(f, encoding="utf-8"), 1):
+    fn, name = "—", os.path.basename(f)[:-3]
+    for line in open(f, encoding="utf-8"):
         m = re.search(r"\bfun\s+(?:[A-Za-z_.<>]+\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(", line)
         if m: fn = m.group(1)
         st = line.strip()
         if st.startswith(("//", "*", "/*")) or "Log." in line: continue
-        code = line.split("//")[0] if '"' not in line.split("//")[-1] else line
-        for s in lit.findall(code):
-            if not cyr.search(s): continue
-            key = s
-            where = WHERE.get(fn, fn)
-            if name != "PamirActivity": where = {"PamirWatch":"Уведомления","PamirNews":"Новости","PamirSeason":"Новый год",
-                "PamirSupport":"Поддержка","PamirOffers":"Предложения","PamirUpdater":"Обновление приложения","PamirPay":"Оплата",
-                "PamirAds":"Без рекламы","PamirApi":"Ошибки связи","PamirTheme":"Оформление","PamirTv":"Телевизор","QSTileService":"Плитка в шторке","WidgetProvider":"Виджет"}.get(name, name)
-            if key in seen: continue
-            seen[key] = True
-            rows.append((where, s.replace('\\n', '\n').replace('\\"', '"')))
-wb = Workbook(); ws = wb.active; ws.title = "Приложение Android"
-ws.append(["№", "Где в приложении", "Русский", "Шугнанский (кириллица)"])
-for c in ws[1]: c.font = Font(bold=True, color="FFFFFF"); c.fill = PatternFill("solid", fgColor="5A3FB0"); c.alignment = Alignment(vertical="center")
-for n, (w, s) in enumerate(rows, 1):
-    ws.append([n, w, s, ""])
-for col, wdt in zip("ABCD", (6, 22, 60, 60)): ws.column_dimensions[col].width = wdt
-for r in ws.iter_rows(min_row=2):
-    for c in r: c.alignment = Alignment(wrap_text=True, vertical="top")
-ws.freeze_panes = "C2"
-h = wb.create_sheet("Как заполнять")
-for line in [
- "Как заполнять таблицу",
- "",
- "1. Пишите перевод в колонку «Шугнанский (кириллица)» напротив русской строки.",
- "2. Всё в фигурных скобках со знаком $ оставляйте как есть, не переводите и не удаляйте: ${name}, $count и т. п. — туда приложение подставит имя сервера, число и т. д.",
- "3. Эмодзи (👑, 🔄, 🎄) оставляйте на своих местах.",
- "4. Названия Mognu, LTE, VPN, Telegram, Android, iPhone, Windows не переводятся.",
- "5. Строки короткие (кнопки) должны остаться короткими: на экране телефона мало места.",
- "6. Если строка непонятна, оставьте пустой и отметьте — разберём.",
-]:
-    h.append([line])
-h.column_dimensions["A"].width = 120; h["A1"].font = Font(bold=True, size=14)
-out = sys.argv[1]; wb.save(out); print(len(rows), "строк ->", out)
+        for s in strings_in(line):
+            s = re.sub(r'%[-0-9.]*[dfs]', '{число}', s).replace('\\n', '\n').replace('\\"', '"').strip()
+            if not cyr.search(s) or len(re.sub(r'\{[^}]*\}|[\s\W\d]', '', s)) < 2: continue
+            if s in seen: continue
+            seen.add(s)
+            where = WHERE.get(fn, fn) if name == "PamirActivity" else FILEWHERE.get(name, name)
+            if where and where.isascii(): where = "Разное"
+            rows.append((where, s))
+json.dump(rows, open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False, indent=0)
+print(len(rows))

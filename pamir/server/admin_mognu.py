@@ -36,7 +36,9 @@ MSK = "+3 hours"  # display_timezone = Europe/Moscow, без перехода н
 # Реальные деньги: оплачено, к оплате > 0, не списание с баланса и не пробный период.
 PAID = "p.status = 'paid' AND p.payable_amount_minor > 0 AND COALESCE(p.payment_type, '') NOT IN ('balance', 'trial')"
 DRAFT = "(k.server_id IS NULL OR COALESCE(k.panel_email, '') = '')"
-TRIAL_KEY = "EXISTS (SELECT 1 FROM trial_activations ta WHERE ta.vpn_key_id = k.id)"
+# пробный — пока его не продлили за деньги (покупка в кабинете продлевает пробный ключ, patch_buy_extends.py)
+TRIAL_KEY = ("(EXISTS (SELECT 1 FROM trial_activations ta WHERE ta.vpn_key_id = k.id) AND NOT EXISTS (SELECT 1 FROM payments tp "
+             "WHERE tp.vpn_key_id = k.id AND tp.purpose = 'key_renewal' AND tp.status = 'paid'))")
 ACTION_RU = {"support.attach": "отправил файл в поддержке", "key.limit_note": "сообщение: новое устройство упёрлось в лимит", "key.limit_note_dry": "лимит устройств (проверка): написала бы владельцу",
              "key.limit_note_fail": "сообщение о лимите устройств не доставлено", "key.hwid_gc": "автоуборка: пробное устройство OneXray", "key.hwid_gc_dry": "автоуборка (проверка): убрала бы пробное устройство",
              "key.extend": "продлил ключ", "key.delete": "удалил ключ", "key.fix": "доделал ключ", "key.reset_devices": "сбросил устройства",

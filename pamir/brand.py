@@ -317,6 +317,15 @@ PROBE_FN = """    /** Pamir watchdog probe: delay through the running core, -1 =
     }
 
     private fun measureV2rayDelay(requestId: String) {"""
+# «Без рекламы» (pamir/src/PamirAds.kt): своё правило и выход adblock в каждой конфигурации ядра, журнал соединений
+# в файл для счётчика — поэтому поле access у LogBean должно меняться
+edit(os.path.join(PKG, 'dto', 'V2rayConfig.kt'), [
+    ('        val access: String? = null,\n', '        var access: String? = null,\n'),
+])
+edit(os.path.join(PKG, 'core', 'CoreConfigManager.kt'), [
+    ('        resolveOutboundDomainsToHosts(v2rayConfig)\n\n        return v2rayConfig\n',
+     '        resolveOutboundDomainsToHosts(v2rayConfig)\n        com.v2ray.ang.pamir.PamirAds.apply(v2rayConfig)\n\n        return v2rayConfig\n'),
+])
 csm = os.path.join(PKG, 'core', 'CoreServiceManager.kt')
 edit(csm, [
     ('LogUtil.i(AppConfig.TAG, "StartCore-Manager: Stop service")\n',

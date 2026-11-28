@@ -163,6 +163,7 @@ object PamirWatch {
         runCatching {
             job?.cancel()
             job = null
+            PamirAds.collect(ctx)
             MmkvManager.encodeSettings(K_CONN_AT, 0L)
             val byUser = System.currentTimeMillis() - MmkvManager.decodeSettingsLong(K_USER_STOP, 0L) < 15_000
             Log.w(TAG, "core stopped, byUser=$byUser")
@@ -185,6 +186,7 @@ object PamirWatch {
             var alerted = false
             delay(25_000)
             while (isActive) {
+                PamirAds.collect(ctx)
                 if (screenOn(ctx) && hasUnderlyingNetwork(ctx)) {
                     val t = CoreServiceManager.pamirProbe()
                     when {

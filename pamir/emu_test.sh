@@ -103,6 +103,29 @@ adb shell input keyevent KEYCODE_BACK; sleep 2
 log "== настройки"
 tap_text '^Настройки$'; sleep 3; shot settings
 
+log "== без рекламы (переключатель, реклама в браузере, счётчик)"
+tap_scroll '^Без рекламы$'; sleep 12; vpn_state; shot adblock_on
+tap_text '^VPN$'; sleep 3
+# после переключения VPN перезапускается; если он не поднялся — включаем и фиксируем это в отчёте
+dumpui; if grep -q 'Нажми' /tmp/ui.xml; then log "!!! после включения «Без рекламы» VPN выключен — включаем"; tap_text '^Нажми'; sleep 15; fi
+vpn_state; shot adblock_connected
+# Chrome без приветственного экрана: иначе страницы не открываются и рекламы не будет
+adb shell 'echo "chrome --disable-fre --no-default-browser-check --no-first-run" > /data/local/tmp/chrome-command-line'
+adb shell am set-debug-app --persistent com.android.chrome >/dev/null 2>&1
+adb shell am force-stop com.android.chrome
+# рекламные адреса из geosite:category-ads-all: ядро должно их отбросить, сторож — посчитать (раз в минуту)
+for u in https://googleads.g.doubleclick.net/pagead/id https://pagead2.googlesyndication.com/pagead/show_ads.js \
+         https://an.yandex.ru/ https://mc.yandex.ru/metrika/tag.js https://ad.mail.ru/ https://www.googletagservices.com/tag/js/gpt.js \
+         https://www.example.com/; do
+  adb shell am start -a android.intent.action.VIEW -d "$u" com.android.chrome >/dev/null 2>&1; sleep 6
+done
+shot adblock_browser
+adb shell monkey -p $P -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; sleep 100
+tap_text '^VPN$'; sleep 3; vpn_state; shot adblock_counter
+expect 'Могну съел' 'счётчик рекламы на главном экране'
+tap_text '^Настройки$'; sleep 3; shot adblock_settings
+adb logcat -d | grep -iE 'adblock|Pamir|StartCore|xray|v2ray|FATAL' | grep -v 'I/chatty' | tail -120 > shots/adblock_logcat.txt
+
 log "== приложения без VPN"
 tap_text '^Приложения без VPN$'; sleep 4; shot apps_screen
 adb shell input keyevent KEYCODE_BACK; sleep 2
